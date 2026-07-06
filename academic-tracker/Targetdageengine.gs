@@ -1,0 +1,226 @@
+// ============================================================
+// targetDateEngine.js
+// Client-side target date calculation for the transcript tab.
+// Paste this into Scripts.html or a new TranscriptScripts.html.
+//
+// This is a direct port of calculateTargetDate() from the
+// Academic Tracker. Identical logic, runs in the browser.
+// No round-trip to server needed — target dates update live
+// as teachers edit hours or dates.
+// ============================================================
+
+const TargetDateEngine = {
+
+  // ── Main calculation ───────────────────────────────────────
+  // Returns a date string (YYYY-MM-DD) or null if not calculable.
+  //
+  // Parameters:
+  //   courseHours  {number}  — total hours for this course
+  //   startDateStr {string}  — 'YYYY-MM-DD' (adj start or start date)
+  //   settings     {object}  — { weeklyHours, activeWeeks: { w1, w2, w3, w4 } }
+  //   completed    {boolean} — if true, always returns null
+  //   transfer     {boolean} — if true, always returns null
+
+  calculate(courseHours, startDateStr, settings, completed = false, transfer = false) {
+    // Short-circuit conditions
+    if (completed || transfer)        return null;
+    if (!startDateStr)                return null;
+    if (!courseHours || courseHours <= 0) return null;
+
+    const startDate = new Date(startDateStr);
+    if (isNaN(startDate.getTime())) return null;
+
+    const weeklyHours  = settings.weeklyHours || 10;
+    const activeWeeks  = settings.activeWeeks || { w1: true, w2: true, w3: true, w4: true };
+
+    const hasActiveWeek = activeWeeks.w1 || activeWeeks.w2 ||
+                          activeWeeks.w3 || activeWeeks.w4;
+    if (!hasActiveWeek) return null;
+
+    let remainingHours = courseHours;
+    let cursor         = new Date(startDate);
+    cursor.setHours(0, 0, 0, 0);
+
+    let safety = 0;
+
+    while (remainingHours > 0 && safety++ < 5000) {
+      const dayOfMonth = cursor.getDate();
+      const week       = dayOfMonth <= 7  ? 1
+                       : dayOfMonth <= 14 ? 2
+                       : dayOfMonth <= 21 ? 3 : 4;
+      const isWeekday  = cursor.getDay() >= 1 && cursor.getDay() <= 5;
+      const weekKey    = 'w' + week;
+
+      if (isWeekday && activeWeeks[weekKey]) {
+        const weekdaysInWeek = this._countWeekdaysInMonthWeek(cursor, week);
+        if (weekdaysInWeek > 0) {
+          remainingHours -= weeklyHours / weekdaysInWeek;
+        }
+      }
+
+      if (remainingHours <= 0) break;
+      cursor.setDate(cursor.getDate() + 1);
+    }
+
+    if (remainingHours > 0) return null;
+
+    return this._formatDate(cursor);
+  },
+
+  // ── Status classifier ─────────────────────────────────────
+  // Returns 'overdue' | 'on-track' | 'completed' | 'transfer' | 'no-date'
+
+  getStatus(targetDateStr, completed, transfer) {
+    if (completed) return 'completed';
+    if (transfer)  return 'transfer';
+    if (!targetDateStr) return 'no-date';
+
+    const today  = new Date();
+    today.setHours(0, 0, 0, 0);
+    const target = new Date(targetDateStr);
+    target.setHours(0, 0, 0, 0);
+
+    return target < today ? 'overdue' : 'on-track';
+  },
+
+  // ── Display formatter ─────────────────────────────────────
+  // Returns a human-readable date string like 'Aug 15, 2026'
+
+  formatDisplay(dateStr) {
+    if (!dateStr) return '—';
+    const d = new Date(dateStr);
+    if (isNaN(d.getTime())) return '—';
+    return d.toLocaleDateString('en-US', {
+      month: 'short', day: 'numeric', year: 'numeric'
+    });
+  },
+
+  // ── Recalculate all courses ────────────────────────────────
+  // Takes an array of course objects and settings,
+  // returns the same array with targetDate filled in.
+  // Used when weekly hours or active weeks settings change.
+
+  recalculateAll(courses, settings) {
+    return courses.map(course => {
+      const startDate = course.adjStart || course.startDate;
+      const target    = this.calculate(
+        course.classHours,
+        startDate,
+        settings,
+        course.completed,
+        course.transfer
+      );
+
+      return Object.assign({}, course, { targetDate: target });
+    });
+  },
+
+  // ── Credit calculator ─────────────────────────────────────
+  // Takes courses array, returns credit totals by category.
+  // Mirrors calculateCreditsPerStudentSheet() from Academic Tracker.
+
+  calculateCredits(courses) {
+    const maxCredits = {
+      'English':       4,
+      'Math':          3,
+      'Science':       3,
+      'Social Studies': 3,
+      'Language':      1,
+      'Fine Arts':     1,
+      'Electives':     8
+    };
+
+    const totals = {
+      'English': 0, 'Math': 0, 'Science': 0,
+      'Social Studies': 0, 'Language': 0,
+      'Fine Arts': 0, 'Electives': 0
+    };
+
+    courses.forEach(course => {
+      // Count completed and transfer courses
+      if (!course.completed && !course.transfer) return;
+
+      const credit   = Number(course.credit) || 0;
+      let   category = this._normalizeCategory(course.subject || '');
+
+      if (!totals.hasOwnProperty(category)) category = 'Electives';
+
+      if (category === 'Electives') {
+        totals['Electives'] += credit;
+      } else {
+        const max     = maxCredits[category] || 0;
+        const space   = Math.max(max - totals[category], 0);
+        const applied = Math.min(credit, space);
+        totals[category]    += applied;
+        totals['Electives'] += credit - applied;
+      }
+    });
+
+    // Build summary array
+    const order = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
+
+    return order.map(cat => ({
+      category:   cat,
+      earned:     Math.round(totals[cat] * 10) / 10,
+      max:        maxCredits[cat] || 0,
+      remaining:  Math.max((maxCredits[cat] || 0) - totals[cat], 0)
+    }));
+  },
+
+  // ── Private helpers ───────────────────────────────────────
+
+  _countWeekdaysInMonthWeek(date, week) {
+    const year     = date.getFullYear();
+    const month    = date.getMonth();
+    const startDay = week === 1 ? 1  : week === 2 ? 8  : week === 3 ? 15 : 22;
+    const lastDay  = new Date(year, month + 1, 0).getDate();
+    const endDay   = week === 1 ? 7  : week === 2 ? 14 : week === 3 ? 21 : lastDay;
+
+    let count = 0;
+    for (let day = startDay; day <= endDay; day++) {
+      const d = new Date(year, month, day).getDay();
+      if (d >= 1 && d <= 5) count++;
+    }
+    return count;
+  },
+
+  _formatDate(date) {
+    const y = date.getFullYear();
+    const m = String(date.getMonth() + 1).padStart(2, '0');
+    const d = String(date.getDate()).padStart(2, '0');
+    return `${y}-${m}-${d}`;
+  },
+
+  _normalizeCategory(category) {
+    const aliases = {
+      'English':        'English',
+      'Math':           'Math',
+      'Science':        'Science',
+      'Social Studies': 'Social Studies',
+      'Language':       'Language',
+      'Fine Arts':      'Fine Arts',
+      'Fine Art':       'Fine Arts',
+      'Electives':      'Electives',
+      'Elective':       'Electives'
+    };
+    return aliases[category.trim()] || 'Electives';
+  }
+
+};
+
+
+// ============================================================
+// Quick test — run in browser console to verify:
+// ============================================================
+//
+// TargetDateEngine.calculate(49, '2026-01-06', {
+//   weeklyHours: 10,
+//   activeWeeks: { w1: true, w2: true, w3: true, w4: true }
+// });
+// Expected: a date string approximately 5-6 months out
+//
+// TargetDateEngine.calculate(49, '2026-01-06', {
+//   weeklyHours: 10,
+//   activeWeeks: { w1: true, w2: false, w3: true, w4: false }
+// });
+// Expected: further out since only 2 weeks per month are active
