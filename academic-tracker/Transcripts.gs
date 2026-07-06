@@ -1,6 +1,10 @@
 // ============================================================
 // Transcripts.gs — Read/write student transcript data
 // from SS_ACADEMIC student tabs
+//
+// Settings migration: reads/writes from SS_HUB Name Mapping
+// when USE_HUB_SETTINGS = true in Config.gs.
+// Both sources work simultaneously during transition.
 // ============================================================
 
 // ── Constants ─────────────────────────────────────────────────
@@ -26,7 +30,16 @@ const TRANSCRIPT_BLOCKS = [
 
 const TRANSCRIPT_SETTINGS_KEY = 'WEEKMAP';
 
-// ── Main read function ────────────────────────────────────────
+// Default settings for students with no existing configuration
+const SETTINGS_DEFAULTS = {
+  weeklyHours: 10,
+  activeWeeks: { w1: true, w2: true, w3: true, w4: true }
+};
+
+
+// ============================================================
+// SECTION 1 — MAIN READ FUNCTION
+// ============================================================
 
 function getStudentTranscript(studentId) {
   try {
@@ -50,8 +63,8 @@ function getStudentTranscript(studentId) {
       rows.forEach(row => courses.push(row));
     });
 
-    // Step 4 — read student settings
-    const settings = getTranscriptSettings_(studentName);
+    // Step 4 — read student settings (flag-controlled source)
+    const settings = getTranscriptSettings_(studentId, studentName);
 
     // Step 5 — return structured payload
     return {
@@ -59,7 +72,8 @@ function getStudentTranscript(studentId) {
       studentId:   studentId,
       studentName: studentName,
       courses:     courses,
-      settings:    settings
+      settings:    settings,
+      settingsSource: USE_HUB_SETTINGS ? 'hub' : 'academic_tracker'
     };
 
   } catch (err) {
@@ -67,7 +81,10 @@ function getStudentTranscript(studentId) {
   }
 }
 
-// ── Block reader ──────────────────────────────────────────────
+
+// ============================================================
+// SECTION 2 — BLOCK READER
+// ============================================================
 
 function readTranscriptBlock_(sheet, block) {
   const numRows = block.end - block.start + 1;
@@ -105,15 +122,125 @@ function readTranscriptBlock_(sheet, block) {
   return rows;
 }
 
-// ── Settings reader ───────────────────────────────────────────
 
-function getTranscriptSettings_(studentName) {
+// ============================================================
+// SECTION 3 — SETTINGS (FEATURE-FLAGGED)
+//
+// USE_HUB_SETTINGS = false → reads from Academic Tracker
+//                            ScriptProperties (current behavior)
+// USE_HUB_SETTINGS = true  → reads from SS_HUB Name Mapping
+//                            columns G-K
+// ============================================================
+
+function getTranscriptSettings_(studentId, studentName) {
+  if (USE_HUB_SETTINGS) {
+    return getSettingsFromHub_(studentId);
+  } else {
+    return getSettingsFromAcademicTracker_(studentName);
+  }
+}
+
+function saveTranscriptSettings(studentId, settings) {
+  if (USE_HUB_SETTINGS) {
+    return saveSettingsToHub_(studentId, settings);
+  } else {
+    return saveSettingsToAcademicTracker_(studentId, settings);
+  }
+}
+
+// ── Hub reader ────────────────────────────────────────────────
+
+function getSettingsFromHub_(studentId) {
+  try {
+    const ss      = SpreadsheetApp.openById(SS_HUB);
+    const sheet   = ss.getSheetByName(SHEET_MAPPING);
+    if (!sheet) return SETTINGS_DEFAULTS;
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return SETTINGS_DEFAULTS;
+
+    // Read all columns A-S (19 cols — existing A-N plus new O-S)
+    const data = sheet.getRange(2, 1, lastRow - 1, NM_COL_W4).getValues();
+
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][NM_COL_ID - 1]).trim() !== String(studentId).trim()) continue;
+
+      const hours = Number(data[i][NM_COL_WEEKLY_HOURS - 1]);
+
+      return {
+        weeklyHours: isFinite(hours) && hours > 0 ? hours : SETTINGS_DEFAULTS.weeklyHours,
+        activeWeeks: {
+          w1: data[i][NM_COL_W1 - 1] === true || data[i][NM_COL_W1 - 1] === 'TRUE',
+          w2: data[i][NM_COL_W2 - 1] === true || data[i][NM_COL_W2 - 1] === 'TRUE',
+          w3: data[i][NM_COL_W3 - 1] === true || data[i][NM_COL_W3 - 1] === 'TRUE',
+          w4: data[i][NM_COL_W4 - 1] === true || data[i][NM_COL_W4 - 1] === 'TRUE'
+        }
+      };
+    }
+
+    // Student not found in Hub — return defaults
+    return SETTINGS_DEFAULTS;
+
+  } catch (err) {
+    Logger.log('getSettingsFromHub_ error: ' + err.message);
+    return SETTINGS_DEFAULTS;
+  }
+}
+
+// ── Hub writer ────────────────────────────────────────────────
+
+function saveSettingsToHub_(studentId, settings) {
+  try {
+    const ss      = SpreadsheetApp.openById(SS_HUB);
+    const sheet   = ss.getSheetByName(SHEET_MAPPING);
+    if (!sheet) return { success: false, error: 'Name Mapping sheet not found' };
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { success: false, error: 'Name Mapping is empty' };
+
+    const ids = sheet.getRange(2, NM_COL_ID, lastRow - 1, 1).getValues();
+
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() !== String(studentId).trim()) continue;
+
+      const rowNum = i + 2;
+
+      sheet.getRange(rowNum, NM_COL_WEEKLY_HOURS).setValue(settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours);
+      sheet.getRange(rowNum, NM_COL_W1).setValue(settings.activeWeeks.w1 === true);
+      sheet.getRange(rowNum, NM_COL_W2).setValue(settings.activeWeeks.w2 === true);
+      sheet.getRange(rowNum, NM_COL_W3).setValue(settings.activeWeeks.w3 === true);
+      sheet.getRange(rowNum, NM_COL_W4).setValue(settings.activeWeeks.w4 === true);
+
+      SpreadsheetApp.flush();
+
+      logTranscriptWrite_(
+        'Hub Settings',
+        rowNum,
+        'SETTINGS_UPDATED',
+        `Student ${studentId}: ${settings.weeklyHours}hrs, W1=${settings.activeWeeks.w1}, W2=${settings.activeWeeks.w2}, W3=${settings.activeWeeks.w3}, W4=${settings.activeWeeks.w4}`
+      );
+
+      return { success: true, studentId: studentId };
+    }
+
+    return { success: false, error: 'Student ID not found in Name Mapping: ' + studentId };
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ── Academic Tracker reader (current / fallback) ──────────────
+
+function getSettingsFromAcademicTracker_(studentName) {
   try {
     const props = PropertiesService.getScriptProperties();
     const key   = (k) => `${TRANSCRIPT_SETTINGS_KEY}::${studentName}::${k}`;
 
+    const hours = Number(props.getProperty(key('hours')));
+
     return {
-      weeklyHours: Number(props.getProperty(key('hours')) || 20),
+      weeklyHours: isFinite(hours) && hours > 0 ? hours : SETTINGS_DEFAULTS.weeklyHours,
       activeWeeks: {
         w1: props.getProperty(key('w1')) !== 'false',
         w2: props.getProperty(key('w2')) !== 'false',
@@ -122,148 +249,344 @@ function getTranscriptSettings_(studentName) {
       }
     };
   } catch (err) {
-    // Return defaults if properties unavailable
-    return {
-      weeklyHours: 20,
-      activeWeeks: { w1: true, w2: true, w3: true, w4: true }
-    };
+    return SETTINGS_DEFAULTS;
   }
 }
 
-// ── Name resolver ─────────────────────────────────────────────
+// ── Academic Tracker writer (current / fallback) ──────────────
 
-function getStudentNameById_(studentId) {
-  const ss      = SpreadsheetApp.openById(SS_HUB);
-  const sheet   = ss.getSheetByName(SHEET_MAPPING);
-  if (!sheet) return null;
+function saveSettingsToAcademicTracker_(studentId, settings) {
+  try {
+    const studentName = getStudentNameById_(studentId);
+    if (!studentName) return { success: false, error: 'Student not found: ' + studentId };
 
-  const lastRow = sheet.getLastRow();
-  if (lastRow < 2) return null;
+    const props = PropertiesService.getScriptProperties();
+    const key   = (k) => `${TRANSCRIPT_SETTINGS_KEY}::${studentName}::${k}`;
 
-  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+    props.setProperty(key('hours'), String(settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours));
+    props.setProperty(key('w1'),    String(settings.activeWeeks.w1 === true));
+    props.setProperty(key('w2'),    String(settings.activeWeeks.w2 === true));
+    props.setProperty(key('w3'),    String(settings.activeWeeks.w3 === true));
+    props.setProperty(key('w4'),    String(settings.activeWeeks.w4 === true));
 
-  for (let i = 0; i < data.length; i++) {
-    if (String(data[i][0]).trim() === String(studentId).trim()) {
-      return String(data[i][3]).trim();
-    }
+    return { success: true, studentId: studentId };
+
+  } catch (err) {
+    return { success: false, error: err.message };
   }
-
-  return null;
 }
 
-// ── Date formatter ────────────────────────────────────────────
 
-function formatDate_(date) {
-  const y = date.getFullYear();
-  const m = String(date.getMonth() + 1).padStart(2, '0');
-  const d = String(date.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-function testGetTranscript() {
-  const result = getStudentTranscript('2082094');
-  Logger.log(JSON.stringify(result, null, 2));
-}
-// ── Save existing transcript row ──────────────────────────────
+// ============================================================
+// SECTION 4 — SAVE EXISTING TRANSCRIPT ROW
+// ============================================================
 
 function saveTranscriptRow(studentId, rowData) {
   try {
-    // Step 1 — resolve student name
     const studentName = getStudentNameById_(studentId);
     if (!studentName) {
       return { success: false, error: 'Student not found: ' + studentId };
     }
 
-    // Step 2 — open sheet
     const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
     const sheet = ss.getSheetByName(studentName);
     if (!sheet) {
       return { success: false, error: 'No transcript sheet found for: ' + studentName };
     }
 
-    // Step 3 — validate row index
     const rowIndex = Number(rowData.rowIndex);
     if (!rowIndex || rowIndex < 3) {
       return { success: false, error: 'Invalid row index: ' + rowData.rowIndex };
     }
 
-    // Step 4 — build the row values in column order A–L
     const values = buildRowValues_(rowData);
-
-    // Step 5 — write to sheet
     sheet.getRange(rowIndex, 1, 1, 12).setValues([values]);
-
-    // Step 6 — apply target date color if needed
     applyTargetDateColor_(sheet, rowIndex, rowData.targetDate, rowData.completed);
-
-    // Step 7 — log it
     logTranscriptWrite_(studentName, rowIndex, 'UPDATED', rowData.courseName);
 
-    return {
-      success:   true,
-      rowIndex:  rowIndex,
-      studentId: studentId
-    };
+    return { success: true, rowIndex: rowIndex, studentId: studentId };
 
   } catch (err) {
     return { success: false, error: err.message };
   }
 }
 
-// ── Add new transcript row ────────────────────────────────────
+
+// ============================================================
+// SECTION 5 — ADD NEW TRANSCRIPT ROW
+// ============================================================
 
 function addTranscriptRow(studentId, rowData) {
   try {
-    // Step 1 — resolve student name
     const studentName = getStudentNameById_(studentId);
     if (!studentName) {
       return { success: false, error: 'Student not found: ' + studentId };
     }
 
-    // Step 2 — open sheet
     const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
     const sheet = ss.getSheetByName(studentName);
     if (!sheet) {
       return { success: false, error: 'No transcript sheet found for: ' + studentName };
     }
 
-    // Step 3 — find next empty row in the correct block
-    const block     = rowData.block === 2
-      ? TRANSCRIPT_BLOCKS[1]
-      : TRANSCRIPT_BLOCKS[0];
-    const rowIndex  = findNextEmptyRow_(sheet, block);
+    const block    = rowData.block === 2 ? TRANSCRIPT_BLOCKS[1] : TRANSCRIPT_BLOCKS[0];
+    const rowIndex = findNextEmptyRow_(sheet, block);
 
     if (!rowIndex) {
-      return {
-        success: false,
-        error:   'Block ' + block.year + ' is full — no empty rows available'
-      };
+      return { success: false, error: 'Block ' + block.year + ' is full — no empty rows available' };
     }
 
-    // Step 4 — assign class number based on position in block
     rowData.classNumber = rowIndex - block.start + 1;
 
-    // Step 5 — build and write row values
     const values = buildRowValues_(rowData);
     sheet.getRange(rowIndex, 1, 1, 12).setValues([values]);
-
-    // Step 6 — apply target date color
     applyTargetDateColor_(sheet, rowIndex, rowData.targetDate, rowData.completed);
-
-    // Step 7 — log it
     logTranscriptWrite_(studentName, rowIndex, 'ADDED', rowData.courseName);
 
-    return {
-      success:   true,
-      rowIndex:  rowIndex,
-      studentId: studentId
-    };
+    return { success: true, rowIndex: rowIndex, studentId: studentId };
 
   } catch (err) {
     return { success: false, error: err.message };
   }
 }
 
-// ── Row builder ───────────────────────────────────────────────
+
+// ============================================================
+// SECTION 6 — COURSE CATALOGUE READER
+// (Used by dashboard to populate course dropdowns)
+// ============================================================
+
+function getCourseCatalogue() {
+  try {
+    const cache = CacheService.getScriptCache();
+    const cached = cache.get('COURSE_CATALOGUE');
+    if (cached) return JSON.parse(cached);
+
+    const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
+    const sheet = ss.getSheetByName('Course Catalogue');
+    if (!sheet) return { success: false, error: 'Course Catalogue not found' };
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return { success: true, courses: [] };
+
+    const data    = sheet.getRange(2, 1, lastRow - 1, 3).getValues();
+    const courses = [];
+
+    data.forEach(row => {
+      const name     = String(row[0] || '').trim();
+      const category = String(row[1] || '').trim();
+      const classId  = String(row[2] || '').trim();
+
+      if (!name || !classId) return;
+
+      courses.push({ className: name, category: category, classId: classId });
+    });
+
+    const result = { success: true, courses: courses };
+
+    // Cache for 30 minutes — catalogue rarely changes
+    try {
+      cache.put('COURSE_CATALOGUE', JSON.stringify(result), 1800);
+    } catch (e) {
+      // Cache put failed (too large) — return uncached
+    }
+
+    return result;
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+
+// ============================================================
+// SECTION 7 — MASTER SCHEDULE HOURS READER
+// (Pulls standard hours per course for auto-fill)
+// ============================================================
+
+function getMasterScheduleHours() {
+  try {
+    const cache  = CacheService.getScriptCache();
+    const cached = cache.get('MASTER_SCHEDULE_HOURS');
+    if (cached) return JSON.parse(cached);
+
+    // Master schedule data is already in the dashboard
+    // This reads from the Hub's Student Course Data sheet
+    // which is populated by CourseSync.gs
+    const ss    = SpreadsheetApp.openById(SS_HUB);
+    const sheet = ss.getSheetByName(SHEET_STUDENT_COURSE_DATA);
+    if (!sheet) return { success: false, error: 'Student Course Data not found' };
+
+    // For now return the Hours reference table from Academic Tracker
+    // This will be migrated to Hub in Phase 2
+    const acSS    = SpreadsheetApp.openById(SS_ACADEMIC);
+    const hoursSheet = acSS.getSheets().find(s =>
+      s.getName().toLowerCase().includes('hours') ||
+      s.getName().toLowerCase().includes('master schedule')
+    );
+
+    if (!hoursSheet) return { success: true, hours: {} };
+
+    const lastRow = hoursSheet.getLastRow();
+    if (lastRow < 2) return { success: true, hours: {} };
+
+    const data  = hoursSheet.getRange(2, 1, lastRow - 1, 5).getValues();
+    const hours = {};
+
+    data.forEach(row => {
+      const courseName = String(row[0] || '').trim();
+      const classHours = Number(row[1]);
+      if (!courseName) return;
+      hours[courseName] = {
+        hours:   isFinite(classHours) ? classHours : 0,
+        units:   Number(row[2]) || 0,
+        lessons: Number(row[3]) || 0
+      };
+    });
+
+    const result = { success: true, hours: hours };
+
+    try {
+      cache.put('MASTER_SCHEDULE_HOURS', JSON.stringify(result), 1800);
+    } catch (e) {}
+
+    return result;
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+
+// ============================================================
+// SECTION 8 — ONE-TIME SETTINGS SEEDER
+// Run once to populate Name Mapping columns O-S
+// from existing Academic Tracker ScriptProperties
+// Scales safely to 300 students — writes in one batch operation
+// ============================================================
+
+function seedHubSettings() {
+  try {
+    const hubSS     = SpreadsheetApp.openById(SS_HUB);
+    const nmSheet   = hubSS.getSheetByName(SHEET_MAPPING);
+    if (!nmSheet) throw new Error('Name Mapping sheet not found in Hub');
+
+    const lastRow = nmSheet.getLastRow();
+    if (lastRow < 2) throw new Error('Name Mapping is empty');
+
+    // Read columns A-D (ID, Master Name, Trade Name, Academic Name)
+    // We only need academic name (col D) to look up existing settings
+    const data = nmSheet.getRange(2, 1, lastRow - 1, 4).getValues();
+
+    // Add headers to columns O-S if not already there
+    const headerRow       = nmSheet.getRange(1, NM_COL_WEEKLY_HOURS, 1, 5);
+    const existingHeaders = headerRow.getValues()[0];
+
+    if (!existingHeaders[0]) {
+      headerRow.setValues([[
+        'Weekly Hours', 'W1 Active', 'W2 Active', 'W3 Active', 'W4 Active'
+      ]]);
+      headerRow
+        .setFontWeight('bold')
+        .setBackground('#1f2937')
+        .setFontColor('#ffffff')
+        .setHorizontalAlignment('center');
+    }
+
+    // For each student, read existing settings from ScriptProperties
+    const props      = PropertiesService.getScriptProperties();
+    const outputRows = [];
+    let   seeded     = 0;
+    let   defaulted  = 0;
+
+    data.forEach((row, i) => {
+      const studentName = String(row[NM_COL_ACADEMIC_NAME - 1] || '').trim();
+
+      if (!studentName) {
+        outputRows.push([
+          SETTINGS_DEFAULTS.weeklyHours,
+          SETTINGS_DEFAULTS.activeWeeks.w1,
+          SETTINGS_DEFAULTS.activeWeeks.w2,
+          SETTINGS_DEFAULTS.activeWeeks.w3,
+          SETTINGS_DEFAULTS.activeWeeks.w4
+        ]);
+        defaulted++;
+        return;
+      }
+
+      const key   = (k) => `${TRANSCRIPT_SETTINGS_KEY}::${studentName}::${k}`;
+      const hours = Number(props.getProperty(key('hours')));
+
+      // Check if student has any existing settings
+      const hasSettings = props.getProperty(key('w1')) !== null ||
+                          props.getProperty(key('w2')) !== null ||
+                          props.getProperty(key('hours')) !== null;
+
+      if (hasSettings) {
+        outputRows.push([
+          isFinite(hours) && hours > 0 ? hours : SETTINGS_DEFAULTS.weeklyHours,
+          props.getProperty(key('w1')) !== 'false',
+          props.getProperty(key('w2')) !== 'false',
+          props.getProperty(key('w3')) !== 'false',
+          props.getProperty(key('w4')) !== 'false'
+        ]);
+        seeded++;
+      } else {
+        // No existing settings — use defaults
+        outputRows.push([
+          SETTINGS_DEFAULTS.weeklyHours,
+          SETTINGS_DEFAULTS.activeWeeks.w1,
+          SETTINGS_DEFAULTS.activeWeeks.w2,
+          SETTINGS_DEFAULTS.activeWeeks.w3,
+          SETTINGS_DEFAULTS.activeWeeks.w4
+        ]);
+        defaulted++;
+      }
+    });
+
+    // Write all settings to Name Mapping G-K in one batch
+    if (outputRows.length > 0) {
+      nmSheet.getRange(2, NM_COL_WEEKLY_HOURS, outputRows.length, 5)
+        .setValues(outputRows);
+
+      // Format the new columns
+      nmSheet.getRange(2, NM_COL_WEEKLY_HOURS, outputRows.length, 1)
+        .setNumberFormat('0')
+        .setHorizontalAlignment('center');
+
+      nmSheet.getRange(2, NM_COL_W1, outputRows.length, 4)
+        .setHorizontalAlignment('center');
+    }
+
+    SpreadsheetApp.flush();
+
+    Logger.log(`seedHubSettings complete: ${seeded} migrated from properties, ${defaulted} seeded with defaults`);
+
+    // Show result in Apps Script editor
+    const ui = SpreadsheetApp.getUi ? SpreadsheetApp.getUi() : null;
+    const msg = `Settings seeded successfully.\n\n` +
+                `Migrated from Academic Tracker: ${seeded}\n` +
+                `Seeded with defaults (10hrs, all weeks): ${defaulted}\n\n` +
+                `Next step: open Name Mapping in SS_HUB and verify columns G-K.`;
+
+    if (ui) {
+      try { ui.alert(msg); } catch(e) { Logger.log(msg); }
+    } else {
+      Logger.log(msg);
+    }
+
+    return { success: true, seeded: seeded, defaulted: defaulted };
+
+  } catch (err) {
+    Logger.log('seedHubSettings error: ' + err.message);
+    return { success: false, error: err.message };
+  }
+}
+
+
+// ============================================================
+// SECTION 9 — HELPERS
+// ============================================================
 
 function buildRowValues_(rowData) {
   return [
@@ -282,8 +605,6 @@ function buildRowValues_(rowData) {
   ];
 }
 
-// ── Target date color ─────────────────────────────────────────
-
 function applyTargetDateColor_(sheet, rowIndex, targetDate, completed) {
   const cell = sheet.getRange(rowIndex, TRANSCRIPT_COL.TARGET_DATE);
 
@@ -300,42 +621,141 @@ function applyTargetDateColor_(sheet, rowIndex, targetDate, completed) {
   cell.setBackground(target < today ? '#FFC7CE' : '#C6EFCE');
 }
 
-// ── Empty row finder ──────────────────────────────────────────
-
 function findNextEmptyRow_(sheet, block) {
   const numRows = block.end - block.start + 1;
   const data    = sheet.getRange(block.start, TRANSCRIPT_COL.COURSE_NAME, numRows, 1).getValues();
 
   for (let i = 0; i < data.length; i++) {
-    if (!String(data[i][0]).trim()) {
-      return block.start + i;
+    if (!String(data[i][0]).trim()) return block.start + i;
+  }
+
+  return null;
+}
+
+function getStudentNameById_(studentId) {
+  const ss      = SpreadsheetApp.openById(SS_HUB);
+  const sheet   = ss.getSheetByName(SHEET_MAPPING);
+  if (!sheet) return null;
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < 2) return null;
+
+  const data = sheet.getRange(2, 1, lastRow - 1, 4).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === String(studentId).trim()) {
+      return String(data[i][3]).trim(); // Column D — Academic Name
     }
   }
 
-  return null; // block is full
+  return null;
 }
 
-// ── Write logger ──────────────────────────────────────────────
+function formatDate_(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
 
-function logTranscriptWrite_(studentName, rowIndex, action, courseName) {
+function logTranscriptWrite_(studentName, rowIndex, action, detail) {
   try {
     const ss       = SpreadsheetApp.openById(SS_ACADEMIC);
     const logSheet = ss.getSheetByName('Transcript Log');
     if (!logSheet) return;
-
-    logSheet.appendRow([
-      new Date(),
-      studentName,
-      action,
-      'Row ' + rowIndex,
-      courseName || ''
-    ]);
+    logSheet.appendRow([new Date(), studentName, action, 'Row ' + rowIndex, detail || '']);
   } catch (e) {
-    // Log failure is non-fatal — don't surface to user
+    // Non-fatal — log failure never surfaces to user
   }
 }
+
+
+// ============================================================
+// SECTION 10 — TARGET DATE ENGINE (CLIENT-SIDE PORT)
+//
+// This is the pure JS version of calculateTargetDate() from
+// the Academic Tracker. Runs in the dashboard without any
+// sheet access. Takes course data and settings, returns a
+// date string or null.
+//
+// Identical logic to the Apps Script version — just no sheet
+// reads/writes. Used by the transcript tab UI to show live
+// target date previews before saving.
+// ============================================================
+
+function calculateTargetDateJS(courseHours, startDateStr, settings) {
+  // This function is called client-side in the dashboard HTML
+  // It's duplicated here for reference and server-side testing
+
+  if (!startDateStr || !courseHours || courseHours <= 0) return null;
+
+  const startDate = new Date(startDateStr);
+  if (isNaN(startDate.getTime())) return null;
+
+  const weeklyHours  = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
+  const allowedWeeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
+
+  const hasActiveWeek = allowedWeeks.w1 || allowedWeeks.w2 ||
+                        allowedWeeks.w3 || allowedWeeks.w4;
+  if (!hasActiveWeek) return null;
+
+  let remainingHours = courseHours;
+  let cursor         = new Date(startDate);
+  cursor.setHours(0, 0, 0, 0);
+
+  let safety = 0;
+
+  while (remainingHours > 0 && safety++ < 5000) {
+    const dayOfMonth = cursor.getDate();
+    const week       = dayOfMonth <= 7  ? 1
+                     : dayOfMonth <= 14 ? 2
+                     : dayOfMonth <= 21 ? 3 : 4;
+    const isWeekday  = cursor.getDay() >= 1 && cursor.getDay() <= 5;
+    const weekKey    = 'w' + week;
+
+    if (isWeekday && allowedWeeks[weekKey]) {
+      const weekdaysInWeek = countWeekdaysInMonthWeek_JS(cursor, week);
+      if (weekdaysInWeek > 0) remainingHours -= weeklyHours / weekdaysInWeek;
+    }
+
+    if (remainingHours <= 0) break;
+    cursor.setDate(cursor.getDate() + 1);
+  }
+
+  if (remainingHours > 0) return null;
+
+  const y = cursor.getFullYear();
+  const m = String(cursor.getMonth() + 1).padStart(2, '0');
+  const d = String(cursor.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function countWeekdaysInMonthWeek_JS(date, week) {
+  const year     = date.getFullYear();
+  const month    = date.getMonth();
+  const startDay = week === 1 ? 1  : week === 2 ? 8  : week === 3 ? 15 : 22;
+  const lastDay  = new Date(year, month + 1, 0).getDate();
+  const endDay   = week === 1 ? 7  : week === 2 ? 14 : week === 3 ? 21 : lastDay;
+
+  let count = 0;
+  for (let day = startDay; day <= endDay; day++) {
+    const d = new Date(year, month, day).getDay();
+    if (d >= 1 && d <= 5) count++;
+  }
+  return count;
+}
+
+
+// ============================================================
+// SECTION 11 — TEST FUNCTIONS
+// ============================================================
+
+function testGetTranscript() {
+  const result = getStudentTranscript('2082094');
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
 function testSaveTranscriptRow() {
-  // Test editing Intermediate Algebra S1 — rowIndex 21 from our read test
   const result = saveTranscriptRow('2082094', {
     rowIndex:    21,
     classNumber: 19,
@@ -352,6 +772,60 @@ function testSaveTranscriptRow() {
     completed:   false,
     block:       1
   });
-
   Logger.log(JSON.stringify(result, null, 2));
+}
+
+function testGetSettings() {
+  // Test reading settings for Austin
+  const result = getStudentTranscript('2082094');
+  Logger.log('Settings source: ' + result.settingsSource);
+  Logger.log('Settings: ' + JSON.stringify(result.settings, null, 2));
+}
+
+function testSaveSettings() {
+  const result = saveTranscriptSettings('2082094', {
+    weeklyHours: 10,
+    activeWeeks: { w1: true, w2: false, w3: true, w4: false }
+  });
+  Logger.log(JSON.stringify(result, null, 2));
+}
+
+function testTargetDateEngine() {
+  // Test the pure JS target date engine
+  const result = calculateTargetDateJS(49, '2026-01-06', {
+    weeklyHours: 10,
+    activeWeeks: { w1: true, w2: true, w3: true, w4: true }
+  });
+  Logger.log('Target date: ' + result);
+  // Expected: approximately 2026-06-xx depending on weekday distribution
+}
+
+function testSeedHubSettings() {
+  // DRY RUN — logs what would be seeded without writing
+  const props   = PropertiesService.getScriptProperties();
+  const hubSS   = SpreadsheetApp.openById(SS_HUB);
+  const nmSheet = hubSS.getSheetByName(SHEET_MAPPING);
+  const lastRow = nmSheet.getLastRow();
+  const data    = nmSheet.getRange(2, 1, lastRow - 1, 4).getValues();
+
+  Logger.log('Students in Name Mapping: ' + data.length);
+
+  let withSettings  = 0;
+  let withoutSettings = 0;
+
+  data.forEach(row => {
+    const academicName = String(row[3] || '').trim();
+    if (!academicName) return;
+
+    const key        = (k) => `${TRANSCRIPT_SETTINGS_KEY}::${academicName}::${k}`;
+    const hasSettings = props.getProperty(key('w1')) !== null ||
+                        props.getProperty(key('hours')) !== null;
+
+    if (hasSettings) withSettings++;
+    else withoutSettings++;
+  });
+
+  Logger.log(`Students with existing settings: ${withSettings}`);
+  Logger.log(`Students to be seeded with defaults: ${withoutSettings}`);
+  Logger.log('Run seedHubSettings() to write to Name Mapping columns O-S.');
 }
