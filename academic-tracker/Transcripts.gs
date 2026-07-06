@@ -159,3 +159,199 @@ function formatDate_(date) {
   const d = String(date.getDate()).padStart(2, '0');
   return `${y}-${m}-${d}`;
 }
+function testGetTranscript() {
+  const result = getStudentTranscript('2082094');
+  Logger.log(JSON.stringify(result, null, 2));
+}
+// ── Save existing transcript row ──────────────────────────────
+
+function saveTranscriptRow(studentId, rowData) {
+  try {
+    // Step 1 — resolve student name
+    const studentName = getStudentNameById_(studentId);
+    if (!studentName) {
+      return { success: false, error: 'Student not found: ' + studentId };
+    }
+
+    // Step 2 — open sheet
+    const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
+    const sheet = ss.getSheetByName(studentName);
+    if (!sheet) {
+      return { success: false, error: 'No transcript sheet found for: ' + studentName };
+    }
+
+    // Step 3 — validate row index
+    const rowIndex = Number(rowData.rowIndex);
+    if (!rowIndex || rowIndex < 3) {
+      return { success: false, error: 'Invalid row index: ' + rowData.rowIndex };
+    }
+
+    // Step 4 — build the row values in column order A–L
+    const values = buildRowValues_(rowData);
+
+    // Step 5 — write to sheet
+    sheet.getRange(rowIndex, 1, 1, 12).setValues([values]);
+
+    // Step 6 — apply target date color if needed
+    applyTargetDateColor_(sheet, rowIndex, rowData.targetDate, rowData.completed);
+
+    // Step 7 — log it
+    logTranscriptWrite_(studentName, rowIndex, 'UPDATED', rowData.courseName);
+
+    return {
+      success:   true,
+      rowIndex:  rowIndex,
+      studentId: studentId
+    };
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ── Add new transcript row ────────────────────────────────────
+
+function addTranscriptRow(studentId, rowData) {
+  try {
+    // Step 1 — resolve student name
+    const studentName = getStudentNameById_(studentId);
+    if (!studentName) {
+      return { success: false, error: 'Student not found: ' + studentId };
+    }
+
+    // Step 2 — open sheet
+    const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
+    const sheet = ss.getSheetByName(studentName);
+    if (!sheet) {
+      return { success: false, error: 'No transcript sheet found for: ' + studentName };
+    }
+
+    // Step 3 — find next empty row in the correct block
+    const block     = rowData.block === 2
+      ? TRANSCRIPT_BLOCKS[1]
+      : TRANSCRIPT_BLOCKS[0];
+    const rowIndex  = findNextEmptyRow_(sheet, block);
+
+    if (!rowIndex) {
+      return {
+        success: false,
+        error:   'Block ' + block.year + ' is full — no empty rows available'
+      };
+    }
+
+    // Step 4 — assign class number based on position in block
+    rowData.classNumber = rowIndex - block.start + 1;
+
+    // Step 5 — build and write row values
+    const values = buildRowValues_(rowData);
+    sheet.getRange(rowIndex, 1, 1, 12).setValues([values]);
+
+    // Step 6 — apply target date color
+    applyTargetDateColor_(sheet, rowIndex, rowData.targetDate, rowData.completed);
+
+    // Step 7 — log it
+    logTranscriptWrite_(studentName, rowIndex, 'ADDED', rowData.courseName);
+
+    return {
+      success:   true,
+      rowIndex:  rowIndex,
+      studentId: studentId
+    };
+
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
+// ── Row builder ───────────────────────────────────────────────
+
+function buildRowValues_(rowData) {
+  return [
+    rowData.classNumber || '',
+    rowData.courseId    || '',
+    rowData.courseName  || '',
+    rowData.instance    || '',
+    rowData.transfer    === true ? true : false,
+    rowData.subject     || '',
+    Number(rowData.credit)     || 0,
+    Number(rowData.classHours) || 0,
+    rowData.startDate  ? new Date(rowData.startDate)  : '',
+    rowData.adjStart   ? new Date(rowData.adjStart)   : '',
+    rowData.targetDate ? new Date(rowData.targetDate) : '',
+    rowData.completed  === true ? true : false
+  ];
+}
+
+// ── Target date color ─────────────────────────────────────────
+
+function applyTargetDateColor_(sheet, rowIndex, targetDate, completed) {
+  const cell = sheet.getRange(rowIndex, TRANSCRIPT_COL.TARGET_DATE);
+
+  if (completed || !targetDate) {
+    cell.setBackground(null);
+    return;
+  }
+
+  const today  = new Date();
+  today.setHours(0, 0, 0, 0);
+  const target = new Date(targetDate);
+  target.setHours(0, 0, 0, 0);
+
+  cell.setBackground(target < today ? '#FFC7CE' : '#C6EFCE');
+}
+
+// ── Empty row finder ──────────────────────────────────────────
+
+function findNextEmptyRow_(sheet, block) {
+  const numRows = block.end - block.start + 1;
+  const data    = sheet.getRange(block.start, TRANSCRIPT_COL.COURSE_NAME, numRows, 1).getValues();
+
+  for (let i = 0; i < data.length; i++) {
+    if (!String(data[i][0]).trim()) {
+      return block.start + i;
+    }
+  }
+
+  return null; // block is full
+}
+
+// ── Write logger ──────────────────────────────────────────────
+
+function logTranscriptWrite_(studentName, rowIndex, action, courseName) {
+  try {
+    const ss       = SpreadsheetApp.openById(SS_ACADEMIC);
+    const logSheet = ss.getSheetByName('Transcript Log');
+    if (!logSheet) return;
+
+    logSheet.appendRow([
+      new Date(),
+      studentName,
+      action,
+      'Row ' + rowIndex,
+      courseName || ''
+    ]);
+  } catch (e) {
+    // Log failure is non-fatal — don't surface to user
+  }
+}
+function testSaveTranscriptRow() {
+  // Test editing Intermediate Algebra S1 — rowIndex 21 from our read test
+  const result = saveTranscriptRow('2082094', {
+    rowIndex:    21,
+    classNumber: 19,
+    courseId:    'MA-0024-S1',
+    courseName:  'Intermediate Algebra',
+    instance:    '1',
+    transfer:    false,
+    subject:     'Math',
+    credit:      0.5,
+    classHours:  49,
+    startDate:   '2026-01-06',
+    adjStart:    null,
+    targetDate:  '2026-03-15',
+    completed:   false,
+    block:       1
+  });
+
+  Logger.log(JSON.stringify(result, null, 2));
+}
