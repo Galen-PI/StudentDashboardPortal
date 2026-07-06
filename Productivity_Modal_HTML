@@ -1,0 +1,395 @@
+<!-- ============================================================
+     Productivity Modal v2 — Admin/Manager only
+     ============================================================ -->
+
+<div id="productivityModal" class="modal-overlay hidden" onclick="closeProductivityModal(event)">
+  <div class="modal-box modal-wide" style="max-width:1200px;width:96vw;max-height:94vh;display:flex;flex-direction:column;">
+    <div class="modal-header" style="flex-shrink:0;display:flex;align-items:center;">
+      <div>
+        <h2 style="margin:0;font-size:16px;font-weight:700;">Productivity Analysis</h2>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          How much of their scheduled academic time are students actually using?
+        </div>
+      </div>
+      <button class="modal-close" onclick="refreshProductivityData()" title="Refresh data" style="margin-left:auto;margin-right:4px;">↻</button>
+      <button class="modal-close" onclick="closeProductivityModalButton()">✕</button>
+    </div>
+
+    <div id="productivityLoading" style="padding:20px;flex-shrink:0;">
+      <div style="display:flex;flex-direction:column;gap:14px;">
+        <div class="skeleton-cell wide" style="height:14px;"></div>
+        <div style="display:grid;grid-template-columns:repeat(5,1fr);gap:11px;">
+          <div class="skeleton-cell" style="height:70px;border-radius:8px;"></div>
+          <div class="skeleton-cell" style="height:70px;border-radius:8px;"></div>
+          <div class="skeleton-cell" style="height:70px;border-radius:8px;"></div>
+          <div class="skeleton-cell" style="height:70px;border-radius:8px;"></div>
+          <div class="skeleton-cell" style="height:70px;border-radius:8px;"></div>
+        </div>
+        <div class="skeleton-cell" style="height:220px;border-radius:8px;"></div>
+      </div>
+      <div id="productivityLoadingStatus" style="font-size:12px;color:var(--text-muted);margin-top:14px;"></div>
+    </div>
+
+    <div id="productivityContent" class="hidden" style="flex:1;overflow-y:auto;min-height:0;">
+
+      <!-- Tab switcher -->
+      <div style="display:flex;gap:8px;padding:16px 20px 0;border-bottom:1px solid var(--border);position:sticky;top:0;background:var(--bg2);z-index:10;">
+        <button id="prodTabCohort" class="prod-tab active" onclick="switchProdTab('cohort')">
+          Academic Productivity
+        </button>
+        <button id="prodTabStudent" class="prod-tab" onclick="switchProdTab('student')">
+          Individual Student
+        </button>
+        <button id="prodTabProgress" class="prod-tab" onclick="switchProdTab('progress')">
+          Monthly Progress
+        </button>
+        <button id="prodTabTABE" class="prod-tab" onclick="switchProdTab('tabe')">
+          TABE Scores
+        </button>
+        <button id="prodTabGains" class="prod-tab" onclick="switchProdTab('gains')">
+          Predicted Gains
+        </button>
+        <button id="prodTabGraduates" class="prod-tab" onclick="switchProdTab('graduates')">
+          Potential HS Graduates
+        </button>
+        <div style="margin-left:auto;display:flex;align-items:center;">
+          <span class="prod-legend-item" style="color:var(--low);">■</span>
+          <span class="prod-legend-text">70%+ On track</span>
+          <span class="prod-legend-item" style="color:var(--medium);">■</span>
+          <span class="prod-legend-text">40–69% Watch</span>
+          <span class="prod-legend-item" style="color:var(--high);">■</span>
+          <span class="prod-legend-text">Under 40% Concern</span>
+          <span class="prod-legend-item" style="color:var(--warn);font-size:14px;">■</span>
+          <span class="prod-legend-text">Data error</span>
+        </div>
+      </div>
+
+      <!-- ── COHORT VIEW ───────────────────────────────────── -->
+      <div id="prodCohortView" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> This shows how well your students are using their scheduled academic time each week — across the whole group. A student scheduled for 10 hours who logs 7 hours worked is at 70%. The goal is to spot trends: is the group getting better over time, or are certain weeks consistently low?
+        </div>
+        <div id="prodCohortChips" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:16px;"></div>
+        <div style="position:relative;width:100%;height:240px;margin-bottom:20px;">
+          <canvas id="cohortChart"></canvas>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+                <th class="prod-th" style="text-align:left;">Week <span class="prod-tip" data-tip="The week this data covers — each row is one week of the school year.">ⓘ</span></th>
+                <th class="prod-th">Students <span class="prod-tip" data-tip="How many students had scheduled hours that week and are counted in the averages.">ⓘ</span></th>
+                <th class="prod-th">Avg Scheduled <span class="prod-tip" data-tip="On average, how many academic hours each student was supposed to attend that week based on their schedule.">ⓘ</span></th>
+                <th class="prod-th">Avg Worked <span class="prod-tip" data-tip="On average, how many hours students actually logged in Edgenuity that week.">ⓘ</span></th>
+                <th class="prod-th">Avg Usage <span class="prod-tip" data-tip="The percentage of scheduled time that was actually used. 100% means students used every hour they were scheduled for. Below 70% is worth paying attention to.">ⓘ</span></th>
+                <th class="prod-th">Spread <span class="prod-tip" data-tip="The range between the lowest and highest performing student that week.">ⓘ</span></th>
+              </tr>
+            </thead>
+            <tbody id="cohortTableBody"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- ── INDIVIDUAL STUDENT VIEW ──────────────────────── -->
+      <div id="prodStudentView" class="hidden" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> This shows one student's weekly usage of their scheduled academic time from April through June. The bars show how much of their scheduled time they used each week. The dotted line is the group average — use it to see if this student is above or below their peers. Weeks marked with a warning icon may have a scheduling or data entry error.
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:16px;">
+          <select id="prodStudentSelect"
+            style="flex:1;background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:8px 10px;color:var(--text);font-size:13px;"
+            onchange="renderStudentProductivity()">
+            <option value="">— Select a student —</option>
+          </select>
+          <div id="prodStudentTrend" style="font-size:12px;font-weight:700;padding:6px 12px;border-radius:999px;white-space:nowrap;"></div>
+        </div>
+        <div style="position:relative;width:100%;height:240px;margin-bottom:16px;">
+          <canvas id="studentChart"></canvas>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+                <th class="prod-th" style="text-align:left;">Week <span class="prod-tip" data-tip="The week this data is from.">ⓘ</span></th>
+                <th class="prod-th">Scheduled <span class="prod-tip" data-tip="How many academic hours this student was scheduled for that week.">ⓘ</span></th>
+                <th class="prod-th">Worked <span class="prod-tip" data-tip="How many hours this student actually logged in Edgenuity that week.">ⓘ</span></th>
+                <th class="prod-th">Usage <span class="prod-tip" data-tip="What percentage of their scheduled time they actually used. 70% or above is generally on track. Below 40% is a concern worth following up on.">ⓘ</span></th>
+                <th class="prod-th">vs. Group <span class="prod-tip" data-tip="How this student's usage compares to the group average for that week.">ⓘ</span></th>
+              </tr>
+            </thead>
+            <tbody id="studentTableBody"></tbody>
+          </table>
+        </div>
+        <div id="prodStudentSummary" style="margin-top:16px;display:grid;grid-template-columns:repeat(4,1fr);gap:10px;"></div>
+      </div>
+
+      <!-- ── MONTHLY PROGRESS VIEW ─────────────────────────── -->
+      <div id="prodProgressView" class="hidden" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> This shows how the whole group is progressing month over month — how many credits HS students are reducing on average, and how much trade percentage students are gaining. Use it to spot months where progress slowed down across the board.
+        </div>
+
+        <!-- HS Credits section -->
+        <div style="margin-bottom:28px;">
+          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;">
+            Academic — Avg Credits Reduced Per Month
+          </div>
+          <div id="prodHSChips" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+          <div style="position:relative;width:100%;height:200px;margin-bottom:16px;">
+            <canvas id="hsProgressChart"></canvas>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead>
+                <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+                  <th class="prod-th" style="text-align:left;">Month</th>
+                  <th class="prod-th">Students</th>
+                  <th class="prod-th">Avg Credits Reduced</th>
+                  <th class="prod-th">Total Reduced</th>
+                </tr>
+              </thead>
+              <tbody id="hsProgressTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Trade % section -->
+        <div>
+          <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;">
+            Trades — Avg Monthly % Gain
+          </div>
+          <div id="prodTradeChips" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+          <div style="position:relative;width:100%;height:200px;margin-bottom:16px;">
+            <canvas id="tradeProgressChart"></canvas>
+          </div>
+          <div style="overflow-x:auto;">
+            <table style="width:100%;border-collapse:collapse;font-size:12px;">
+              <thead>
+                <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+                  <th class="prod-th" style="text-align:left;">Month</th>
+                  <th class="prod-th">Students</th>
+                  <th class="prod-th">Avg % Gain</th>
+                  <th class="prod-th">Stalled (&lt;3%)</th>
+                  <th class="prod-th">Stalled %</th>
+                </tr>
+              </thead>
+              <tbody id="tradeProgressTableBody"></tbody>
+            </table>
+          </div>
+        </div>
+      </div><!-- /prodProgressView -->
+      <div id="prodTABEView" class="hidden" style="padding:20px;">
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:14px;">This Week's Tests</div>
+        <div id="tabeWeeklyBody"></div>
+        <div style="font-size:14px;font-weight:700;color:var(--text);margin:24px 0 14px;">By Month</div>
+        <div id="tabeMonthlyBody"></div>
+      </div>
+ 
+      <!-- ── PREDICTED GAINS VIEW ──────────────────────────── -->
+      <div id="prodGainsView" class="hidden" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> These are the students closest to gaining an EFL level based on their actual test history — not a guess about the future, just how close they are to the next score threshold and how fast they've been trending. A student needing 8 more points who gains about 4 points a week is predicted to level up in about 2 weeks. Students with flat or declining scores, or only one test on file, aren't included since there isn't enough trend to go on.
+        </div>
+        <div id="prodGainsSnapshotDate" style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:16px;"></div>
+ 
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:24px;">
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;">
+              Top 10 — Most Likely to Gain a Level in Reading
+            </div>
+            <div id="gainsReadingBody"></div>
+          </div>
+          <div>
+            <div style="font-size:14px;font-weight:700;color:var(--text);margin-bottom:12px;">
+              Top 10 — Most Likely to Gain a Level in Math
+            </div>
+            <div id="gainsMathBody"></div>
+          </div>
+        </div>
+      </div>
+      
+      <!-- ── HS GRADUATES VIEW ─────────────────────────────── -->
+      <div id="prodGraduatesView" class="hidden" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> These are HS students
+          whose Edgenuity graduation date falls within the next two months,
+          scored across 10 signals including credits remaining, remaining
+          course hours vs weekly pace, historical monthly credit rate,
+          Edgenuity pace flag, time in program, current course target date,
+          hours trend, scheduled periods, and WIR status.
+          <strong>On Track</strong> = likely to graduate on time.
+          <strong>At Risk</strong> = possible but needs attention.
+          <strong>Unlikely</strong> = significant gap between pace and deadline.
+        </div>
+ 
+        <div id="prodGraduatesSnapshotDate"
+          style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:16px;">
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
+          <button id="syncCourseDataBtn" onclick="runSyncStudentCourseData()" style="
+            font-size:12px;padding:6px 14px;
+            background:var(--bg3);color:var(--text-muted);
+            border:1px solid var(--border);border-radius:6px;
+            cursor:pointer;font-weight:600;
+          ">↻ Sync Course Data</button>
+          <span id="syncCourseDataStatus" style="font-size:12px;color:var(--text-muted);font-style:italic;"></span>
+        </div>
+        <div id="prodGraduatesBody"></div>
+      </div>
+    </div><!-- /productivityContent -->
+  </div>
+</div>
+
+<style>
+.prod-tab {
+  background: none;
+  border: none;
+  border-bottom: 2px solid transparent;
+  padding: 8px 16px;
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--text-muted);
+  cursor: pointer;
+  margin-bottom: -1px;
+  transition: color .15s, border-color .15s;
+  white-space: nowrap;
+}
+.prod-tab.active {
+  color: var(--accent-mid);
+  border-bottom-color: var(--accent-mid);
+}
+
+/* Single source of truth for stat chips used across every Productivity
+   tab (cohort, student summary, HS/trade progress). Previously defined
+   twice with different padding/sizing — the second definition silently
+   won by CSS cascade, leaving the first as dead, conflicting code. */
+.prod-chip {
+  background: var(--bg4);
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  padding: 10px 16px;
+  text-align: center;
+  min-width: 120px;
+}
+.prod-chip-label {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: .4px;
+  margin-bottom: 4px;
+}
+.prod-chip-value {
+  font-size: 22px;
+  font-weight: 700;
+  color: var(--text);
+}
+.prod-th {
+  padding: 8px 10px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+}
+.prod-tip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 10px;
+  color: var(--text-muted);
+  cursor: help;
+  margin-left: 3px;
+  opacity: 0.7;
+  transition: opacity .15s;
+  position: relative;
+}
+.prod-tip:hover { opacity: 1; }
+.prod-tip[data-tip]:hover::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--bg-nav);
+  color: var(--text-soft);
+  font-size: 11px;
+  font-weight: 400;
+  line-height: 1.55;
+  padding: 8px 11px;
+  border-radius: 5px;
+  border: 1px solid var(--border-bright);
+  width: 220px;
+  white-space: normal;
+  box-shadow: var(--shadow-modal);
+  z-index: 9999;
+  pointer-events: none;
+  font-family: var(--font);
+  text-transform: none;
+  letter-spacing: 0;
+}
+.prod-explainer {
+  background: var(--bg3);
+  border: 1px solid var(--border);
+  border-left: 3px solid var(--accent-dim);
+  border-radius: 6px;
+  padding: 12px 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  line-height: 1.65;
+  margin-bottom: 16px;
+}
+.prod-explainer strong { color: var(--text-soft); }
+.prod-error-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  font-size: 11px;
+  color: var(--warn);
+  font-weight: 700;
+  margin-left: 4px;
+  cursor: help;
+}
+.prod-legend-item {
+  margin-left: 12px;
+  font-size: 11px;
+}
+.prod-legend-text {
+  font-size: 11px;
+  color: var(--text-muted);
+  margin-left: 3px;
+  margin-right: 4px;
+}
+.prod-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+.prod-table th {
+  padding: 10px 12px;
+  text-align: center;
+  color: var(--text-muted);
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  white-space: nowrap;
+  cursor: pointer;
+  user-select: none;
+  position: relative;
+}
+.prod-table th:hover { color: var(--text); }
+.prod-table th.sort-asc::after  { content: ' ▲'; font-size: 10px; color: var(--accent-mid); }
+.prod-table th.sort-desc::after { content: ' ▼'; font-size: 10px; color: var(--accent-mid); }
+.prod-table td {
+  padding: 10px 12px;
+  border-bottom: 1px solid var(--border);
+}
+/* Theme-adaptive hover tint — was a fixed rgba(255,255,255,.03), which
+   goes nearly invisible against light-family theme backgrounds. Blending
+   from --text instead means it stays visible whichever way the theme's
+   contrast runs. */
+.prod-table tr:hover td { background: color-mix(in srgb, var(--text) 4%, transparent); }
+</style>
