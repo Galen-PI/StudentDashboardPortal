@@ -126,3 +126,21 @@ const COURSE_DATA_HEADERS = [
   'Next Course Target Date', 'Total Credits', 'Total Hours',
   'Completion %', 'Last Synced',
 ];
+// ── Migration flags ───────────────────────────────────────────
+const USE_HUB_SETTINGS    = true;
+const USE_HUB_TRANSCRIPTS = false;
+const USE_HUB_TRADES      = false;
+const USE_HUB_TIMETABLE   = false;
+
+// ── Name Mapping column indices (1-based) ─────────────────────
+const NM_COL_ID                = 1;
+const NM_COL_MASTER_NAME       = 2;
+const NM_COL_TRADE_NAME        = 3;
+const NM_COL_ACADEMIC_NAME     = 4;
+const NM_COL_TRADE_COMPLETE    = 5;
+const NM_COL_ACADEMIC_COMPLETE = 6;
+const NM_COL_WEEKLY_HOURS      = 15;
+const NM_COL_W1                = 16;
+const NM_COL_W2                = 17;
+const NM_COL_W3                = 18;
+const NM_COL_W4                = 19;
