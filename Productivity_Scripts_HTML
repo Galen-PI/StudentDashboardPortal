@@ -1,0 +1,1677 @@
+<script>
+// ─────────────────────────────────────────────────────────────
+// PRODUCTIVITY MODAL v2
+// Admin/Manager only — whole-group and individual student views
+// ─────────────────────────────────────────────────────────────
+
+const PROD_ERROR_THRESHOLD = 200; // 
+
+let _productivityData    = null;
+let _cohortSummary       = null;
+let _rosterNames         = null;
+let _cohortChartInstance = null;
+let _studentChartInst    = null;
+
+// ─────────────────────────────────────────────────────────────
+// Theme color resolution for Chart.js
+// Canvas cannot resolve CSS custom properties on its own — a bare
+// "var(--high)" string passed to a canvas fillStyle is silently
+// ignored. So charts read the *current* computed values of the
+// theme's tokens once per render and build concrete rgba() strings
+// from them, instead of hardcoding one theme's palette permanently.
+// ─────────────────────────────────────────────────────────────
+function _hexToRgba(hex, alpha) {
+  hex = String(hex || '').trim();
+  if (hex[0] === '#') {
+    let h = hex.slice(1);
+    if (h.length === 3) h = h.split('').map(c => c + c).join('');
+    const r = parseInt(h.substring(0, 2), 16);
+    const g = parseInt(h.substring(2, 4), 16);
+    const b = parseInt(h.substring(4, 6), 16);
+    return `rgba(${r},${g},${b},${alpha})`;
+  }
+  // Already a resolved color (e.g. "rgb(...)") — return as-is.
+  return hex;
+}
+
+function _chartPalette() {
+  const cs = getComputedStyle(document.documentElement);
+  const v  = name => (cs.getPropertyValue(name) || '').trim();
+  return {
+    low:       v('--low')        || '#3ABF8A',
+    medium:    v('--medium')     || '#D4893A',
+    high:      v('--high')       || '#E05A4A',
+    warn:      v('--warn')       || v('--medium') || '#D4893A',
+    accent:    v('--accent')     || '#C4622E',
+    accentMid: v('--accent-mid') || '#A85228',
+    accentDim: v('--accent-dim') || '#7A3A1C',
+    textMuted: v('--text-muted') || '#8A7A6A',
+    textSoft:  v('--text-soft')  || '#C8B8A8',
+    border:    v('--border')     || '#3A3830',
+  };
+}
+
+function _chartColors() {
+  const p = _chartPalette();
+  return {
+    p,
+    axis:   _hexToRgba(p.textMuted, 0.85),
+    grid:   _hexToRgba(p.border, 0.65),
+    legend: _hexToRgba(p.textSoft, 0.85),
+  };
+}
+
+// ── Open / Close ─────────────────────────────────────────────
+function openProductivityModal() {
+  document.getElementById('productivityModal').classList.remove('hidden');
+  if (!_productivityData) {
+    _loadProductivityData();
+  } else {
+    _renderProductivityModal();
+  }
+}
+
+function closeProductivityModal(e) {
+  if (e && e.target !== document.getElementById('productivityModal')) return;
+  document.getElementById('productivityModal').classList.add('hidden');
+}
+
+function closeProductivityModalButton() {
+  document.getElementById('productivityModal').classList.add('hidden');
+}
+
+function refreshProductivityData() {
+  _productivityData       = null;
+  _cohortSummary          = null;
+  _rosterNames            = null;
+  _gainsData              = null;
+  _graduatesData          = null;
+  _hsMonthlyCohort    = [];
+  _tradeMonthlyCohort = [];
+  if (_cohortChartInstance)    { _cohortChartInstance.destroy();    _cohortChartInstance    = null; }
+  if (_studentChartInst)       { _studentChartInst.destroy();       _studentChartInst       = null; }
+  if (_hsProgressChartInst)    { _hsProgressChartInst.destroy();    _hsProgressChartInst    = null; }
+  if (_tradeProgressChartInst) { _tradeProgressChartInst.destroy(); _tradeProgressChartInst = null; }
+  _loadProductivityData();
+}
+
+// ── Load data from server ────────────────────────────────────
+function _loadProductivityData() {
+  const loadingEl = document.getElementById('productivityLoading');
+  const statusEl  = document.getElementById('productivityLoadingStatus');
+  loadingEl.style.display = 'block';
+  if (statusEl) { statusEl.textContent = ''; statusEl.style.color = 'var(--text-muted)'; }
+  document.getElementById('productivityContent').classList.add('hidden');
+
+  // Show a message if it takes too long — appended next to the skeleton
+  // rather than replacing it, so the loading state doesn't flash empty.
+  const timeoutHandle = setTimeout(() => {
+    if (statusEl) statusEl.textContent = 'Still loading… (if this takes more than 60 seconds, there may be an error)';
+  }, 15000);
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      clearTimeout(timeoutHandle);
+      if (!result || result.error) {
+        if (statusEl) {
+          statusEl.style.color = 'var(--high)';
+          statusEl.textContent = 'Error: ' + (result && result.error ? result.error : 'unknown error — check Apps Script logs');
+        }
+        return;
+      }
+      window._tabeProfiles = result.tabeProfiles || [];
+      _productivityData = result.productivityData   || [];
+      _cohortSummary    = result.productivityCohort || [];
+      _rosterNames      = new Set(result.rosterNames || []);
+      _hsMonthlyCohort    = result.hsMonthlyCohort    || []; 
+      _tradeMonthlyCohort = result.tradeMonthlyCohort || [];
+      document.getElementById('productivityLoading').style.display = 'none';
+      document.getElementById('productivityContent').classList.remove('hidden');
+      _renderProductivityModal();
+    })
+    .withFailureHandler(function(err) {
+      clearTimeout(timeoutHandle);
+      if (statusEl) {
+        statusEl.style.color = 'var(--high)';
+        statusEl.textContent = 'Failed: ' + (err && err.message ? err.message : 'unknown failure — check Apps Script logs');
+      }
+    })
+    .getProductivityPayload();
+}
+
+// ── Tab switching ────────────────────────────────────────────
+function switchProdTab(tab) {
+  document.getElementById('prodTabCohort').classList.toggle('active',   tab === 'cohort');
+  document.getElementById('prodTabStudent').classList.toggle('active',  tab === 'student');
+  document.getElementById('prodTabProgress').classList.toggle('active', tab === 'progress');
+  document.getElementById('prodCohortView').classList.toggle('hidden',   tab !== 'cohort');
+  document.getElementById('prodStudentView').classList.toggle('hidden',  tab !== 'student');
+  document.getElementById('prodProgressView').classList.toggle('hidden', tab !== 'progress');
+  document.getElementById('prodTabTABE').classList.toggle('active', tab === 'tabe');
+  document.getElementById('prodTABEView').classList.toggle('hidden', tab !== 'tabe');
+  document.getElementById('prodTabGains').classList.toggle('active', tab === 'gains');
+  document.getElementById('prodGainsView').classList.toggle('hidden', tab !== 'gains');
+  document.getElementById('prodTabGraduates').classList.toggle('active', tab === 'graduates');
+  document.getElementById('prodGraduatesView').classList.toggle('hidden', tab !== 'graduates');
+  if (tab === 'gains') {
+    requestAnimationFrame(() => _renderGainsView());
+  }
+  if (tab === 'graduates') {
+    requestAnimationFrame(() => _renderGraduatesView());
+  }
+  if (tab === 'tabe') {
+  requestAnimationFrame(() => _renderTABEView());
+  }
+  if (tab === 'student') {
+    const sel = document.getElementById('prodStudentSelect');
+    if (sel.options.length > 1 && !sel.value) {
+      sel.selectedIndex = 1;
+      renderStudentProductivity();
+    }
+  }
+  if (tab === 'progress') {
+    _renderProgressView();
+  }
+}
+
+// ── Main render ──────────────────────────────────────────────
+function _renderProductivityModal() {
+  _renderCohortView();
+  _populateStudentDropdown();
+}
+
+// ── Classify a productivity % ─────────────────────────────────
+// These return CSS var() strings — fine here since they're only ever
+// used inside DOM style="" attributes, which resolve var() through the
+// normal CSS cascade. Chart.js (canvas) needs concrete colors instead;
+// see _prodBgColor / _prodBorderColor below.
+function _prodColor(pct) {
+  if (pct === null) return 'var(--text-muted)';
+  if (pct > PROD_ERROR_THRESHOLD) return 'var(--warn)';
+  if (pct >= 70) return 'var(--low)';
+  if (pct >= 40) return 'var(--medium)';
+  return 'var(--high)';
+}
+
+// Used for Chart.js bar fills — needs a resolved color, not a var()
+// string, since canvas can't look up custom properties itself. Pass a
+// palette from _chartPalette() when calling from inside a chart-build
+// function that already has one; otherwise it resolves its own.
+function _prodBgColor(pct, palette) {
+  const p = palette || _chartPalette();
+  if (pct === null)               return _hexToRgba(p.textMuted, 0.2);
+  if (pct > PROD_ERROR_THRESHOLD) return _hexToRgba(p.warn, 0.55);
+  if (pct >= 70)                  return _hexToRgba(p.low, 0.6);
+  if (pct >= 40)                  return _hexToRgba(p.medium, 0.6);
+  return _hexToRgba(p.high, 0.6);
+}
+
+function _prodBorderColor(pct, palette) {
+  const p = palette || _chartPalette();
+  if (pct === null)               return _hexToRgba(p.textMuted, 0.4);
+  if (pct > PROD_ERROR_THRESHOLD) return _hexToRgba(p.warn, 0.9);
+  if (pct >= 70)                  return _hexToRgba(p.low, 0.9);
+  if (pct >= 40)                  return _hexToRgba(p.medium, 0.9);
+  return _hexToRgba(p.high, 0.9);
+}
+
+function _errorBadge(pct) {
+  if (pct === null || pct <= PROD_ERROR_THRESHOLD) return '';
+  return `<span class="prod-error-badge" title="This is over ${PROD_ERROR_THRESHOLD}% — the scheduled hours for this week may have been entered incorrectly. Worth checking the Productivity Data sheet.">${_warnGlyph}</span>`;
+}
+
+// ── COHORT VIEW ──────────────────────────────────────────────
+function _renderCohortView() {
+  if (!_cohortSummary || !_cohortSummary.length) return;
+
+  const labels       = _cohortSummary.map(w => w.label);
+  const productivity = _cohortSummary.map(w => w.avgProductivity);
+  const assigned     = _cohortSummary.map(w => w.avgAssigned);
+  const worked       = _cohortSummary.map(w => w.avgWorked);
+
+  // Summary chips
+  const validProd    = productivity.filter(v => v !== null && v <= PROD_ERROR_THRESHOLD);
+  const avgProd      = validProd.length
+    ? (validProd.reduce((s,v) => s+v, 0) / validProd.length).toFixed(1)
+    : '—';
+  const peakWeek     = _cohortSummary
+    .filter(w => w.avgProductivity !== null && w.avgProductivity <= PROD_ERROR_THRESHOLD)
+    .reduce((best, w) => (!best || w.avgProductivity > best.avgProductivity) ? w : best, null);
+  const totalStudents = _productivityData.length;
+  const trend         = _cohortTrend();
+  const errorWeeks    = _cohortSummary.filter(w => w.avgProductivity !== null && w.avgProductivity > PROD_ERROR_THRESHOLD).length;
+
+  const chips = [
+    { label: 'Avg Time Used',      value: avgProd + '%',
+      tip: 'On average, what percentage of scheduled academic time students actually used across all weeks. 70%+ is the target.' },
+    { label: 'Best Week',          value: peakWeek ? peakWeek.label : '—',
+      tip: 'The week where students used the highest percentage of their scheduled time on average.' },
+    { label: 'Best Week Usage',    value: peakWeek ? peakWeek.avgProductivity.toFixed(1) + '%' : '—',
+      tip: 'The average usage rate during the best week.' },
+    { label: 'Students Tracked',   value: totalStudents,
+      tip: 'The number of students included in this analysis.' },
+    { label: 'Group Trend',        value: trend.label, color: trend.color,
+      tip: 'Whether the group\'s time usage has been going up, down, or staying flat over the period.' },
+  ];
+  if (errorWeeks > 0) {
+    chips.push({
+      label: 'Data Errors',
+      value: errorWeeks + ' week' + (errorWeeks > 1 ? 's' : ''),
+      color: 'var(--warn)',
+      tip: `${errorWeeks} week(s) show average usage over ${PROD_ERROR_THRESHOLD}% — this usually means scheduled hours were entered too low. Check the Productivity Data sheet.`,
+    });
+  }
+
+  document.getElementById('prodCohortChips').innerHTML = chips.map(c => `
+    <div class="prod-chip" ${c.tip ? `title="${esc(c.tip)}"` : ''} style="cursor:${c.tip ? 'help' : 'default'}">
+      <div class="prod-chip-label">${c.label}</div>
+      <div class="prod-chip-value" ${c.color ? `style="color:${c.color}"` : ''}>${c.value}</div>
+    </div>`).join('');
+
+  // Chart
+  if (_cohortChartInstance) { _cohortChartInstance.destroy(); _cohortChartInstance = null; }
+
+  const cc  = _chartColors();
+  const ctx = document.getElementById('cohortChart').getContext('2d');
+  _cohortChartInstance = new Chart(ctx, {
+    type: 'line',
+    data: {
+      labels,
+      datasets: [
+        {
+          label:           'Avg Time Used %',
+          data:            productivity,
+          borderColor:     _hexToRgba(cc.p.low, 0.9),
+          backgroundColor: _hexToRgba(cc.p.low, 0.12),
+          fill:            true,
+          tension:         0.35,
+          yAxisID:         'yProd',
+          pointRadius:     5,
+          pointHoverRadius: 7,
+          pointBackgroundColor: productivity.map(v =>
+            v !== null && v > PROD_ERROR_THRESHOLD ? _hexToRgba(cc.p.warn, 0.9) : _hexToRgba(cc.p.low, 0.9)
+          ),
+        },
+        {
+          label:           'Avg Scheduled Hours',
+          data:            assigned,
+          borderColor:     _hexToRgba(cc.p.accentMid, 0.75),
+          backgroundColor: 'transparent',
+          borderDash:      [5, 3],
+          tension:         0.35,
+          yAxisID:         'yHours',
+          pointRadius:     3,
+        },
+        {
+          label:           'Avg Hours Worked',
+          data:            worked,
+          borderColor:     _hexToRgba(cc.p.medium, 0.8),
+          backgroundColor: 'transparent',
+          tension:         0.35,
+          yAxisID:         'yHours',
+          pointRadius:     3,
+        },
+      ]
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      interaction:         { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: cc.legend, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if (v === null) return ctx.dataset.label + ': —';
+              const base = ctx.dataset.label + ': ' + (ctx.datasetIndex === 0 ? v.toFixed(1) + '%' : v.toFixed(1) + ' h');
+              return ctx.datasetIndex === 0 && v > PROD_ERROR_THRESHOLD ? base + ' ⚠ possible data error' : base;
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: cc.axis, font: { size: 10 }, maxRotation: 45 },
+          grid:  { color: cc.grid },
+        },
+        yProd: {
+          type:     'linear',
+          position: 'left',
+          min:      0,
+          ticks:    { color: _hexToRgba(cc.p.low, 0.85), font: { size: 10 }, callback: v => v + '%' },
+          grid:     { color: cc.grid },
+          title:    { display: true, text: '% of Scheduled Time Used', color: _hexToRgba(cc.p.low, 0.75), font: { size: 10 } },
+        },
+        yHours: {
+          type:     'linear',
+          position: 'right',
+          min:      0,
+          ticks:    { color: _hexToRgba(cc.p.accentMid, 0.75), font: { size: 10 }, callback: v => v + 'h' },
+          grid:     { drawOnChartArea: false },
+          title:    { display: true, text: 'Hours', color: _hexToRgba(cc.p.accentMid, 0.75), font: { size: 10 } },
+        }
+      }
+    }
+  });
+
+  // Cohort table
+  document.getElementById('cohortTableBody').innerHTML = _cohortSummary.map(w => {
+    const prod    = w.avgProductivity;
+    const isError = prod !== null && prod > PROD_ERROR_THRESHOLD;
+    const color   = _prodColor(prod);
+    const minProd = w.minProductivity;
+    const maxProd = w.maxProductivity;
+    const spreadStr = minProd !== null
+      ? minProd.toFixed(0) + '% – ' + maxProd.toFixed(0) + '%'
+      : '—';
+    const spreadNote = maxProd !== null && maxProd > PROD_ERROR_THRESHOLD
+      ? ` <span style="color:var(--warn);font-size:10px;" title="The highest value in this week may be a data error.">${_warnGlyph}</span>`
+      : '';
+
+    const usageHtml = prod !== null
+      ? `<span style="font-weight:700;color:${color};">${prod.toFixed(1)}%${_errorBadge(prod)}</span>`
+      : '—';
+
+    return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}">
+      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.label)}</td>
+      <td style="padding:8px 10px;text-align:center;color:var(--text-muted);">${w.studentCount}</td>
+      <td style="padding:8px 10px;text-align:center;">${w.avgAssigned !== null ? w.avgAssigned.toFixed(1) + ' h' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;">${w.avgWorked  !== null ? w.avgWorked.toFixed(1)  + ' h' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;">${usageHtml}</td>
+      <td style="padding:8px 10px;text-align:center;font-size:11px;color:var(--text-muted);">
+        ${spreadStr}${spreadNote}
+      </td>
+    </tr>`;
+}).join('');
+}
+
+function _cohortTrend() {
+  if (!_cohortSummary || _cohortSummary.length < 4) return { label: '—', color: 'var(--text-muted)' };
+  const prods = _cohortSummary
+    .map(w => w.avgProductivity)
+    .filter(v => v !== null && v <= PROD_ERROR_THRESHOLD);
+  if (prods.length < 4) return { label: 'Not enough data', color: 'var(--text-muted)' };
+  const half   = Math.floor(prods.length / 2);
+  const first  = prods.slice(0, half).reduce((s,v) => s+v, 0) / half;
+  const second = prods.slice(half).reduce((s,v)  => s+v, 0) / (prods.length - half);
+  if (second - first >  5) return { label: '▲ Getting better', color: 'var(--low)' };
+  if (second - first < -5) return { label: '▼ Getting worse',  color: 'var(--high)' };
+  return { label: '→ Holding steady', color: 'var(--text-muted)' };
+}
+
+// ── INDIVIDUAL STUDENT VIEW ──────────────────────────────────
+function _populateStudentDropdown() {
+  const sel = document.getElementById('prodStudentSelect');
+
+  const sorted = [..._productivityData]
+    .filter(s => {
+      if (!s.name || !s.name.trim()) return false;
+      // Only show students whose name matches something in the Name Mapping sheet
+      if (!_rosterNames || !_rosterNames.size) return true; // fallback: show all
+      const norm = s.name.toLowerCase().replace(/[^a-z ]/g, '').trim().split(' ').filter(Boolean).sort().join(' ');
+      return _rosterNames.has(norm);
+    })
+    .sort((a, b) => a.name.localeCompare(b.name));
+
+  sel.innerHTML = '<option value="">— Select a student —</option>' +
+    sorted.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+}
+
+function renderStudentProductivity() {
+  const name    = document.getElementById('prodStudentSelect').value;
+  const student = _productivityData.find(s => s.name === name);
+  if (!student) return;
+
+  // Trend badge
+  const trendEl  = document.getElementById('prodStudentTrend');
+  const trendMap = {
+    improving: { label: '▲ Getting Better',  bg: 'color-mix(in srgb, var(--low) 15%, transparent)',  color: 'var(--low)' },
+    declining: { label: '▼ Getting Worse',   bg: 'color-mix(in srgb, var(--high) 15%, transparent)', color: 'var(--high)' },
+    stable:    { label: '→ Holding Steady',  bg: 'color-mix(in srgb, var(--neutral) 10%, transparent)', color: 'var(--text-muted)' },
+  };
+  const t = trendMap[student.trend] || trendMap.stable;
+  trendEl.textContent      = t.label;
+  trendEl.style.background = t.bg;
+  trendEl.style.color      = t.color;
+  trendEl.style.border     = '1px solid ' + t.color;
+  trendEl.title            = 'Whether this student\'s time usage has been improving, declining, or staying about the same over the weeks tracked.';
+
+  const labels       = student.weeks.map(w => w.label);
+  const productivity = student.weeks.map(w => w.productivity);
+  const assigned     = student.weeks.map(w => w.assigned);
+  const worked       = student.weeks.map(w => w.worked);
+  const cohortAvgs   = labels.map(l => {
+    const c = (_cohortSummary || []).find(w => w.label === l);
+    return c ? c.avgProductivity : null;
+  });
+
+  if (_studentChartInst) { _studentChartInst.destroy(); _studentChartInst = null; }
+
+  const cc   = _chartColors();
+  const ctx2 = document.getElementById('studentChart').getContext('2d');
+  _studentChartInst = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label:           'Time Used %',
+          data:            productivity,
+          backgroundColor: productivity.map(v => _prodBgColor(v, cc.p)),
+          borderColor:     productivity.map(v => _prodBorderColor(v, cc.p)),
+          borderWidth:     1,
+          yAxisID:         'yProd',
+        },
+        {
+          label:           'Group Average %',
+          data:            cohortAvgs,
+          type:            'line',
+          borderColor:     _hexToRgba(cc.p.textSoft, 0.5),
+          borderDash:      [4, 3],
+          pointRadius:     0,
+          tension:         0.3,
+          yAxisID:         'yProd',
+          fill:            false,
+        },
+        {
+          label:           'Scheduled Hours',
+          data:            assigned,
+          borderColor:     _hexToRgba(cc.p.accentMid, 0.7),
+          backgroundColor: 'transparent',
+          type:            'line',
+          tension:         0.3,
+          yAxisID:         'yHours',
+          pointRadius:     3,
+          borderDash:      [5, 3],
+        },
+        {
+          label:           'Hours Worked',
+          data:            worked,
+          borderColor:     _hexToRgba(cc.p.medium, 0.7),
+          backgroundColor: 'transparent',
+          type:            'line',
+          tension:         0.3,
+          yAxisID:         'yHours',
+          pointRadius:     3,
+        },
+      ]
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      interaction:         { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: cc.legend, font: { size: 11 } } },
+        tooltip: {
+          callbacks: {
+            label: ctx => {
+              const v = ctx.parsed.y;
+              if (v === null) return ctx.dataset.label + ': —';
+              const isError = ctx.datasetIndex === 0 && v > PROD_ERROR_THRESHOLD;
+              if (ctx.dataset.label.includes('%') || ctx.dataset.label.includes('Average')) {
+                return ctx.dataset.label + ': ' + v.toFixed(1) + '%' + (isError ? ' ⚠ possible error' : '');
+              }
+              return ctx.dataset.label + ': ' + v.toFixed(1) + ' h';
+            }
+          }
+        }
+      },
+      scales: {
+        x: {
+          ticks: { color: cc.axis, font: { size: 10 }, maxRotation: 45 },
+          grid:  { color: cc.grid },
+        },
+        yProd: {
+          type:     'linear',
+          position: 'left',
+          min:      0,
+          ticks:    { color: _hexToRgba(cc.p.low, 0.85), font: { size: 10 }, callback: v => v + '%' },
+          grid:     { color: cc.grid },
+          title:    { display: true, text: '% of Scheduled Time Used', color: _hexToRgba(cc.p.low, 0.75), font: { size: 10 } },
+        },
+        yHours: {
+          type:     'linear',
+          position: 'right',
+          min:      0,
+          ticks:    { color: _hexToRgba(cc.p.accentMid, 0.75), font: { size: 10 }, callback: v => v + 'h' },
+          grid:     { drawOnChartArea: false },
+        }
+      }
+    }
+  });
+
+  // Table
+  const cohortMap = {};
+  (_cohortSummary || []).forEach(w => { cohortMap[w.label] = w.avgProductivity; });
+
+  document.getElementById('studentTableBody').innerHTML = student.weeks.map(w => {
+    const prod    = w.productivity;
+    const avg     = cohortMap[w.label] ?? null;
+    const diff    = prod !== null && avg !== null ? prod - avg : null;
+    const color   = _prodColor(prod);
+    const isError = prod !== null && prod > PROD_ERROR_THRESHOLD;
+
+    const diffHtml = diff === null ? '—'
+      : diff > 5  ? `<span style="color:var(--low);">+${diff.toFixed(1)}%</span>`
+      : diff < -5 ? `<span style="color:var(--high);">${diff.toFixed(1)}%</span>`
+      : `<span style="color:var(--text-muted);">About avg</span>`;
+
+    return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}">
+      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.label)}</td>
+      <td style="padding:8px 10px;text-align:center;">${w.assigned !== null ? w.assigned.toFixed(1) + ' h' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;">${w.worked   !== null ? w.worked.toFixed(1)   + ' h' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">
+        ${prod !== null ? prod.toFixed(1) + '%' : '—'}${_errorBadge(prod)}
+      </td>
+      <td style="padding:8px 10px;text-align:center;">${diffHtml}</td>
+    </tr>`;
+  }).join('');
+
+  // Summary chips
+  const hasErrors = student.weeks.some(w => w.productivity !== null && w.productivity > PROD_ERROR_THRESHOLD);
+  document.getElementById('prodStudentSummary').innerHTML = [
+    { label: 'Overall Time Used',  value: student.overallProductivity !== null ? student.overallProductivity.toFixed(1) + '%' : '—',
+      tip: 'Across all weeks tracked, what percentage of their total scheduled academic time did this student actually use.' },
+    { label: 'Total Hours Worked', value: student.totalWorked.toFixed(1) + ' h',
+      tip: 'The total number of academic hours this student logged from April through June.' },
+    { label: 'Total Scheduled',    value: student.totalAssigned.toFixed(1) + ' h',
+      tip: 'The total number of academic hours this student was scheduled for from April through June.' },
+    { label: 'Weeks Tracked',      value: student.weeksWithData,
+      tip: 'How many weeks this student had scheduled hours and is included in the analysis.' },
+  ].map(c => `
+    <div class="prod-chip" title="${esc(c.tip)}" style="cursor:help;">
+      <div class="prod-chip-label">${c.label}</div>
+      <div class="prod-chip-value">${c.value}</div>
+    </div>`).join('') + (hasErrors ? `
+    <div class="prod-chip" style="grid-column:1/-1;border-color:color-mix(in srgb, var(--warn) 40%, transparent);background:color-mix(in srgb, var(--warn) 5%, transparent);">
+      <div class="prod-chip-label" style="color:var(--warn);">${_warnGlyph} Data check needed</div>
+      <div style="font-size:12px;color:var(--text-muted);margin-top:4px;line-height:1.5;">
+        One or more weeks show over ${PROD_ERROR_THRESHOLD}% usage, which usually means the scheduled hours were entered too low. Check the Productivity Data sheet for this student.
+      </div>
+    </div>` : '');
+}
+let _hsProgressChartInst    = null;
+let _tradeProgressChartInst = null;
+
+function _renderProgressView() {
+  requestAnimationFrame(() => {
+    _renderHSProgressView();
+    _renderTradeProgressView();
+  });
+}
+
+function _renderHSProgressView() {
+  if (!_hsMonthlyCohort || !_hsMonthlyCohort.length) {
+    document.getElementById('hsProgressTableBody').innerHTML =
+      '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No HS monthly data available.</td></tr>';
+    document.getElementById('prodHSChips').innerHTML = '';
+    return;
+  }
+
+  // Helper: true only if this is a real usable number
+  const isNum = v => typeof v === 'number' && !isNaN(v);
+
+  const labels    = _hsMonthlyCohort.map(m => m.month);
+  const avgGained = _hsMonthlyCohort.map(m => isNum(m.avgGained) ? m.avgGained : null);
+
+  const validGains = avgGained.filter(v => v !== null);
+  const overallAvg = validGains.length
+    ? (validGains.reduce((s, v) => s + v, 0) / validGains.length).toFixed(1)
+    : '—';
+
+  const bestMonth = _hsMonthlyCohort
+    .filter(m => isNum(m.avgGained))
+    .reduce((best, m) => (!best || m.avgGained > best.avgGained) ? m : best, null);
+
+  // ── Previous Month Avg + Last-6-Month Avg ──────────────────
+  const completedMonths = _hsMonthlyCohort.filter(m => isNum(m.avgGained));
+  const prevMonth = completedMonths.length ? completedMonths[completedMonths.length - 1] : null;
+  const prevMonthAvg = prevMonth ? prevMonth.avgGained.toFixed(1) : '—';
+
+  const last6 = completedMonths.slice(-6);
+  const last6Avg = last6.length
+    ? (last6.reduce((s, m) => s + m.avgGained, 0) / last6.length).toFixed(1)
+    : '—';
+
+  const lastMonth        = _hsMonthlyCohort[_hsMonthlyCohort.length - 1];
+  const latestMonthTotal = lastMonth && isNum(lastMonth.totalGained) ? lastMonth.totalGained : '—';
+  const latestMonthName  = lastMonth ? lastMonth.month : '';
+
+  document.getElementById('prodHSChips').innerHTML = [
+    { label: 'Previous Month Avg',       value: prevMonthAvg,
+      tip: `Average credits reduced per student in ${prevMonth ? prevMonth.month : 'the most recent completed month'}.` },
+    { label: `${last6.length}-Mo. Avg`,  value: last6Avg,
+      tip: `Average credits reduced per student per month, across the last ${last6.length} completed month${last6.length !== 1 ? 's' : ''} on file (up to 6).` },
+    { label: 'Best Month',               value: bestMonth ? bestMonth.month : '—',
+      tip: 'The month where students reduced the most credits on average.' },
+    { label: 'Best Month Avg',           value: bestMonth ? bestMonth.avgGained.toFixed(1) : '—',
+      tip: 'The average credits reduced during the best month.' },
+    { label: 'HS Students',              value: _hsMonthlyCohort[0]?.studentCount ?? '—',
+      tip: 'Number of HS students tracked in this analysis.' },
+    { label: latestMonthName + ' Total', value: latestMonthTotal,
+      tip: 'Total credits reduced across all HS students in ' + latestMonthName + '.' },
+  ].map(c => `
+    <div class="prod-chip" title="${esc(c.tip)}" style="cursor:help;">
+      <div class="prod-chip-label">${c.label}</div>
+      <div class="prod-chip-value">${c.value}</div>
+    </div>`).join('');
+
+  // Chart
+  if (_hsProgressChartInst) { _hsProgressChartInst.destroy(); _hsProgressChartInst = null; }
+  const cc  = _chartColors();
+  const ctx = document.getElementById('hsProgressChart').getContext('2d');
+  _hsProgressChartInst = new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [
+        {
+          label:           'Avg Credits Reduced',
+          data:            avgGained,
+          backgroundColor: avgGained.map(v => v === null ? _hexToRgba(cc.p.textMuted, 0.2) : v > 0 ? _hexToRgba(cc.p.low, 0.6) : _hexToRgba(cc.p.high, 0.6)),
+          borderColor:     avgGained.map(v => v === null ? _hexToRgba(cc.p.textMuted, 0.4) : v > 0 ? _hexToRgba(cc.p.low, 0.9) : _hexToRgba(cc.p.high, 0.9)),
+          borderWidth:     1,
+        },
+        {
+          label:           'Total Credits Reduced',
+          data:            _hsMonthlyCohort.map(m => isNum(m.totalGained) ? m.totalGained : null),
+          type:            'line',
+          borderColor:     _hexToRgba(cc.p.accent, 0.8),
+          backgroundColor: 'transparent',
+          tension:         0.3,
+          pointRadius:     4,
+          yAxisID:         'yTotal',
+        },
+      ]
+    },
+    options: {
+      responsive:          true,
+      maintainAspectRatio: false,
+      interaction:         { mode: 'index', intersect: false },
+      plugins: {
+        legend: { labels: { color: cc.legend, font: { size: 11 } } },
+      },
+      scales: {
+        x: {
+          ticks: { color: cc.axis, font: { size: 11 } },
+          grid:  { color: cc.grid },
+        },
+        y: {
+          type:     'linear',
+          position: 'left',
+          ticks:    { color: _hexToRgba(cc.p.low, 0.85), font: { size: 10 } },
+          grid:     { color: cc.grid },
+          title:    { display: true, text: 'Avg Credits Reduced', color: _hexToRgba(cc.p.low, 0.75), font: { size: 10 } },
+        },
+        yTotal: {
+          type:     'linear',
+          position: 'right',
+          ticks:    { color: _hexToRgba(cc.p.accent, 0.85), font: { size: 10 } },
+          grid:     { drawOnChartArea: false },
+          title:    { display: true, text: 'Total Credits', color: _hexToRgba(cc.p.accent, 0.75), font: { size: 10 } },
+        },
+      }
+    }
+  });
+
+  // Table — simplified to just the essentials
+  document.getElementById('hsProgressTableBody').innerHTML = _hsMonthlyCohort.map(m => {
+    const avg   = isNum(m.avgGained) ? m.avgGained : null;
+    const color = avg === null ? 'var(--text-muted)'
+                : avg > 0     ? 'var(--low)'
+                : avg === 0   ? 'var(--medium)'
+                : 'var(--high)';
+    const total = isNum(m.totalGained) ? m.totalGained : null;
+    return `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
+      <td style="padding:8px 10px;text-align:center;">${m.completedCount ?? m.studentCount}</td>
+      <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">${avg !== null ? avg.toFixed(1) : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;font-weight:700;color:var(--low);">${total !== null ? total : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+
+function _renderTradeProgressView() {
+  if (!_tradeMonthlyCohort || !_tradeMonthlyCohort.length) {
+    document.getElementById('tradeProgressTableBody').innerHTML =
+      '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No trade monthly data available.</td></tr>';
+    return;
+  }
+
+  // Helper: true only if this is a real usable number
+  const isNum = v => typeof v === 'number' && !isNaN(v);
+
+  const labels  = _tradeMonthlyCohort.map(m => m.month);
+  const avgGain = _tradeMonthlyCohort.map(m => isNum(m.avgGain) ? m.avgGain : null);
+
+  const validGains = avgGain.filter(v => v !== null);
+  const overallAvg = validGains.length
+    ? (validGains.reduce((s, v) => s + v, 0) / validGains.length).toFixed(1)
+    : '—';
+
+  // ── Previous Month Avg + Last-6-Month Avg ──────────────────
+  const completedMonths = _tradeMonthlyCohort.filter(m => isNum(m.avgGain));
+  const prevMonthT = completedMonths.length ? completedMonths[completedMonths.length - 1] : null;
+  const prevMonthTAvg = prevMonthT ? prevMonthT.avgGain.toFixed(1) : '—';
+
+  const last6t = completedMonths.slice(-6);
+  const last6tAvg = last6t.length
+    ? (last6t.reduce((s, m) => s + m.avgGain, 0) / last6t.length).toFixed(1)
+    : '—';
+
+  const lastMonthT      = _tradeMonthlyCohort[_tradeMonthlyCohort.length - 1];
+  const lastStalledCount = lastMonthT && typeof lastMonthT.stalledCount === 'number'
+    ? lastMonthT.stalledCount : '—';
+
+  document.getElementById('prodTradeChips').innerHTML = [
+    { label: 'Previous Month Avg',        value: prevMonthTAvg + (prevMonthT ? '%' : ''),
+      tip: `Average trade % gained per student in ${prevMonthT ? prevMonthT.month : 'the most recent completed month'}.` },
+    { label: `${last6t.length}-Mo. Avg`,  value: last6tAvg + (last6t.length ? '%' : ''),
+      tip: `Average trade % gained per student per month, across the last ${last6t.length} completed month${last6t.length !== 1 ? 's' : ''} on file (up to 6).` },
+    { label: 'Trade Students',   value: _tradeMonthlyCohort[0]?.studentCount ?? '—',
+      tip: 'Number of trade students tracked.' },
+    { label: 'Stalled Last Month', value: lastStalledCount,
+      tip: 'Students who gained less than 3% in the most recent month.' },
+  ].map(c => `
+    <div class="prod-chip" title="${esc(c.tip)}" style="cursor:help;">
+      <div class="prod-chip-label">${c.label}</div>
+      <div class="prod-chip-value">${c.value}</div>
+    </div>`).join('');
+
+  // Chart
+  if (_tradeProgressChartInst) { _tradeProgressChartInst.destroy(); _tradeProgressChartInst = null; }
+  const cc   = _chartColors();
+  const ctx2 = document.getElementById('tradeProgressChart').getContext('2d');
+  _tradeProgressChartInst = new Chart(ctx2, {
+    type: 'bar',
+    data: {
+      labels,
+      datasets: [{
+        label:           'Avg % Gain',
+        data:            avgGain,
+        backgroundColor: _hexToRgba(cc.p.accent, 0.55),
+        borderColor:     _hexToRgba(cc.p.accent, 0.9),
+        borderWidth: 1,
+      }]
+    },
+    options: {
+      responsive: true, maintainAspectRatio: false,
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { ticks: { color: cc.axis, font: { size: 11 } }, grid: { color: cc.grid } },
+        y: { ticks: { color: _hexToRgba(cc.p.accent, 0.85), font: { size: 10 }, callback: v => v + '%' }, grid: { color: cc.grid },
+             title: { display: true, text: '% Gain', color: _hexToRgba(cc.p.accent, 0.75), font: { size: 10 } } }
+      }
+    }
+  });
+
+  // Table
+  document.getElementById('tradeProgressTableBody').innerHTML = _tradeMonthlyCohort.map(m => {
+    const gain  = isNum(m.avgGain) ? m.avgGain : null;
+    const color = gain === null ? 'var(--text-muted)' : gain >= 3 ? 'var(--low)' : gain > 0 ? 'var(--medium)' : 'var(--high)';
+    const stalledCount = typeof m.stalledCount === 'number' ? m.stalledCount : 0;
+    const stalledPct   = isNum(m.stalledPct) ? m.stalledPct : null;
+    return `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
+      <td style="padding:8px 10px;text-align:center;">${m.studentCount}</td>
+      <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">${gain !== null ? gain.toFixed(1) + '%' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;">${stalledCount}</td>
+      <td style="padding:8px 10px;text-align:center;color:${stalledPct !== null && stalledPct > 50 ? 'var(--high)' : stalledPct !== null && stalledPct > 25 ? 'var(--medium)' : 'var(--low)'};">${stalledPct !== null ? stalledPct.toFixed(0) + '%' : '—'}</td>
+    </tr>`;
+  }).join('');
+}
+// ─────────────────────────────────────────────────────────────
+// TABE TAB
+//──────────────────────────────────────────────────────────────
+
+function _renderTABEView() {
+  _renderTABEWeekly();
+  _renderTABEMonthly();
+}
+
+// ── Shared helpers ────────────────────────────────────────────
+function _tabeDate(str) {
+  if (!str) return null;
+  // Handle full Date string from Google Sheets
+  const d = new Date(str);
+  if (!isNaN(d.getTime())) return d;
+  // Handle M/D/YYYY
+  const p = str.split('/');
+  if (p.length !== 3) return null;
+  const d2 = new Date(parseInt(p[2]), parseInt(p[0]) - 1, parseInt(p[1]));
+  return isNaN(d2.getTime()) ? null : d2;
+}
+
+function _tabeMonthKey(str) {
+  if (!str) return null;
+  const d = _tabeDate(str);
+  if (!d) return null;
+  const monthNames = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  return monthNames[d.getMonth()] + ' ' + d.getFullYear();
+}
+
+function _tabeMonthSort(key) {
+  const months = ['Jan','Feb','Mar','Apr','May','Jun','Jul','Aug','Sep','Oct','Nov','Dec'];
+  const parts  = (key || '').split(' ');
+  if (parts.length !== 2) return 0;
+  return parseInt(parts[1]) * 100 + months.indexOf(parts[0]);
+}
+
+function _getTABEStudents() {
+  return (window._tabeProfiles || []).filter(p => p.tabe && (p.tabe.math || p.tabe.reading));
+}
+
+function _tabeGainCell(gain) {
+  if (gain === null || gain === undefined) return { html: '<span style="color:var(--text-muted);">—</span>', val: -999 };
+  const color = gain > 0 ? 'var(--low)' : gain < 0 ? 'var(--high)' : 'var(--text-muted)';
+  const arrow = gain > 0 ? '▲' : gain < 0 ? '▼' : '→';
+  return {
+    html: `<span style="font-weight:700;color:${color};">${arrow} ${gain > 0 ? '+' : ''}${gain}</span>`,
+    val: gain,
+  };
+}
+
+function _tabeEflCell(sub) {
+  if (!sub) return { html: '—', val: -1 };
+  const curr = sub.current.efl;
+  const prev = sub.previous ? sub.previous.efl : null;
+  if (curr === null) return { html: '—', val: -1 };
+  if (prev === null) return { html: String(curr), val: curr };
+  const diff  = curr - prev;
+  const color = diff > 0 ? 'var(--low)' : diff < 0 ? 'var(--high)' : 'var(--text-muted)';
+  const badge = diff !== 0
+    ? ` <span style="color:${color};font-size:11px;font-weight:700;">(${diff > 0 ? '+' : ''}${diff})</span>`
+    : '';
+  return { html: String(curr) + badge, val: curr };
+}
+
+function _wireTableSort(tableId) {
+  const table = document.getElementById(tableId);
+  if (!table) return;
+  const headers = table.querySelectorAll('th[data-sort]');
+  let sortCol = null;
+  let sortDir = 1;
+  headers.forEach(th => {
+    th.style.cursor = 'pointer';
+    th.addEventListener('click', () => {
+      const col = parseInt(th.getAttribute('data-sort'));
+      sortDir   = sortCol === col ? sortDir * -1 : 1;
+      sortCol   = col;
+      headers.forEach(h => {
+        h.textContent = h.textContent.replace(' ▲','').replace(' ▼','').replace(' ⇅','') + ' ⇅';
+        h.style.color = '';
+      });
+      th.textContent = th.textContent.replace(' ⇅', sortDir === 1 ? ' ▲' : ' ▼');
+      th.style.color = 'var(--accent-mid)';
+      const tbody = table.querySelector('tbody');
+      const rows  = [...tbody.querySelectorAll('tr')];
+      rows.sort((a, b) => {
+        const aVal = a.cells[col] ? (a.cells[col].getAttribute('data-val') || a.cells[col].textContent.trim()) : '';
+        const bVal = b.cells[col] ? (b.cells[col].getAttribute('data-val') || b.cells[col].textContent.trim()) : '';
+        const aNum = parseFloat(aVal);
+        const bNum = parseFloat(bVal);
+        if (!isNaN(aNum) && !isNaN(bNum)) return (aNum - bNum) * sortDir;
+        return aVal.localeCompare(bVal) * sortDir;
+      });
+      rows.forEach(r => tbody.appendChild(r));
+    });
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// WEEKLY VIEW
+// ─────────────────────────────────────────────────────────────
+function _renderTABEWeekly() {
+  const container = document.getElementById('tabeWeeklyBody');
+  if (!container) return;
+
+  const now     = new Date();
+  const cutoff7 = new Date(now.getTime() - 7  * 24 * 60 * 60 * 1000);
+  const cutoff30= new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+  const students = _getTABEStudents();
+
+  // Find most recent test date across all students to handle "no tests this week"
+  let mostRecentDate = null;
+  students.forEach(p => {
+    const t = p.tabe;
+    ['math','reading'].forEach(sub => {
+      if (!t[sub]) return;
+      const d = _tabeDate(t[sub].current.date);
+      if (d && (!mostRecentDate || d > mostRecentDate)) mostRecentDate = d;
+    });
+  });
+
+  // Use last 7 days, but if nothing tested then fall back to last 30 days
+  let cutoff    = cutoff7;
+  let periodLabel = 'Last 7 Days';
+  const testedRecently = students.some(p => {
+    const t = p.tabe;
+    return ['math','reading'].some(sub => {
+      if (!t[sub]) return false;
+      const d = _tabeDate(t[sub].current.date);
+      return d && d >= cutoff7;
+    });
+  });
+  if (!testedRecently) {
+    cutoff      = cutoff30;
+    periodLabel = 'Last 30 Days';
+  }
+
+  // Build tested list
+  const tested = [];
+  students.forEach(p => {
+    const t        = p.tabe;
+    const mathDate = t.math    ? _tabeDate(t.math.current.date)    : null;
+    const readDate = t.reading ? _tabeDate(t.reading.current.date) : null;
+    const mathRecent = mathDate && mathDate >= cutoff;
+    const readRecent = readDate && readDate >= cutoff;
+    if (!mathRecent && !readRecent) return;
+    tested.push({
+      name:    p.displayName,
+      id:      p.academicId || p.id || '',
+      math:    mathRecent ? t.math    : null,
+      reading: readRecent ? t.reading : null,
+    });
+  });
+
+  // Categorize
+  const gainers   = tested.filter(s =>
+    (s.math    && s.math.gain    !== null && s.math.gain    > 0) ||
+    (s.reading && s.reading.gain !== null && s.reading.gain > 0)
+  ).sort((a, b) => {
+    const aGain = Math.max(s => s, ...[
+      a.math    && a.math.gain    !== null ? a.math.gain    : -999,
+      a.reading && a.reading.gain !== null ? a.reading.gain : -999,
+    ]);
+    const bGain = Math.max(s => s, ...[
+      b.math    && b.math.gain    !== null ? b.math.gain    : -999,
+      b.reading && b.reading.gain !== null ? b.reading.gain : -999,
+    ]);
+    return bGain - aGain;
+  });
+
+  // Re-sort gainers by best gain descending
+  gainers.sort((a, b) => {
+    const aMax = Math.max(
+      a.math    && a.math.gain    !== null ? a.math.gain    : -999,
+      a.reading && a.reading.gain !== null ? a.reading.gain : -999
+    );
+    const bMax = Math.max(
+      b.math    && b.math.gain    !== null ? b.math.gain    : -999,
+      b.reading && b.reading.gain !== null ? b.reading.gain : -999
+    );
+    return bMax - aMax;
+  });
+
+  const noGain    = tested.filter(s =>
+    !(s.math    && s.math.gain    !== null && s.math.gain    > 0) &&
+    !(s.reading && s.reading.gain !== null && s.reading.gain > 0)
+  );
+
+  // Level-ups: EFL increased
+  const levelUps = tested.filter(s =>
+    (s.math    && s.math.previous    && s.math.current.efl    > s.math.previous.efl)    ||
+    (s.reading && s.reading.previous && s.reading.current.efl > s.reading.previous.efl)
+  );
+
+  // Summary numbers
+  const mathGainers  = tested.filter(s => s.math    && s.math.gain    !== null && s.math.gain    > 0);
+  const readGainers  = tested.filter(s => s.reading && s.reading.gain !== null && s.reading.gain > 0);
+  const mathGainVals = mathGainers.map(s => s.math.gain);
+  const readGainVals = readGainers.map(s => s.reading.gain);
+  const avgMG = mathGainVals.length ? (mathGainVals.reduce((a,b)=>a+b,0)/mathGainVals.length).toFixed(1) : null;
+  const avgRG = readGainVals.length ? (readGainVals.reduce((a,b)=>a+b,0)/readGainVals.length).toFixed(1) : null;
+  const topMathGain = mathGainVals.length ? Math.max(...mathGainVals) : null;
+  const topReadGain = readGainVals.length ? Math.max(...readGainVals) : null;
+
+  // ── HTML ──────────────────────────────────────────────────
+  let html = `
+    <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">
+      Period: ${periodLabel}
+      ${mostRecentDate ? `<span style="margin-left:12px;font-weight:400;">Most recent test: ${(mostRecentDate.getMonth()+1)}/${mostRecentDate.getDate()}/${mostRecentDate.getFullYear()}</span>` : ''}
+    </div>
+
+    <!-- Headline chips -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:12px;margin-bottom:24px;">
+      ${[
+        { label: 'Tested',          value: tested.length,                                         sub: 'this period' },
+        { label: 'Made Gains',      value: gainers.length,                                        sub: tested.length ? Math.round(gainers.length/tested.length*100)+'% of tested' : '—', color: gainers.length > 0 ? 'var(--low)' : null },
+        { label: 'Math Gainers',    value: mathGainers.length,                                    sub: avgMG !== null ? 'avg +'+avgMG+' pts' : '—', color: mathGainers.length > 0 ? 'var(--low)' : null },
+        { label: 'Read Gainers',    value: readGainers.length,                                    sub: avgRG !== null ? 'avg +'+avgRG+' pts' : '—', color: readGainers.length > 0 ? 'var(--low)' : null },
+        { label: 'EFL Level-Ups',   value: levelUps.length,                                       sub: 'crossed a level', color: levelUps.length > 0 ? 'var(--low)' : null },
+        { label: 'Top Math Gain',   value: topMathGain !== null ? '+'+topMathGain : '—',          sub: 'scale points', color: 'var(--low)' },
+        { label: 'Top Read Gain',   value: topReadGain !== null ? '+'+topReadGain : '—',          sub: 'scale points', color: 'var(--low)' },
+      ].map(c => `
+        <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:center;">
+          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">${c.label}</div>
+          <div style="font-size:26px;font-weight:800;line-height:1;${c.color ? 'color:'+c.color : 'color:var(--text)'};">${c.value}</div>
+          <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${c.sub}</div>
+        </div>`).join('')}
+    </div>`;
+
+  // ── Level-Up callouts ─────────────────────────────────────
+  if (levelUps.length) {
+    html += `
+    <div style="background:color-mix(in srgb, var(--low) 8%, transparent);border:1px solid color-mix(in srgb, var(--low) 25%, transparent);border-left:4px solid var(--low);border-radius:8px;padding:16px 18px;margin-bottom:24px;">
+      <div style="font-size:13px;font-weight:700;color:var(--low);margin-bottom:12px;display:flex;align-items:center;gap:6px;">
+        EFL Level-Ups This Period (${levelUps.length})
+      </div>
+      <div style="display:flex;flex-wrap:wrap;gap:10px;">
+        ${levelUps.map(s => {
+          const parts = [];
+          if (s.math && s.math.previous && s.math.current.efl > s.math.previous.efl) {
+            parts.push(`Math: EFL ${s.math.previous.efl} → ${s.math.current.efl}`);
+          }
+          if (s.reading && s.reading.previous && s.reading.current.efl > s.reading.previous.efl) {
+            parts.push(`Reading: EFL ${s.reading.previous.efl} → ${s.reading.current.efl}`);
+          }
+          return `<div style="background:var(--bg3);border:1px solid color-mix(in srgb, var(--low) 30%, transparent);border-radius:8px;padding:10px 14px;">
+            <div style="font-size:13px;font-weight:700;color:var(--text);">${esc(s.name)}</div>
+            <div style="font-size:11px;color:var(--low);margin-top:3px;">${parts.join(' · ')}</div>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>`;
+  }
+
+  // ── Gains table ───────────────────────────────────────────
+  if (gainers.length) {
+    html += `
+    <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px;">
+      Students Who Gained (${gainers.length})
+    </div>
+    <div style="overflow-x:auto;margin-bottom:20px;">
+      <table id="tabeWeeklyGainTable" style="width:100%;border-collapse:collapse;font-size:13px;">
+        <thead>
+          <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+            <th class="prod-th" style="text-align:left;padding:12px 14px;cursor:pointer;" data-sort="0">Student ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="1">Math Prev ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="2">Math Curr ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="3">Math Gain ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="4">Math EFL ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="5">Read Prev ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="6">Read Curr ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="7">Read Gain ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="8">Read EFL ⇅</th>
+            <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="9">Test Date ⇅</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${gainers.map(s => {
+            const m  = s.math;
+            const r  = s.reading;
+            const mg = _tabeGainCell(m ? m.gain : null);
+            const rg = _tabeGainCell(r ? r.gain : null);
+            const me = _tabeEflCell(m);
+            const re = _tabeEflCell(r);
+            const mprev = m && m.previous ? m.previous.scale : null;
+            const rprev = r && r.previous ? r.previous.scale : null;
+            const testDate = (m ? m.current.date : null) || (r ? r.current.date : null) || '—';
+            const isLevelUp = levelUps.some(lu => lu.name === s.name);
+            return `<tr style="border-bottom:1px solid var(--border);${isLevelUp ? 'background:color-mix(in srgb, var(--low) 4%, transparent);' : ''}">
+              <td style="padding:11px 14px;font-weight:600;color:var(--text);" data-val="${esc(s.name)}">
+                ${esc(s.name)}
+                ${isLevelUp ? `<span style="margin-left:6px;color:var(--low);display:inline-flex;vertical-align:middle;">${ICONS.trophy}</span>` : ''}
+                ${s.id ? `<div style="font-size:11px;color:var(--text-muted);font-weight:400;">ID: ${esc(s.id)}</div>` : ''}
+              </td>
+              <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${mprev ?? -1}">${mprev ?? '—'}</td>
+              <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${m ? m.current.scale : -1}">${m ? m.current.scale : '—'}</td>
+              <td style="padding:11px 10px;text-align:center;" data-val="${mg.val}">${mg.html}</td>
+              <td style="padding:11px 10px;text-align:center;" data-val="${me.val}">${me.html}</td>
+              <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${rprev ?? -1}">${rprev ?? '—'}</td>
+              <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${r ? r.current.scale : -1}">${r ? r.current.scale : '—'}</td>
+              <td style="padding:11px 10px;text-align:center;" data-val="${rg.val}">${rg.html}</td>
+              <td style="padding:11px 10px;text-align:center;" data-val="${re.val}">${re.html}</td>
+              <td style="padding:11px 10px;text-align:center;color:var(--text-muted);font-size:12px;" data-val="${esc(testDate)}">${esc(testDate)}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>`;
+  } else {
+    html += `<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px;font-style:italic;background:var(--bg3);border-radius:8px;margin-bottom:20px;">
+      No score gains recorded this period.
+    </div>`;
+  }
+
+  // ── No-gain / decrease toggle ─────────────────────────────
+  if (noGain.length) {
+    const toggleId = 'tabeNoGainSection';
+    html += `
+    <div>
+      <button onclick="const s=document.getElementById('${toggleId}');const open=s.style.display!=='none';s.style.display=open?'none':'block';this.textContent=open?'▸ Show students with no gain or decrease (${noGain.length})':'▾ Hide students with no gain or decrease';"
+        style="background:none;border:none;color:var(--text-muted);font-size:12px;font-weight:600;cursor:pointer;padding:6px 0;display:flex;align-items:center;gap:6px;">
+        ▸ Show students with no gain or decrease (${noGain.length})
+      </button>
+      <div id="${toggleId}" style="display:none;overflow-x:auto;margin-top:10px;">
+        <table id="tabeNoGainTable" style="width:100%;border-collapse:collapse;font-size:13px;">
+          <thead>
+            <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+              <th class="prod-th" style="text-align:left;padding:12px 14px;cursor:pointer;" data-sort="0">Student ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="1">Math Prev ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="2">Math Curr ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="3">Math Gain ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="4">Math EFL ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="5">Read Prev ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="6">Read Curr ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="7">Read Gain ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="8">Read EFL ⇅</th>
+              <th class="prod-th" style="padding:12px 10px;cursor:pointer;" data-sort="9">Test Date ⇅</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${noGain.map(s => {
+              const m  = s.math;
+              const r  = s.reading;
+              const mg = _tabeGainCell(m ? m.gain : null);
+              const rg = _tabeGainCell(r ? r.gain : null);
+              const me = _tabeEflCell(m);
+              const re = _tabeEflCell(r);
+              const mprev = m && m.previous ? m.previous.scale : null;
+              const rprev = r && r.previous ? r.previous.scale : null;
+              const testDate = (m ? m.current.date : null) || (r ? r.current.date : null) || '—';
+              return `<tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:11px 14px;font-weight:600;color:var(--text);" data-val="${esc(s.name)}">
+                  ${esc(s.name)}
+                  ${s.id ? `<div style="font-size:11px;color:var(--text-muted);font-weight:400;">ID: ${esc(s.id)}</div>` : ''}
+                </td>
+                <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${mprev ?? -1}">${mprev ?? '—'}</td>
+                <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${m ? m.current.scale : -1}">${m ? m.current.scale : '—'}</td>
+                <td style="padding:11px 10px;text-align:center;" data-val="${mg.val}">${mg.html}</td>
+                <td style="padding:11px 10px;text-align:center;" data-val="${me.val}">${me.html}</td>
+                <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${rprev ?? -1}">${rprev ?? '—'}</td>
+                <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${r ? r.current.scale : -1}">${r ? r.current.scale : '—'}</td>
+                <td style="padding:11px 10px;text-align:center;" data-val="${rg.val}">${rg.html}</td>
+                <td style="padding:11px 10px;text-align:center;" data-val="${re.val}">${re.html}</td>
+                <td style="padding:11px 10px;text-align:center;color:var(--text-muted);font-size:12px;" data-val="${esc(testDate)}">${esc(testDate)}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>
+    </div>`;
+  }
+  container.innerHTML = html;
+  _wireTableSort('tabeWeeklyGainTable');
+  _wireTableSort('tabeNoGainTable');
+}
+
+// ─────────────────────────────────────────────────────────────
+// MONTHLY VIEW
+// ─────────────────────────────────────────────────────────────
+function _renderTABEMonthly() {
+  const container = document.getElementById('tabeMonthlyBody');
+  if (!container) return;
+
+  const students = _getTABEStudents();
+  const monthMap = {};
+
+  students.forEach(p => {
+    const t = p.tabe;
+    function addToMonth(sub, subtype) {
+      if (!sub) return;
+      const key = _tabeMonthKey(sub.current.date);
+      if (!key) return;
+      if (!monthMap[key]) monthMap[key] = { students: {} };
+      if (!monthMap[key].students[p.displayName]) {
+        monthMap[key].students[p.displayName] = { name: p.displayName, id: p.academicId || p.id || '', math: null, reading: null };
+      }
+      monthMap[key].students[p.displayName][subtype] = sub;
+    }
+    addToMonth(t.math,    'math');
+    addToMonth(t.reading, 'reading');
+  });
+
+  const months = Object.keys(monthMap).sort((a, b) => _tabeMonthSort(b) - _tabeMonthSort(a));
+
+  if (!months.length) {
+    container.innerHTML = '<div style="padding:32px;text-align:center;color:var(--text-muted);font-size:13px;font-style:italic;">No TABE data available.</div>';
+    return;
+  }
+
+  // ── Cohort trend chart data ──────────────────────────────
+  const trendMonths     = [...months].reverse(); // oldest first for chart
+  const avgMathByMonth  = trendMonths.map(month => {
+    const entries = Object.values(monthMap[month].students);
+    const scores  = entries.filter(s => s.math).map(s => s.math.current.scale);
+    return scores.length ? +(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(0) : null;
+  });
+  const avgReadByMonth  = trendMonths.map(month => {
+    const entries = Object.values(monthMap[month].students);
+    const scores  = entries.filter(s => s.reading).map(s => s.reading.current.scale);
+    return scores.length ? +(scores.reduce((a,b)=>a+b,0)/scores.length).toFixed(0) : null;
+  });
+
+  let html = `
+    <div style="margin-bottom:28px;">
+      <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:12px;">
+        Cohort Average Scale Score by Month
+      </div>
+      <div style="position:relative;width:100%;height:200px;">
+        <canvas id="tabeTrendChart"></canvas>
+      </div>
+    </div>`;
+
+  // ── Month sections ────────────────────────────────────────
+  months.forEach((month, mIdx) => {
+    const entries   = Object.values(monthMap[month].students);
+    const gainers   = entries.filter(s =>
+      (s.math    && s.math.gain    !== null && s.math.gain    > 0) ||
+      (s.reading && s.reading.gain !== null && s.reading.gain > 0)
+    );
+    const levelUps  = entries.filter(s =>
+      (s.math    && s.math.previous    && s.math.current.efl    > s.math.previous.efl)    ||
+      (s.reading && s.reading.previous && s.reading.current.efl > s.reading.previous.efl)
+    );
+
+    const mathGains = entries.filter(s => s.math    && s.math.gain    !== null && s.math.gain    > 0).map(s => s.math.gain);
+    const readGains = entries.filter(s => s.reading && s.reading.gain !== null && s.reading.gain > 0).map(s => s.reading.gain);
+    const avgMG     = mathGains.length ? (mathGains.reduce((a,b)=>a+b,0)/mathGains.length).toFixed(1) : null;
+    const avgRG     = readGains.length ? (readGains.reduce((a,b)=>a+b,0)/readGains.length).toFixed(1) : null;
+
+    const bodyId = 'tabe-month-' + month.replace(/\s/g,'-');
+
+    html += `
+    <div style="margin-bottom:24px;border:1px solid var(--border);border-radius:10px;overflow:hidden;">
+
+      <!-- Month header -->
+      <div style="display:flex;align-items:center;justify-content:space-between;padding:14px 18px;background:var(--bg4);cursor:pointer;"
+           onclick="const b=document.getElementById('${bodyId}');const open=b.style.display!=='none';b.style.display=open?'none':'block';this.querySelector('.tabe-chev').textContent=open?'▸':'▾';">
+        <div style="display:flex;align-items:center;gap:14px;">
+          <div style="font-size:15px;font-weight:800;color:var(--accent-mid);">${esc(month)}</div>
+          <div style="font-size:12px;color:var(--text-muted);">${entries.length} tested</div>
+          ${gainers.length ? `<div style="font-size:12px;font-weight:700;color:var(--low);">✓ ${gainers.length} gained</div>` : ''}
+          ${levelUps.length ? `<div style="font-size:12px;font-weight:700;color:var(--low);display:flex;align-items:center;gap:4px;">${ICONS.trophy} ${levelUps.length} got gains</div>` : ''}
+        </div>
+        <div style="display:flex;align-items:center;gap:16px;font-size:12px;color:var(--text-muted);">
+          ${avgMG !== null ? `<span>Math avg gain: <strong style="color:var(--low);">+${avgMG}</strong></span>` : ''}
+          ${avgRG !== null ? `<span>Read avg gain: <strong style="color:var(--low);">+${avgRG}</strong></span>` : ''}
+          <span class="tabe-chev" style="font-size:13px;">${mIdx === 0 ? '▾' : '▸'}</span>
+        </div>
+      </div>
+
+      <!-- Month body -->
+      <div id="${bodyId}" style="display:${mIdx === 0 ? 'block' : 'none'};">
+
+        <!-- Level-ups for this month -->
+        ${levelUps.length ? `
+        <div style="padding:12px 18px;background:color-mix(in srgb, var(--low) 6%, transparent);border-bottom:1px solid var(--border);display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+          <span style="font-size:12px;font-weight:700;color:var(--low);margin-right:4px;display:flex;align-items:center;gap:4px;">${ICONS.trophy} Gains:</span>
+          ${levelUps.map(s => {
+            const parts = [];
+            if (s.math    && s.math.previous    && s.math.current.efl    > s.math.previous.efl)    parts.push(`Math ${s.math.previous.efl}→${s.math.current.efl}`);
+            if (s.reading && s.reading.previous && s.reading.current.efl > s.reading.previous.efl) parts.push(`Read ${s.reading.previous.efl}→${s.reading.current.efl}`);
+            return `<span style="background:var(--bg3);border:1px solid color-mix(in srgb, var(--low) 30%, transparent);border-radius:6px;padding:4px 10px;font-size:12px;color:var(--text);">
+              <strong>${esc(s.name)}</strong> <span style="color:var(--low);">${parts.join(' · ')}</span>
+            </span>`;
+          }).join('')}
+        </div>` : ''}
+
+        <!-- Full table -->
+        <div style="overflow-x:auto;padding:0 0 4px;">
+          <table id="tabe-month-table-${bodyId}" style="width:100%;border-collapse:collapse;font-size:13px;">
+            <thead>
+              <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+                <th class="prod-th" style="text-align:left;padding:11px 14px;cursor:pointer;" data-sort="0">Student ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="1">Math Prev ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="2">Math Curr ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="3">Math Gain ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="4">Math EFL ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="5">Read Prev ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="6">Read Curr ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="7">Read Gain ⇅</th>
+                <th class="prod-th" style="padding:11px 10px;cursor:pointer;" data-sort="8">Read EFL ⇅</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${entries.sort((a,b) => {
+                const ag = Math.max(a.math?.gain ?? -999, a.reading?.gain ?? -999);
+                const bg = Math.max(b.math?.gain ?? -999, b.reading?.gain ?? -999);
+                return bg - ag;
+              }).map(s => {
+                const m  = s.math;
+                const r  = s.reading;
+                const mg = _tabeGainCell(m ? m.gain : null);
+                const rg = _tabeGainCell(r ? r.gain : null);
+                const me = _tabeEflCell(m);
+                const re = _tabeEflCell(r);
+                const mprev = m && m.previous ? m.previous.scale : null;
+                const rprev = r && r.previous ? r.previous.scale : null;
+                const isLU  = levelUps.some(lu => lu.name === s.name);
+                return `<tr style="border-bottom:1px solid var(--border);${isLU ? 'background:color-mix(in srgb, var(--low) 4%, transparent);' : ''}">
+                  <td style="padding:11px 14px;font-weight:600;color:var(--text);" data-val="${esc(s.name)}">
+                    ${esc(s.name)} ${isLU ? `<span style="color:var(--low);display:inline-flex;vertical-align:middle;">${ICONS.trophy}</span>` : ''}
+                    ${s.id ? `<div style="font-size:11px;color:var(--text-muted);font-weight:400;">ID: ${esc(s.id)}</div>` : ''}
+                  </td>
+                  <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${mprev ?? -1}">${mprev ?? '—'}</td>
+                  <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${m ? m.current.scale : -1}">${m ? m.current.scale : '—'}</td>
+                  <td style="padding:11px 10px;text-align:center;" data-val="${mg.val}">${mg.html}</td>
+                  <td style="padding:11px 10px;text-align:center;" data-val="${me.val}">${me.html}</td>
+                  <td style="padding:11px 10px;text-align:center;color:var(--text-muted);" data-val="${rprev ?? -1}">${rprev ?? '—'}</td>
+                  <td style="padding:11px 10px;text-align:center;font-weight:700;" data-val="${r ? r.current.scale : -1}">${r ? r.current.scale : '—'}</td>
+                  <td style="padding:11px 10px;text-align:center;" data-val="${rg.val}">${rg.html}</td>
+                  <td style="padding:11px 10px;text-align:center;" data-val="${re.val}">${re.html}</td>
+                </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>
+      </div>
+    </div>`;
+  });
+
+  container.innerHTML = html;
+  months.forEach(month => {
+    const bodyId = 'tabe-month-' + month.replace(/\s/g,'-');
+    _wireTableSort('tabe-month-table-' + bodyId);
+  });
+
+  // ── Render trend chart ────────────────────────────────────
+  const ctx = document.getElementById('tabeTrendChart');
+  if (ctx && typeof Chart !== 'undefined') {
+    if (window._tabeTrendChart) { window._tabeTrendChart.destroy(); window._tabeTrendChart = null; }
+    const cc = _chartColors();
+    window._tabeTrendChart = new Chart(ctx.getContext('2d'), {
+      type: 'line',
+      data: {
+        labels: trendMonths,
+        datasets: [
+          {
+            label:           'Avg Math Score',
+            data:            avgMathByMonth,
+            borderColor:     _hexToRgba(cc.p.accentMid, 0.9),
+            backgroundColor: _hexToRgba(cc.p.accentMid, 0.1),
+            fill:            true,
+            tension:         0.35,
+            pointRadius:     5,
+            pointHoverRadius: 7,
+          },
+          {
+            label:           'Avg Reading Score',
+            data:            avgReadByMonth,
+            borderColor:     _hexToRgba(cc.p.accent, 0.9),
+            backgroundColor: _hexToRgba(cc.p.accent, 0.1),
+            fill:            true,
+            tension:         0.35,
+            pointRadius:     5,
+            pointHoverRadius: 7,
+          },
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        interaction: { mode: 'index', intersect: false },
+        plugins: {
+          legend: { labels: { color: cc.legend, font: { size: 11 } } },
+          tooltip: {
+            callbacks: {
+              label: ctx => ctx.dataset.label + ': ' + ctx.parsed.y + ' (scale 200–650)',
+            }
+          }
+        },
+        scales: {
+          x: {
+            ticks: { color: cc.axis, font: { size: 11 } },
+            grid:  { color: cc.grid },
+          },
+          y: {
+            min:   300,
+            max:   650,
+            ticks: { color: cc.axis, font: { size: 10 } },
+            grid:  { color: cc.grid },
+            title: { display: true, text: 'Avg Scale Score', color: _hexToRgba(cc.p.textMuted, 0.7), font: { size: 10 } },
+          }
+        }
+      }
+    });
+  }
+}
+let _gainsData = null;
+ 
+function _renderGainsView() {
+  if (_gainsData) {
+    _renderGainsLists(_gainsData);
+    return;
+  }
+
+  const skeleton = `<div style="display:flex;flex-direction:column;gap:8px;">
+    ${Array(4).fill(0).map(() => `<div class="skeleton-cell" style="height:48px;border-radius:8px;"></div>`).join('')}
+  </div>`;
+  document.getElementById('gainsReadingBody').innerHTML = skeleton;
+  document.getElementById('gainsMathBody').innerHTML = skeleton;
+  google.script.run
+    .withSuccessHandler(function(result) {
+      _gainsData = result;
+      _renderGainsLists(result);
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('gainsReadingBody').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);font-size:13px;">Failed to load: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
+      document.getElementById('gainsMathBody').innerHTML = '';
+    })
+    .getLatestTABEGainSnapshot();
+}
+ 
+function _renderGainsLists(data) {
+  const dateEl = document.getElementById('prodGainsSnapshotDate');
+  if (data.error || !data.snapshotDate) {
+    if (dateEl) dateEl.textContent = '';
+    const msg = '<div style="padding:24px;text-align:center;color:var(--text-muted);font-size:13px;font-style:italic;background:var(--bg3);border-radius:8px;">' +
+      esc(data.error || 'No predictions saved yet.') + '</div>';
+    document.getElementById('gainsReadingBody').innerHTML = msg;
+    document.getElementById('gainsMathBody').innerHTML = '';
+    return;
+  }
+  if (dateEl) dateEl.textContent = 'Last calculated: ' + esc(data.snapshotDate);
+  document.getElementById('gainsReadingBody').innerHTML = _buildGainsTable(data.reading, 'Reading');
+  document.getElementById('gainsMathBody').innerHTML    = _buildGainsTable(data.math, 'Math');
+}
+ 
+function _buildGainsTable(list, subject) {
+  if (!list || !list.length) {
+    return '<div style="padding:20px;text-align:center;color:var(--text-muted);font-size:12px;font-style:italic;background:var(--bg3);border-radius:8px;">No qualifying students this period.</div>';
+  }
+ 
+  const rows = list.map(s => {
+    const weeksLabel = s.predictedWeeks <= 1 ? '< 1 week'
+      : s.predictedWeeks < 2 ? '~1 week'
+      : '~' + Math.round(s.predictedWeeks) + ' weeks';
+    return `<div style="display:flex;align-items:center;gap:12px;padding:10px 12px;border-bottom:1px solid var(--border);">
+      <div style="font-size:16px;font-weight:800;color:var(--accent-mid);min-width:22px;text-align:center;">${s.rank}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:700;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${esc(s.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          Level ${s.currentLevel} (${s.currentScale}) → Level ${s.nextLevel} · needs +${s.pointsToNext} pts · ${s.weeklyRate} pts/wk
+        </div>
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:13px;font-weight:700;color:var(--low);">${weeksLabel}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">${s.testsOnFile} tests · ${s.spanWeeks}wk span</div>
+      </div>
+    </div>`;
+  }).join('');
+ 
+  return `<div style="background:var(--bg3);border:1px solid var(--border);border-radius:8px;overflow:hidden;">${rows}</div>`;
+}
+let _graduatesData = null;
+ 
+function _renderGraduatesView() {
+  if (_graduatesData) {
+    _renderGraduatesLists(_graduatesData);
+    return;
+  }
+  const skeleton = `<div style="display:flex;flex-direction:column;gap:10px;">
+    ${Array(3).fill(0).map(() => `<div class="skeleton-cell" style="height:84px;border-radius:8px;"></div>`).join('')}
+  </div>`;
+  document.getElementById('prodGraduatesBody').innerHTML = skeleton;
+  google.script.run
+    .withSuccessHandler(function(result) {
+      _graduatesData = result;
+      _renderGraduatesLists(result);
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('prodGraduatesBody').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);font-size:13px;">Failed to load: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
+    })
+    .getHSGraduationPredictions();
+}
+ 
+function _renderGraduatesLists(data) {
+  const dateEl = document.getElementById('prodGraduatesSnapshotDate');
+  const bodyEl = document.getElementById('prodGraduatesBody');
+  if (data.error) {
+    if (dateEl) dateEl.textContent = '';
+    bodyEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--high);font-size:13px;">' +
+      esc(data.error) + '</div>';
+    return;
+  }
+  if (dateEl) {
+    dateEl.textContent = 'Showing graduates for ' + esc(data.month) +
+      ' · ' + data.weeksLeft + ' weeks remaining · ' +
+      (data.graduates.length) + ' student' + (data.graduates.length !== 1 ? 's' : '');
+  }
+ 
+  if (!data.graduates || !data.graduates.length) {
+    bodyEl.innerHTML = '<div style="padding:32px;text-align:center;background:var(--bg3);' +
+      'border-radius:8px;color:var(--text-muted);font-size:13px;font-style:italic;">' +
+      'No HS students have a graduation date in the next two months.</div>';
+    return;
+  }
+ 
+  bodyEl.innerHTML = data.graduates.map(g => _buildGraduateCard(g)).join('');
+}
+
+function _buildGraduateCard(g) {
+  const LIKELIHOOD_COLOR = {
+    'On Track': 'var(--low)',
+    'At Risk':  'var(--medium)',
+    'Unlikely': 'var(--high)',
+  };
+  const LIKELIHOOD_BG = {
+    'On Track': 'color-mix(in srgb, var(--low) 12%, transparent)',
+    'At Risk':  'color-mix(in srgb, var(--medium) 12%, transparent)',
+    'Unlikely': 'color-mix(in srgb, var(--high) 12%, transparent)',
+  };
+  const color = LIKELIHOOD_COLOR[g.likelihood] || 'var(--text-muted)';
+  const bg    = LIKELIHOOD_BG[g.likelihood]    || 'var(--bg3)';
+  const barColor = g.score >= 70 ? 'var(--low)' : g.score >= 45 ? 'var(--medium)' : 'var(--high)';
+  const scoreBar = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+    <div style="flex:1;height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;">
+      <div style="height:100%;width:${g.score}%;background:${barColor};border-radius:3px;"></div>
+    </div>
+    <span style="font-size:11px;font-weight:700;color:${barColor};min-width:32px;">${g.score}/100</span>
+  </div>`;
+ 
+  const metrics = [];
+  if (g.creditsLeft !== null)    metrics.push('<span>' + g.creditsLeft + ' credit' + (g.creditsLeft !== 1 ? 's' : '') + ' left</span>');
+  if (g.remainingHours !== null) metrics.push('<span>' + g.remainingHours + 'h of coursework</span>');
+  if (g.weeklyAvgHours !== null) metrics.push('<span>' + g.weeklyAvgHours + 'h/wk avg</span>');
+  if (g.monthlyRate !== null)    metrics.push('<span>' + g.monthlyRate + ' credits/mo historical</span>');
+  if (g.academicPct !== null)    metrics.push('<span>' + g.academicPct + '% complete</span>');
+ 
+  const courseInfo = g.nextCourse
+    ? '<div style="font-size:11px;color:var(--text-muted);margin-top:4px;">Next: ' +
+      esc(g.nextCourse) +
+      (g.nextCourseTarget ? ' · Target ' + esc(g.nextCourseTarget) : '') +
+      '</div>'
+    : '';
+ 
+  const uid = 'grad-signals-' + g.id.replace(/\W/g, '');
+  const signalsList = g.notes && g.notes.length
+    ? `<div style="margin-top:10px;">
+        <button onclick="
+          const el=document.getElementById('${uid}');
+          const open=el.style.display!=='none';
+          el.style.display=open?'none':'block';
+          this.textContent=open?'▸ Show signals':'▾ Hide signals';
+        " style="background:none;border:none;cursor:pointer;font-size:11px;
+          font-weight:600;color:var(--text-muted);padding:0;">
+          ▸ Show signals
+        </button>
+        <div id="${uid}" style="display:none;margin-top:8px;">
+          ${g.notes.map(n => `<div style="font-size:11px;color:var(--text-muted);
+            padding:3px 0;border-bottom:1px solid var(--border);">· ${esc(n)}</div>`).join('')}
+        </div>
+      </div>`
+    : '';
+ 
+  return `<div style="
+    background:${bg};
+    border:1px solid var(--border);
+    border-left:3px solid ${color};
+    border-radius:8px;
+    padding:14px 16px;
+    margin-bottom:12px;
+  ">
+    <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:700;color:var(--text);">${esc(g.name)}</div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px;">
+          Graduation: ${esc(g.graduationDate)}
+          ${g.pace ? ' · Pace: ' + esc(g.pace) : ''}
+        </div>
+        ${courseInfo}
+      </div>
+      <div style="text-align:right;flex-shrink:0;">
+        <div style="font-size:13px;font-weight:800;color:${color};">${esc(g.likelihood)}</div>
+        <div style="font-size:10px;color:var(--text-muted);margin-top:1px;">
+          ${g.riskLevel === 'HIGH' ? `${_warnGlyph} High Risk` : g.riskLevel === 'MEDIUM' ? 'Watch Closely' : 'On Track overall'}
+        </div>
+      </div>
+    </div>
+ 
+    ${scoreBar}
+ 
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-top:10px;">
+      ${metrics.map(m => `<span style="font-size:11px;background:var(--bg3);
+        border:1px solid var(--border);border-radius:4px;padding:2px 8px;
+        color:var(--text-muted);">${m}</span>`).join('')}
+    </div>
+ 
+    ${signalsList}
+  </div>`;
+}
+function runSyncStudentCourseData() {
+  const btn    = document.getElementById('syncCourseDataBtn');
+  const status = document.getElementById('syncCourseDataStatus');
+  btn.disabled    = true;
+  btn.textContent = '↻ Syncing…';
+  status.textContent = 'Reading student course sheets — this may take 30–60 seconds…';
+  status.style.color = 'var(--text-muted)';
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled    = false;
+      btn.textContent = '↻ Sync Course Data';
+      if (result.error) {
+        status.textContent = '✕ ' + result.error;
+        status.style.color = 'var(--high)';
+        return;
+      }
+      status.textContent = '✓ Synced ' + result.synced + ' students in ' + result.elapsed + 's' +
+        (result.skipped ? ' · ' + result.skipped + ' skipped' : '');
+      status.style.color = 'var(--low)';
+      // Clear cached graduates data so the list reloads with fresh course data
+      _graduatesData = null;
+      _renderGraduatesView();
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled    = false;
+      btn.textContent = '↻ Sync Course Data';
+      status.textContent = '✕ Failed: ' + (err && err.message ? err.message : 'unknown error');
+      status.style.color = 'var(--high)';
+    })
+    .syncStudentCourseData();
+}
+function debugTABETab() {
+  console.log('_tabeProfiles length:', (window._tabeProfiles || []).length);
+  console.log('First profile:', JSON.stringify((window._tabeProfiles || [])[0] || null));
+  const students = _getTABEStudents();
+  console.log('_getTABEStudents() returned:', students.length);
+  console.log('tabeWeeklyBody exists:', !!document.getElementById('tabeWeeklyBody'));
+  console.log('tabeMonthlyBody exists:', !!document.getElementById('tabeMonthlyBody'));
+}
+</script>
