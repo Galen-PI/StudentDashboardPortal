@@ -30,7 +30,6 @@ const TRANSCRIPT_BLOCKS = [
 
 const TRANSCRIPT_SETTINGS_KEY = 'WEEKMAP';
 
-// Default settings for students with no existing configuration
 const SETTINGS_DEFAULTS = {
   weeklyHours: 10,
   activeWeeks: { w1: true, w2: true, w3: true, w4: true }
@@ -43,30 +42,21 @@ const SETTINGS_DEFAULTS = {
 
 function getStudentTranscript(studentId) {
   try {
-    // Step 1 — resolve student name from ID via Name Mapping
     const studentName = getStudentNameById_(studentId);
     if (!studentName) {
       return { success: false, error: 'Student not found in Name Mapping: ' + studentId };
     }
-
-    // Step 2 — open SS_ACADEMIC and find the student's tab
     const ss    = SpreadsheetApp.openById(SS_ACADEMIC);
     const sheet = ss.getSheetByName(studentName);
     if (!sheet) {
       return { success: false, error: 'No transcript sheet found for: ' + studentName };
     }
-
-    // Step 3 — read both blocks
     const courses = [];
     TRANSCRIPT_BLOCKS.forEach(block => {
       const rows = readTranscriptBlock_(sheet, block);
       rows.forEach(row => courses.push(row));
     });
-
-    // Step 4 — read student settings (flag-controlled source)
     const settings = getTranscriptSettings_(studentId, studentName);
-
-    // Step 5 — return structured payload
     return {
       success:     true,
       studentId:   studentId,
@@ -672,15 +662,6 @@ function logTranscriptWrite_(studentName, rowIndex, action, detail) {
 
 // ============================================================
 // SECTION 10 — TARGET DATE ENGINE (CLIENT-SIDE PORT)
-//
-// This is the pure JS version of calculateTargetDate() from
-// the Academic Tracker. Runs in the dashboard without any
-// sheet access. Takes course data and settings, returns a
-// date string or null.
-//
-// Identical logic to the Apps Script version — just no sheet
-// reads/writes. Used by the transcript tab UI to show live
-// target date previews before saving.
 // ============================================================
 
 function calculateTargetDateJS(courseHours, startDateStr, settings) {
@@ -828,4 +809,111 @@ function testSeedHubSettings() {
   Logger.log(`Students with existing settings: ${withSettings}`);
   Logger.log(`Students to be seeded with defaults: ${withoutSettings}`);
   Logger.log('Run seedHubSettings() to write to Name Mapping columns O-S.');
+}
+// ============================================================
+// AuditTranscriptCategories.gs — One-time punch list generator
+// ------------------------------------------------------------
+// Scans every student's transcript sheet in SS_ACADEMIC and
+// flags any completed/transfer course row where the Subject
+// column isn't an exact match to one of the 7 valid categories.
+// Those are exactly the rows that are silently falling into
+// Electives (uncapped) instead of their real category.
+//
+// Run auditTranscriptCategories() from the Apps Script editor.
+// It writes a report sheet called "Category Audit" into
+// SS_ACADEMIC with one row per problem course, so you can work
+// through them as a checklist instead of opening every student
+// one at a time to go hunting.
+// ============================================================
+
+const VALID_CATEGORIES_ = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
+
+function auditTranscriptCategories() {
+  const ss = SpreadsheetApp.openById(SS_ACADEMIC);
+  const sheets = ss.getSheets();
+
+  const problems = [];
+  let studentsScanned = 0;
+  let rowsScanned = 0;
+
+  sheets.forEach(sheet => {
+    const name = sheet.getName();
+    // Skip known non-student sheets
+    if (name === 'Course Catalogue' || name === 'Transcript Log' || name.toLowerCase().includes('hours')) return;
+
+    let hasTranscriptShape = false;
+
+    TRANSCRIPT_BLOCKS.forEach(block => {
+      const numRows = block.end - block.start + 1;
+      let data;
+      try {
+        data = sheet.getRange(block.start, 1, numRows, 12).getValues();
+      } catch (e) {
+        return; // sheet too small / not a transcript — skip this block
+      }
+
+      data.forEach((row, i) => {
+        const courseName = String(row[2] || '').trim();  // col C
+        if (!courseName) return; // empty row, skip
+
+        hasTranscriptShape = true;
+        rowsScanned++;
+
+        const courseId  = String(row[1]  || '').trim();  // col B
+        const transfer  = row[4]  === true;               // col E
+        const subject   = String(row[5]  || '').trim();  // col F
+        const credit    = Number(row[6]) || 0;            // col G
+        const completed = row[11] === true;               // col L
+
+        // Only rows that actually contribute credit (completed or transfer)
+        // are the ones affected by the Electives-dumping bug — in-progress
+        // courses don't get counted yet, so skip them here.
+        if (!completed && !transfer) return;
+
+        const isValidCategory = VALID_CATEGORIES_.includes(subject);
+        if (isValidCategory) return; // this one's fine
+
+        problems.push([
+          name,                       // Student sheet name
+          block.start + i,            // Row number in that sheet
+          block.year,                 // Year 1 or 2
+          courseName,
+          courseId || '(blank)',
+          subject || '(blank)',
+          credit,
+          transfer ? 'Transfer' : 'Completed',
+        ]);
+      });
+    });
+
+    if (hasTranscriptShape) studentsScanned++;
+  });
+
+  // ── Write report sheet ──────────────────────────────────────
+  let report = ss.getSheetByName('Category Audit');
+  if (report) report.clear();
+  else report = ss.insertSheet('Category Audit');
+
+  const headers = ['Student Sheet', 'Row #', 'Year', 'Course Name', 'Course ID', 'Current Subject/Category', 'Credit', 'Status'];
+  report.getRange(1, 1, 1, headers.length).setValues([headers]);
+  report.getRange(1, 1, 1, headers.length)
+    .setFontWeight('bold')
+    .setBackground('#1f2937')
+    .setFontColor('#ffffff');
+  report.setFrozenRows(1);
+
+  if (problems.length) {
+    report.getRange(2, 1, problems.length, headers.length).setValues(problems);
+    report.autoResizeColumns(1, headers.length);
+  }
+
+  const summary = `Scanned ${studentsScanned} students, ${rowsScanned} course rows. Found ${problems.length} row(s) with an invalid category needing a manual fix.`;
+  Logger.log(summary);
+
+  const ui = SpreadsheetApp.getUi ? SpreadsheetApp.getUi() : null;
+  if (ui) {
+    try { ui.alert(summary + '\n\nSee the "Category Audit" sheet for the full list.'); } catch (e) { /* non-fatal */ }
+  }
+
+  return { studentsScanned, rowsScanned, problemsFound: problems.length };
 }
