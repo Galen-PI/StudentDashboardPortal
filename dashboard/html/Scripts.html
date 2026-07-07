@@ -14,10 +14,6 @@ let _hsMonthlyByStudent = {};
 let _hsMonthlyCohort    = [];
 let _tradeMonthlyCohort = [];
 
-// Small reusable warning glyph — same path as ICONS.alertTri, sized for
-// inline use in status text. Uses currentColor so it inherits whatever
-// color the surrounding span is set to, instead of relying on an emoji
-// glyph that renders differently (and in color) across platforms.
 const _warnGlyph = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px;vertical-align:-1px;display:inline-block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>';
 
 // ── Session state ────────────────────────────────────────────
@@ -25,11 +21,7 @@ let _currentRole       = SERVER_ROLE       || '';
 let _currentName       = SERVER_NAME       || '';
 let _currentEmployeeId = SERVER_EMPLOYEE_ID || '';
 
-// ────────────────────────────────────────────────────────────
-// Themed confirm / prompt / toast — replaces native alert()/confirm()/
-// prompt() so error and confirmation states stay inside the app's own
-// theme instead of dropping into an unstyled browser dialog.
-// ────────────────────────────────────────────────────────────
+
 function _ensureThemedDialogEl() {
   if (document.getElementById('themedDialog')) return;
   const el = document.createElement('div');
@@ -521,12 +513,11 @@ function _getFilteredSorted() {
   return filtered;
 }
 // ── COUNSELOR FILTER ─────────────────────────────────────────
-// Loaded once on dashboard init, persisted to localStorage so
-// the selection survives page refreshes.
+
  
 const COUNSELOR_STORAGE_KEY = 'tjc_counselor_filter';
-let _counselorList = []; // full list from Staff Roles
-let _activeCounselorTrades = null; // Set of trade names, or null = all
+let _counselorList = []; 
+let _activeCounselorTrades = null; 
  
 function initCounselorFilter() {
   google.script.run
@@ -544,7 +535,6 @@ function initCounselorFilter() {
         sel.appendChild(opt);
       });
  
-      // Restore saved selection
       const saved = localStorage.getItem(COUNSELOR_STORAGE_KEY);
       if (saved) {
         sel.value = saved;
@@ -574,7 +564,6 @@ function _applySelectedCounselor(name) {
 
   _activeCounselorTrades = new Set(counselor.trades.map(t => t.toLowerCase()));
 
-  // Update UI chrome
   document.getElementById('counselorClearBtn').style.display = '';
   document.getElementById('counselorFilterLabel').textContent =
     'Showing: ' + counselor.trades.join(', ');
@@ -592,7 +581,7 @@ function clearCounselorFilter() {
 }
 
 function _counselorMatchesTrade(trade) {
-  if (!_activeCounselorTrades) return true; // no filter active — show all
+  if (!_activeCounselorTrades) return true;
   return _activeCounselorTrades.has(String(trade || '').toLowerCase());
 }
 // ─────────────────────────────────────────────────────────────
@@ -783,6 +772,8 @@ function _buildStudentDisplay(p) {
 function openModal(id) {
   const p = allProfiles.find(x => x.id === id);
   if (!p) return;
+  
+  _resetTranscriptStateIfNewStudent(p);
 
   try {
     currentModalProfile = p;
@@ -801,8 +792,6 @@ function openModal(id) {
     document.getElementById('modalBody').innerHTML   = buildModalBody(p);
     document.getElementById('detailModal').classList.remove('hidden');
   } catch(err) {
-    // Log the real detail to the console for debugging, but keep the
-    // person's screen calm — a toast, not a debug dump in a blank tab.
     console.error('Error opening modal for', p.displayName, err);
     showToast('Could not open details for ' + p.displayName + ' — try refreshing the page.', 'error');
   }
@@ -960,10 +949,7 @@ function buildModalBody(p) {
   right += buildHSMonthlySection(p);
   right += buildTradeMonthlySection(p);
 
-  return `<div class="modal-columns">
-    <div class="modal-col">${left}</div>
-    <div class="modal-col">${right}</div>
-  </div>`;
+  return _buildModalBodyReturn(left, right);
 }
 
 function buildInterventionSection(iv) {
@@ -986,8 +972,6 @@ function buildInterventionSection(iv) {
     const g = iv.gradGap.trim();
     const isOver   = g.includes('over limit') || g.startsWith('⛔');
     const isYellow = g.startsWith('🟡');
-    // Derived from the same theme tokens as everywhere else, instead of
-    // a hand-picked rgba snapshot that only matched the dark theme.
     const bgColor  = isOver ? 'var(--high-glow)' : isYellow ? 'var(--medium-glow)' : 'var(--accent-glow)';
     const txtColor = isOver ? 'var(--high)' : isYellow ? 'var(--medium)' : 'var(--low)';
     html += `<div style="background:${bgColor};border-radius:6px;padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;">
@@ -1558,7 +1542,6 @@ function confirmScheduleUpload() {
             <button class="btn-override" onclick="closeScheduleUpload()" style="max-width:160px;">Close</button>
           </div>`;
         status.className = 'schedule-status';
-        // Don't auto-close so staff can read the skipped list
       } else {
         status.textContent = `✓ Saved ${result.studentCount} student${result.studentCount !== 1 ? 's' : ''} for ${result.weekLabel}`;
         status.className   = 'schedule-status ok';
@@ -2311,7 +2294,6 @@ function applyPreset(value) {
 let _staleOnlyActive = false;
 
 const _originalGetFilteredSorted = _getFilteredSorted;
-// Override to inject stale filtering
 function _getFilteredSorted() {
   let results = allProfiles.filter(p => {
     if (activeRisk !== 'ALL' && p.risk.level !== activeRisk) return false;
@@ -2406,7 +2388,6 @@ function _wirePresetSelectListener() {
   });
 }
 
-// Also clear stale filter when chips are clicked manually
 const _origSetRiskFilter = setRiskFilter;
 setRiskFilter = function(el) { _staleOnlyActive = false; _origSetRiskFilter(el); };
 const _origSetTypeFilter = setTypeFilter;
@@ -2605,10 +2586,317 @@ function buildRiskSparkline(p) {
   </div>`;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Print student detail
-// ─────────────────────────────────────────────────────────────
-function printStudentDetail() { window.print(); }
+
+// ============================================================
+// PRINT DOCUMENT BUILDERS
+// ============================================================
+
+function _escP(str) { return esc(str); }
+
+function _docId(studentId, kind) {
+  const now = new Date();
+  const stamp = now.getFullYear() +
+    String(now.getMonth() + 1).padStart(2, '0') +
+    String(now.getDate()).padStart(2, '0');
+  return `DOC ${studentId || 'UNK'}-${kind}-${stamp}`;
+}
+
+function _fmtGeneratedStamp() {
+  const now = new Date();
+  const date = (now.getMonth() + 1) + '/' + now.getDate() + '/' + now.getFullYear();
+  const time = now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return `Generated ${date} \u00B7 ${time}`;
+}
+
+function _printMasthead(p, reportType, docKind) {
+  const tags = [];
+  if (p.academicId) tags.push('Academic ID ' + p.academicId);
+  if (p.tradesId && p.tradesId !== p.academicId) tags.push('Trades ID ' + p.tradesId);
+  if (p.academic && p.academic.type) tags.push(p.academic.type);
+  if (p.hsComplete) tags.push('HS Complete');
+  if (p.tradeComplete) tags.push('Trade Complete');
+
+  return `
+    <div class="masthead">
+      <div class="masthead-top">
+        <span class="masthead-org">Tulsa Job Corps Center &nbsp;&middot;&nbsp; U.S. Department of Labor / Employment and Training Administration</span>
+        <span class="masthead-doc-id">${_escP(_docId(p.academicId || p.id, docKind))}</span>
+      </div>
+      <div class="masthead-body">
+        <div>
+          <div class="masthead-name">${_escP(p.displayName)}</div>
+          <div class="masthead-tags">${tags.map(t => `<span>${_escP(t)}</span>`).join('')}</div>
+        </div>
+        <div class="masthead-right">
+          <div class="report-type">${_escP(reportType)}</div>
+          <div>${_fmtGeneratedStamp()}</div>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _printFooter() {
+  return `
+    <div class="doc-footer">
+      <span>Tulsa Job Corps Center &middot; Student Progress Dashboard</span>
+      <span>For internal staff use only &middot; Not for external distribution</span>
+    </div>`;
+}
+
+function _dlRow(label, value) {
+  return `<div class="dl-row"><span class="dl-label">${_escP(label)}</span><span class="dl-value">${_escP(value ?? '\u2014')}</span></div>`;
+}
+
+// ── Build the Overview print document ─────────────────────────
+function _buildPrintOverviewDoc(p) {
+  let html = _printMasthead(p, 'Student Overview Record', 'OV');
+
+  if (p.academic) {
+    const a = p.academic;
+    const thisWk = a.thisWeekHours === 'NWH' ? 'In trades this week'
+                 : a.thisWeekHours !== null ? num(a.thisWeekHours) + ' h' : '\u2014';
+    const targetStatus = TargetDateEngine && a.targetDate
+      ? (new Date(a.targetDate) < new Date() ? ' (overdue)' : '')
+      : '';
+    html += `
+      <div class="section">
+        <div class="section-title"><span>Academic</span></div>
+        <div class="section-body">
+          <div class="dl-grid">
+            ${_dlRow('Type', a.type)}
+            ${_dlRow('Progress', a.percent != null ? a.percent + '%' : null)}
+            ${_dlRow('Total hours', num(a.hours) + ' h')}
+            ${_dlRow('Start date', a.start)}
+            ${_dlRow('Graduation date', a.graduation)}
+            ${_dlRow('Days to graduation', a.daysToGrad != null ? a.daysToGrad + ' days' : null)}
+            ${_dlRow('Credits remaining', a.credits)}
+            ${_dlRow('Next milestone', a.nextMilestone)}
+            ${_dlRow('Target date', a.targetDate ? a.targetDate + targetStatus : null)}
+            ${_dlRow('This week', thisWk)}
+            ${_dlRow('Last week hours', a.lastWeekHours != null ? num(a.lastWeekHours) + ' h' : null)}
+            ${_dlRow('This week credits', num(a.thisWeekCredits))}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  if (p.trades && p.trades.length) {
+    html += `<div class="section"><div class="section-title"><span>Trades</span></div><div class="section-body">`;
+    p.trades.forEach(t => {
+      html += `<div style="font-weight:700;font-size:9.5px;margin-bottom:3px;">${_escP(t.tarName)}</div>
+        <div class="dl-grid" style="margin-bottom:6px;">
+          ${_dlRow('Status', t.status)}
+          ${_dlRow('Overall %', pct(t.overallPct))}
+          ${_dlRow('Pace gap', pct(t.paceGap))}
+          ${_dlRow('Days to ETAR', t.daysToETAR != null ? t.daysToETAR + ' days' : null)}
+        </div>`;
+    });
+    html += `</div></div>`;
+  } else if (p.tradeComplete && p.completedTrades && p.completedTrades.length) {
+    html += `<div class="section"><div class="section-title"><span>Trades</span></div><div class="section-body">
+      ${p.completedTrades.map(n => `<div style="font-size:9.5px;">${_escP(n)} \u2014 Trade Complete</div>`).join('')}
+    </div></div>`;
+  }
+
+  if (p.intervention) {
+    const iv = p.intervention;
+    const metaParts = [];
+    if (iv.gradGap) metaParts.push('Grad window: ' + iv.gradGap.trim());
+    if (iv.adminPriority) metaParts.push('Admin priority: ' + iv.adminPriority);
+    if (iv.urgency) metaParts.push('Urgency: ' + iv.urgency);
+    html += `
+      <div class="section">
+        <div class="section-title"><span>Weekly Check-In Report</span><span class="st-count">${_escP(iv.weekLabel || '')}</span></div>
+        <div class="section-body">
+          ${metaParts.length || iv.reason ? `<div class="callout">
+            ${metaParts.length ? `<div class="callout-label">${_escP(metaParts.join(' \u00B7 '))}</div>` : ''}
+            ${iv.reason ? _escP(iv.reason) : ''}
+          </div>` : ''}
+          <div class="dl-grid">
+            ${_dlRow('Progress', pctStr(iv.percent))}
+            ${_dlRow('This week', iv.thisWeekHours)}
+            ${_dlRow('Credits', iv.credits)}
+            ${_dlRow('Course days', iv.courseDaysLeft)}
+            ${_dlRow('Trajectory', iv.trajectory)}
+          </div>
+        </div>
+      </div>`;
+  }
+
+  // Schedule + TABE side by side, built synchronously from cached
+  let scheduleHtml = '';
+  const scheduleContainer = document.getElementById('schedule-' + String(p.academicId || p.id || '').replace(/\W/g, ''));
+  if (scheduleContainer && scheduleContainer.dataset.printRows) {
+    scheduleHtml = scheduleContainer.dataset.printRows;
+  }
+
+  let tabeHtml = '';
+  if (p.tabe && (p.tabe.math || p.tabe.reading)) {
+    const rows = [];
+    if (p.tabe.math) rows.push(['Mathematics', p.tabe.math]);
+    if (p.tabe.reading) rows.push(['Reading', p.tabe.reading]);
+    tabeHtml = `
+      <div class="section">
+        <div class="section-title"><span>TABE Scores</span></div>
+        <table class="doc-table">
+          <thead><tr><th>Subject</th><th>Prev</th><th>Curr</th><th>Gain</th></tr></thead>
+          <tbody>
+            ${rows.map(([label, sub]) => `<tr>
+              <td>${_escP(label)}</td>
+              <td>${sub.previous ? sub.previous.scale : '\u2014'}</td>
+              <td>${sub.current ? sub.current.scale : '\u2014'}</td>
+              <td>${sub.gain != null ? (sub.gain > 0 ? '+' : '') + sub.gain : '\u2014'}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  if (scheduleHtml || tabeHtml) {
+    html += `<div class="two-col">${scheduleHtml}${tabeHtml}</div>`;
+  }
+
+  if (p.academicId && _hsMonthlyByStudent[p.academicId] && _hsMonthlyByStudent[p.academicId].months.length) {
+    const months = _hsMonthlyByStudent[p.academicId].months;
+    html += `
+      <div class="section">
+        <div class="section-title"><span>Academic Progress Over Time</span></div>
+        <table class="doc-table">
+          <thead><tr><th>Month</th><th>Start credits</th><th>End credits</th><th>Reduced</th><th>Status</th></tr></thead>
+          <tbody>
+            ${months.map(m => `<tr>
+              <td>${_escP(m.month)}</td>
+              <td>${m.startCredits ?? '\u2014'}</td>
+              <td>${m.inProgress ? 'Pending' : (m.endCredits ?? '\u2014')}</td>
+              <td>${m.inProgress ? '\u2014' : (m.creditsGained != null ? (m.creditsGained > 0 ? '-' : '') + Math.abs(m.creditsGained) : '\u2014')}</td>
+              <td>${m.inProgress ? 'In progress' : (m.creditsGained > 0 ? 'Progress' : m.creditsGained === 0 ? 'No change' : 'Credits added')}</td>
+            </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }
+
+  html += _printFooter();
+  return html;
+}
+
+// ── Build the Transcript print document ───────────────────────
+function _buildPrintTranscriptDoc(p, transcriptData) {
+  let html = _printMasthead(p, 'Academic Transcript', 'TR');
+
+  const courses = (transcriptData && transcriptData.courses) || [];
+  const credits = TargetDateEngine.calculateCredits(courses, _getCourseIdCategoryMap());
+  const totalEarned = credits.reduce((s, c) => s + c.earned, 0);
+  const totalMax    = credits.reduce((s, c) => s + c.max, 0);
+  const totalRemaining = Math.max(totalMax - totalEarned, 0);
+  const completedCount = courses.filter(c => c.completed).length;
+  const inProgress     = courses.filter(c => !c.completed && !c.transfer).length;
+
+  html += `
+    <div class="summary-strip">
+      <div class="summary-cell"><div class="sc-label">Credits Earned</div><div class="sc-value">${totalEarned.toFixed(1)}</div></div>
+      <div class="summary-cell"><div class="sc-label">Credits Remaining</div><div class="sc-value">${totalRemaining.toFixed(1)}</div></div>
+      <div class="summary-cell"><div class="sc-label">Completed</div><div class="sc-value">${completedCount}</div></div>
+      <div class="summary-cell"><div class="sc-label">In Progress</div><div class="sc-value">${inProgress}</div></div>
+    </div>
+
+    <div class="credit-bars">
+      <div class="credit-bars-title">Credits by Category</div>
+      ${credits.map(c => {
+        const pctFill = c.max > 0 ? Math.min((c.earned / c.max) * 100, 100) : 0;
+        return `<div class="credit-row">
+          <span class="credit-label">${_escP(c.category)}</span>
+          <div class="credit-track"><div class="credit-fill" style="width:${pctFill}%;"></div></div>
+          <span class="credit-num">${c.earned.toFixed(1)} / ${c.max}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  [1, 2].forEach(blockNum => {
+    const blockCourses = courses.filter(c => c.block === blockNum);
+    if (!blockCourses.length) return;
+    html += `
+      <div class="section">
+        <div class="section-title"><span>Year ${blockNum}</span><span class="st-count">${blockCourses.length} course${blockCourses.length !== 1 ? 's' : ''}</span></div>
+        <table class="doc-table">
+          <thead><tr><th>Course</th><th>Subject</th><th>Credit</th><th>Hours</th><th>Start</th><th>Target date</th><th>Status</th></tr></thead>
+          <tbody>
+            ${blockCourses.map(c => {
+              const status = TargetDateEngine.getStatus(c.targetDate, c.completed, c.transfer);
+              const statusLabel = { overdue: 'Overdue', 'on-track': 'On track', completed: 'Completed', transfer: 'Transfer', 'no-date': '\u2014' }[status] || status;
+              const statusCls = { overdue: 'status-overdue', 'on-track': 'status-ontrack', completed: 'status-complete' }[status] || '';
+              return `<tr>
+                <td>${_escP(c.courseName)}</td>
+                <td>${_escP(c.subject || '\u2014')}</td>
+                <td>${c.credit || 0}</td>
+                <td>${c.classHours || 0}</td>
+                <td>${_escP(c.adjStart || c.startDate || '\u2014')}</td>
+                <td>${c.completed ? '\u2014' : _escP(c.targetDate || '\u2014')}</td>
+                <td class="status-tag ${statusCls}">${statusLabel}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  });
+
+  html += _printFooter();
+  return html;
+}
+
+// ── Print orchestration ─────────────────────────────────────────
+function _ensurePrintDocEl() {
+  let el = document.getElementById('printDoc');
+  if (!el) {
+    el = document.createElement('div');
+    el.id = 'printDoc';
+    document.body.appendChild(el);
+  }
+  return el;
+}
+
+function printOverview() {
+  if (!currentModalProfile) return;
+  const el = _ensurePrintDocEl();
+  el.innerHTML = _buildPrintOverviewDoc(currentModalProfile);
+  window.print();
+}
+
+function printTranscript() {
+  if (!currentModalProfile || !currentModalProfile.academicId) {
+    showToast('No academic ID on file for this student \u2014 nothing to print.', 'error');
+    return;
+  }
+
+  const alreadyLoaded = _transcriptData && _transcriptStudentId === currentModalProfile.academicId;
+  if (alreadyLoaded) {
+    const el = _ensurePrintDocEl();
+    el.innerHTML = _buildPrintTranscriptDoc(currentModalProfile, _transcriptData);
+    window.print();
+    return;
+  }
+
+  showToast('Loading transcript\u2026');
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        showToast((result && result.error) || 'Could not load transcript for printing.', 'error');
+        return;
+      }
+      const el = _ensurePrintDocEl();
+      el.innerHTML = _buildPrintTranscriptDoc(currentModalProfile, result);
+      window.print();
+    })
+    .withFailureHandler(function(err) {
+      showToast((err && err.message) || 'Failed to load transcript.', 'error');
+    })
+    .getStudentTranscript(currentModalProfile.academicId);
+}
+
+window.addEventListener('afterprint', function() {
+  const el = document.getElementById('printDoc');
+  if (el) el.innerHTML = '';
+});
 
 // ─────────────────────────────────────────────────────────────
 // Role-based presets
@@ -2810,6 +3098,26 @@ function buildScheduleSection(p) {
 
       html += '</div>';
       container.innerHTML = html;
+
+      try {
+        const printRows = (result.todaySchedule && Object.keys(result.todaySchedule).length)
+          ? `<div class="section">
+               <div class="section-title"><span>Schedule</span><span class="st-count">${esc(result.weekLabel || '')}</span></div>
+               <table class="doc-table">
+                 <thead><tr><th>Period</th><th>Class</th></tr></thead>
+                 <tbody>
+                   ${Object.keys(result.todaySchedule)
+                     .sort((a,b) => (parseInt(a.replace('Period ',''))||0) - (parseInt(b.replace('Period ',''))||0))
+                     .map(period => {
+                       const entry = result.todaySchedule[period];
+                       return `<tr><td>${esc(period.replace('Period ',''))}</td><td>${esc(entry.class || '\u2014')}</td></tr>`;
+                     }).join('')}
+                 </tbody>
+               </table>
+             </div>`
+          : '';
+        container.dataset.printRows = printRows;
+      } catch (e) { /* non-fatal — print will just omit the schedule section */ }
     })
     .withFailureHandler(function() {
       const container = document.getElementById(uid);
@@ -2817,8 +3125,6 @@ function buildScheduleSection(p) {
     })
     .getStudentSchedule(studentId);
 
-  // Skeleton placeholder while the async call above is pending, so the
-  // section doesn't flash an empty "no schedule" state on every open.
   return `<div id="${uid}">
     <div class="info-section">
       <h3>${ICONS.calendar} Schedule</h3>
@@ -2828,8 +3134,8 @@ function buildScheduleSection(p) {
     </div>
   </div>`;
 }
+  
 // ── buildTABESection ──────────────────────────────────────
-// Renders the TABE scores section in the student detail modal.
 function buildTABESection(p) {
   if (!p.tabe || (!p.tabe.math && !p.tabe.reading)) return '';
  
@@ -2926,5 +3232,783 @@ function _fmtLastUpdated(isoStr) {
     if (isNaN(d.getTime())) return '';
     return 'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   } catch(e) { return ''; }
+}
+
+let _transcriptData     = null;   // last-loaded payload from getStudentTranscript
+let _transcriptStudentId = null;  // which student it belongs to, so we know to reload on switch
+let _transcriptSettings  = null;  // { weeklyHours, activeWeeks }
+let _transcriptEditingRow = null; // rowIndex currently expanded for edit, or 'new-1'/'new-2' for add-row
+ 
+// ── Tab switching ──────────────────────────────────────────────
+function _resetTranscriptStateIfNewStudent(p) {
+  if (_transcriptStudentId !== p.academicId) {
+    _transcriptData      = null;
+    _transcriptSettings  = null;
+    _transcriptEditingRow = null;
+    _transcriptStudentId = p.academicId || null;
+  }
+  const modalBox = document.querySelector('#detailModal .modal-box');
+  if (modalBox) modalBox.classList.remove('tr-wide');
+}
+
+function switchModalTab(tab) {
+  const overviewBtn    = document.getElementById('modalTabOverview');
+  const transcriptBtn  = document.getElementById('modalTabTranscript');
+  const overviewView   = document.getElementById('modalOverviewView');
+  const transcriptView = document.getElementById('modalTranscriptView');
+  if (!overviewBtn || !transcriptBtn || !overviewView || !transcriptView) return;
+ 
+  overviewBtn.classList.toggle('active',   tab === 'overview');
+  transcriptBtn.classList.toggle('active', tab === 'transcript');
+  overviewView.classList.toggle('hidden',   tab !== 'overview');
+  transcriptView.classList.toggle('hidden', tab !== 'transcript');
+ 
+  const modalBox = document.querySelector('#detailModal .modal-box');
+  if (modalBox) modalBox.classList.toggle('tr-wide', tab === 'transcript');
+ 
+  if (tab === 'transcript') {
+    _loadTranscriptTab();
+  }
+}
+ 
+
+function _buildModalBodyReturn(left, right) {
+  return `
+    <div class="modal-tab-bar">
+      <button id="modalTabOverview" class="modal-tab active" onclick="switchModalTab('overview')">Overview</button>
+      <button id="modalTabTranscript" class="modal-tab" onclick="switchModalTab('transcript')">Academic Transcript</button>
+    </div>
+ 
+    <div id="modalOverviewView">
+      <div class="modal-columns">
+        <div class="modal-col">${left}</div>
+        <div class="modal-col">${right}</div>
+      </div>
+    </div>
+ 
+    <div id="modalTranscriptView" class="hidden">
+      <div id="transcriptLoading" style="padding:20px;">
+        <div style="display:flex;flex-direction:column;gap:12px;">
+          <div class="skeleton-cell wide" style="height:14px;"></div>
+          <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;">
+            <div class="skeleton-cell" style="height:60px;border-radius:8px;"></div>
+            <div class="skeleton-cell" style="height:60px;border-radius:8px;"></div>
+            <div class="skeleton-cell" style="height:60px;border-radius:8px;"></div>
+            <div class="skeleton-cell" style="height:60px;border-radius:8px;"></div>
+          </div>
+          <div class="skeleton-cell" style="height:200px;border-radius:8px;"></div>
+        </div>
+      </div>
+      <div id="transcriptContent" class="hidden" style="padding:20px;"></div>
+    </div>
+  `;
+}
+
+const TRANSCRIPT_COURSE_CATEGORIES = ['English','Math','Science','Social Studies','Language','Fine Arts','Electives'];
+
+let _courseCatalogue = null; 
+function _getCourseIdCategoryMap() {
+  const map = {};
+  (_courseCatalogue || []).forEach(c => {
+    if (c.classId) map[c.classId] = c.category;
+  });
+  return map;
+}
+// ── Entry point: called by switchModalTab('transcript') ──────
+function _loadTranscriptTab() {
+  const studentId = currentModalProfile ? currentModalProfile.academicId : null;
+  if (!studentId) {
+    document.getElementById('transcriptLoading').style.display = 'none';
+    document.getElementById('transcriptContent').classList.remove('hidden');
+    document.getElementById('transcriptContent').innerHTML =
+      '<div style="padding:24px;text-align:center;color:var(--text-muted);font-style:italic;">No academic ID on file for this student — transcript cannot be loaded.</div>';
+    return;
+  }
+
+  if (_transcriptData && _transcriptStudentId === studentId) {
+    _renderTranscriptTab();
+    return;
+  }
+
+  document.getElementById('transcriptLoading').style.display = 'block';
+  document.getElementById('transcriptContent').classList.add('hidden');
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      document.getElementById('transcriptLoading').style.display = 'none';
+      document.getElementById('transcriptContent').classList.remove('hidden');
+
+      if (!result || result.success === false) {
+        document.getElementById('transcriptContent').innerHTML =
+          '<div style="padding:24px;text-align:center;color:var(--high);">' +
+          esc(result && result.error ? result.error : 'Failed to load transcript.') + '</div>';
+        return;
+      }
+
+      _transcriptData      = result;
+      _transcriptStudentId = studentId;
+      _transcriptSettings  = result.settings || { weeklyHours: 10, activeWeeks: { w1:true, w2:true, w3:true, w4:true } };
+      _transcriptEditingRow = null;
+
+      _renderTranscriptTab();
+
+      if (!_courseCatalogue) {
+        google.script.run
+        .withSuccessHandler(function(catResult) {
+          _courseCatalogue = (catResult && catResult.success) ? catResult.courses : [];
+
+            const transcriptView = document.getElementById('modalTranscriptView');
+          if (transcriptView && !transcriptView.classList.contains('hidden') && _transcriptData) {
+            _renderTranscriptTab();
+            }
+          })
+          .withFailureHandler(function() { _courseCatalogue = []; })
+          .getCourseCatalogue();
+      }
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('transcriptLoading').style.display = 'none';
+      document.getElementById('transcriptContent').classList.remove('hidden');
+      document.getElementById('transcriptContent').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);">Failed to load: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
+    })
+    .getStudentTranscript(studentId);
+}
+
+// ── Main render ────────────────────────────────────────────────
+function _renderTranscriptTab() {
+  const data = _transcriptData;
+  if (!data) return;
+
+  const courses = data.courses || [];
+  const credits  = TargetDateEngine.calculateCredits(courses, _getCourseIdCategoryMap());
+  const totalEarned    = credits.reduce((s, c) => s + c.earned, 0);
+  const totalMax       = credits.reduce((s, c) => s + c.max, 0);
+  const totalRemaining = Math.max(totalMax - totalEarned, 0);
+  const completedCount = courses.filter(c => c.completed).length;
+  const inProgress     = courses.filter(c => !c.completed && !c.transfer).length;
+  const overdueCount   = courses.filter(c => {
+    const status = TargetDateEngine.getStatus(c.targetDate, c.completed, c.transfer);
+    return status === 'overdue';
+  }).length;
+
+  let html = `
+    <div class="tr-chip-row">
+      <div class="tr-chip"><div class="tr-chip-label">Credits Earned</div><div class="tr-chip-value">${totalEarned.toFixed(1)}</div></div>
+      <div class="tr-chip"><div class="tr-chip-label">Credits Remaining</div><div class="tr-chip-value">${totalRemaining.toFixed(1)}</div></div>
+      <div class="tr-chip"><div class="tr-chip-label">Courses Completed</div><div class="tr-chip-value">${completedCount}</div></div>
+      <div class="tr-chip"><div class="tr-chip-label">In Progress</div><div class="tr-chip-value">${inProgress}</div></div>
+      ${overdueCount > 0 ? `<div class="tr-chip" style="border-color:color-mix(in srgb, var(--high) 35%, transparent);"><div class="tr-chip-label" style="color:var(--high);">Overdue</div><div class="tr-chip-value" style="color:var(--high);">${overdueCount}</div></div>` : ''}
+    </div>
+
+    <div style="margin-bottom:18px;">
+      <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Credits by Category</div>
+      <div style="display:flex;flex-direction:column;gap:6px;">
+        ${credits.map(c => {
+          const pctFill = c.max > 0 ? Math.min((c.earned / c.max) * 100, 100) : 0;
+          const barColor = pctFill >= 100 ? 'var(--low)' : pctFill >= 50 ? 'var(--medium)' : 'var(--accent-dim)';
+          return `<div style="display:flex;align-items:center;gap:10px;">
+            <span style="width:110px;font-size:12px;color:var(--text-soft);flex-shrink:0;">${esc(c.category)}</span>
+            <div style="flex:1;height:8px;background:var(--bg4);border-radius:4px;overflow:hidden;">
+              <div style="height:100%;width:${pctFill}%;background:${barColor};border-radius:4px;"></div>
+            </div>
+            <span style="width:70px;text-align:right;font-size:12px;font-weight:600;color:var(--text-muted);flex-shrink:0;">${c.earned.toFixed(1)} / ${c.max}</span>
+          </div>`;
+        }).join('')}
+      </div>
+    </div>
+
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <button class="btn-override" onclick="_openTranscriptSettings()" style="font-size:12px;padding:6px 12px;">
+        ⚙ Pacing Settings (${_transcriptSettings.weeklyHours}h/wk)
+      </button>
+      <span style="font-size:11px;color:var(--text-muted);font-style:italic;">
+        Target dates recalculate live as you edit hours or start dates below.
+      </span>
+    </div>
+  `;
+
+  html += _renderTranscriptBlock(1, 'Year 1', courses.filter(c => c.block === 1));
+  html += _renderTranscriptBlock(2, 'Year 2', courses.filter(c => c.block === 2));
+
+  document.getElementById('transcriptContent').innerHTML = html;
+}
+
+// ── Render one block (Year 1 / Year 2) as a table ─────────────
+function _renderTranscriptBlock(blockNum, label, courses) {
+  const uid = 'tr-block-' + blockNum;
+
+  let rows = courses.map(c => _renderTranscriptRow(c)).join('');
+  if (!courses.length) {
+    rows = `<tr><td colspan="8" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No courses in ${esc(label)} yet.</td></tr>`;
+  }
+
+  return `
+    <div class="tr-block-header">${label}</div>
+    <table class="tr-table" id="${uid}">
+      <thead>
+        <tr>
+          <th>Course</th>
+          <th>Subject</th>
+          <th>Credit</th>
+          <th>Hours</th>
+          <th>Start</th>
+          <th>Target Date</th>
+          <th>Status</th>
+          <th></th>
+        </tr>
+      </thead>
+      <tbody id="${uid}-body">
+        ${rows}
+        <tr class="tr-row-add" onclick="_openTranscriptAddRow(${blockNum})">
+          <td colspan="8" style="padding:10px;">+ Add Course to ${esc(label)}</td>
+        </tr>
+      </tbody>
+    </table>
+  `;
+}
+
+function _renderTranscriptRow(c) {
+  const status    = TargetDateEngine.getStatus(c.targetDate, c.completed, c.transfer);
+  const statusMap = {
+    'overdue':   { cls: 'tr-status-overdue',  label: 'Overdue' },
+    'on-track':  { cls: 'tr-status-ontrack',  label: 'On Track' },
+    'completed': { cls: 'tr-status-complete', label: 'Completed' },
+    'transfer':  { cls: 'tr-status-transfer', label: 'Transfer' },
+    'no-date':   { cls: 'tr-status-nodate',   label: 'No Date' },
+  };
+  const s = statusMap[status] || statusMap['no-date'];
+  const rowKey = 'row-' + c.rowIndex;
+  const isEditing = _transcriptEditingRow === c.rowIndex;
+
+  const mainRow = `
+    <tr class="tr-row ${isEditing ? 'editing' : ''}" onclick="_toggleTranscriptEdit(${c.rowIndex})" id="${rowKey}">
+      <td>${esc(c.courseName || '—')}</td>
+      <td>${esc(c.subject || '—')}</td>
+      <td>${c.credit || 0}</td>
+      <td>${c.classHours || 0}</td>
+      <td>${esc(c.adjStart || c.startDate || '—')}</td>
+      <td>${c.completed ? '—' : (c.targetDate ? TargetDateEngine.formatDisplay(c.targetDate) : '—')}</td>
+      <td><span class="tr-status-pill ${s.cls}">${s.label}</span></td>
+      <td style="text-align:right;color:var(--text-muted);font-size:11px;">${isEditing ? '▾' : '▸'} Edit</td>
+    </tr>`;
+
+  const editPanelId = 'edit-' + c.rowIndex;
+  const editPanel = `
+    <tr id="${editPanelId}-row" class="${isEditing ? '' : 'hidden'}">
+      <td colspan="8" style="padding:0;border-bottom:1px solid var(--border);">
+        <div id="${editPanelId}" class="tr-edit-panel" style="margin:10px 14px;"></div>
+      </td>
+    </tr>`;
+
+  return mainRow + editPanel;
+}
+
+function _toggleTranscriptEdit(rowIndex) {
+  const wasEditing = _transcriptEditingRow === rowIndex;
+  _transcriptEditingRow = wasEditing ? null : rowIndex;
+  _renderTranscriptTab();
+  if (!wasEditing) {
+    const course = (_transcriptData.courses || []).find(c => c.rowIndex === rowIndex);
+    if (course) _renderTranscriptEditForm('edit-' + rowIndex, course, false);
+  }
+}
+
+function _openTranscriptAddRow(blockNum) {
+  const tempKey = 'new-' + blockNum;
+  _transcriptEditingRow = null;
+
+  const bodyId = 'tr-block-' + blockNum + '-body';
+  const body   = document.getElementById(bodyId);
+  if (!body) return;
+
+  const existing = document.getElementById('tr-new-row-wrap');
+  if (existing) existing.remove();
+
+  const wrap = document.createElement('tr');
+  wrap.id = 'tr-new-row-wrap';
+  wrap.innerHTML = `<td colspan="8" style="padding:0;">
+    <div id="tr-new-panel" class="tr-edit-panel" style="margin:10px 14px;"></div>
+  </td>`;
+  const addRow = body.querySelector('.tr-row-add');
+  body.insertBefore(wrap, addRow);
+
+  const blankCourse = {
+    rowIndex: null, block: blockNum, classNumber: '', courseId: '', courseName: '',
+    instance: '', transfer: false, subject: '', credit: 0, classHours: 0,
+    startDate: null, adjStart: null, targetDate: null, completed: false,
+  };
+  _renderTranscriptEditForm('tr-new-panel', blankCourse, true);
+}
+
+// ── Build the edit form (shared by row-edit and add-row) ──────
+function _renderTranscriptEditForm(panelId, course, isNew) {
+  const panel = document.getElementById(panelId);
+  if (!panel) return;
+
+  const catalogueOptions = (_courseCatalogue || [])
+    .map(c => `<option value="${esc(c.className)}" data-subject="${esc(c.category)}" ${c.className === course.courseName ? 'selected' : ''}>${esc(c.className)}</option>`)
+    .join('');
+
+  panel.innerHTML = `
+    <div class="tr-edit-grid">
+      <div class="tr-edit-field" style="grid-column:span 2;">
+        <label>Course Name</label>
+        ${catalogueOptions
+          ? `<select id="${panelId}-courseName" onchange="_onTranscriptCourseSelect('${panelId}')">
+               <option value="">— Select or type below —</option>
+               ${catalogueOptions}
+             </select>`
+          : ''}
+        <input type="text" id="${panelId}-courseNameFree" value="${esc(course.courseName || '')}" placeholder="Course name" style="margin-top:${_courseCatalogue && _courseCatalogue.length ? '6px' : '0'};">
+      </div>
+      <div class="tr-edit-field">
+        <label>Subject</label>
+        <input type="text" id="${panelId}-subject" value="${esc(course.subject || '')}" placeholder="e.g. Math">
+      </div>
+
+      <div class="tr-edit-field">
+        <label>Credit</label>
+        <input type="number" step="0.1" id="${panelId}-credit" value="${course.credit || 0}">
+      </div>
+      <div class="tr-edit-field">
+        <label>Class Hours</label>
+        <input type="number" step="1" id="${panelId}-classHours" value="${course.classHours || 0}" oninput="_recalcTranscriptPreview('${panelId}')">
+      </div>
+      <div class="tr-edit-field">
+        <label>Instance</label>
+        <input type="text" id="${panelId}-instance" value="${esc(course.instance || '')}" placeholder="1">
+      </div>
+
+      <div class="tr-edit-field">
+        <label>Start Date</label>
+        <input type="date" id="${panelId}-startDate" value="${course.startDate || ''}" oninput="_recalcTranscriptPreview('${panelId}')">
+      </div>
+      <div class="tr-edit-field">
+        <label>Adjusted Start</label>
+        <input type="date" id="${panelId}-adjStart" value="${course.adjStart || ''}" oninput="_recalcTranscriptPreview('${panelId}')">
+      </div>
+      <div class="tr-edit-field checkbox-field">
+        <input type="checkbox" id="${panelId}-completed" ${course.completed ? 'checked' : ''} onchange="_recalcTranscriptPreview('${panelId}')">
+        <label for="${panelId}-completed">Completed</label>
+      </div>
+
+      <div class="tr-edit-field checkbox-field">
+        <input type="checkbox" id="${panelId}-transfer" ${course.transfer ? 'checked' : ''} onchange="_recalcTranscriptPreview('${panelId}')">
+        <label for="${panelId}-transfer">Transfer Credit</label>
+      </div>
+    </div>
+
+    <div class="tr-target-preview" id="${panelId}-preview"></div>
+
+    <div class="tr-edit-actions">
+      <button class="btn-override" onclick="_saveTranscriptRow('${panelId}', ${course.rowIndex ?? 'null'}, ${course.block}, ${isNew})">
+        ${isNew ? 'Add Course' : 'Save Changes'}
+      </button>
+      <button class="btn-override danger" onclick="${isNew ? `_cancelTranscriptAdd()` : `_toggleTranscriptEdit(${course.rowIndex})`}">Cancel</button>
+      ${!isNew ? `<span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>` : `<span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>`}
+    </div>
+  `;
+
+  _recalcTranscriptPreview(panelId);
+}
+
+function _onTranscriptCourseSelect(panelId) {
+  const sel = document.getElementById(panelId + '-courseName');
+  if (!sel || !sel.value) return;
+  document.getElementById(panelId + '-courseNameFree').value = sel.value;
+  const subjectEl = document.getElementById(panelId + '-subject');
+  const opt = sel.options[sel.selectedIndex];
+  const subject = opt ? opt.getAttribute('data-subject') : '';
+  if (subjectEl && subject) subjectEl.value = subject;
+  _recalcTranscriptPreview(panelId);
+}
+
+// ── Live target date preview using TargetDateEngine ───────────
+function _recalcTranscriptPreview(panelId) {
+  const hoursEl     = document.getElementById(panelId + '-classHours');
+  const startEl     = document.getElementById(panelId + '-startDate');
+  const adjStartEl  = document.getElementById(panelId + '-adjStart');
+  const completedEl = document.getElementById(panelId + '-completed');
+  const transferEl  = document.getElementById(panelId + '-transfer');
+  const previewEl   = document.getElementById(panelId + '-preview');
+  if (!previewEl) return;
+
+  const hours     = parseFloat(hoursEl ? hoursEl.value : 0) || 0;
+  const startDate = (adjStartEl && adjStartEl.value) ? adjStartEl.value : (startEl ? startEl.value : '');
+  const completed = completedEl ? completedEl.checked : false;
+  const transfer  = transferEl  ? transferEl.checked  : false;
+
+  if (completed) {
+    previewEl.innerHTML = `<span style="color:var(--low);font-weight:700;">✓ Marked Completed</span> — no target date needed.`;
+    return;
+  }
+  if (transfer) {
+    previewEl.innerHTML = `<span style="color:var(--text-muted);font-weight:700;">Transfer Credit</span> — no target date calculated.`;
+    return;
+  }
+
+  const target = TargetDateEngine.calculate(hours, startDate, _transcriptSettings, completed, transfer);
+  if (!target) {
+    previewEl.innerHTML = `<span style="color:var(--text-muted);">Enter class hours and a start date to see the projected target date.</span>`;
+    return;
+  }
+  const status = TargetDateEngine.getStatus(target, false, false);
+  const color  = status === 'overdue' ? 'var(--high)' : 'var(--low)';
+  previewEl.innerHTML = `<span style="color:var(--text-muted);">Projected Target Date:</span> <strong style="color:${color};">${TargetDateEngine.formatDisplay(target)}</strong>
+    <span style="color:var(--text-muted);font-size:11px;">(based on ${_transcriptSettings.weeklyHours}h/wk pacing settings)</span>`;
+}
+
+// ── Save (update existing or add new) ─────────────────────────
+function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
+  const studentId = _transcriptStudentId;
+  const statusEl  = document.getElementById(panelId + '-status');
+
+  const courseName = (document.getElementById(panelId + '-courseNameFree') || {}).value || '';
+  if (!courseName.trim()) {
+    if (statusEl) { statusEl.textContent = 'Course name is required.'; statusEl.style.color = 'var(--high)'; }
+    return;
+  }
+
+  const hours     = parseFloat(document.getElementById(panelId + '-classHours').value) || 0;
+  const startDate = document.getElementById(panelId + '-startDate').value || null;
+  const adjStart  = document.getElementById(panelId + '-adjStart').value  || null;
+  const completed = document.getElementById(panelId + '-completed').checked;
+  const transfer  = document.getElementById(panelId + '-transfer').checked;
+  const effectiveStart = adjStart || startDate;
+  const targetDate = (completed || transfer) ? null : TargetDateEngine.calculate(hours, effectiveStart, _transcriptSettings, completed, transfer);
+
+  const rowData = {
+    rowIndex,
+    block,
+    courseId:   '',
+    courseName: courseName.trim(),
+    instance:   document.getElementById(panelId + '-instance').value || '',
+    transfer,
+    subject:    document.getElementById(panelId + '-subject').value || '',
+    credit:     parseFloat(document.getElementById(panelId + '-credit').value) || 0,
+    classHours: hours,
+    startDate,
+    adjStart,
+    targetDate,
+    completed,
+  };
+
+  if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-muted)'; }
+
+  const serverCall = isNew
+    ? () => google.script.run
+        .withSuccessHandler(onSaved)
+        .withFailureHandler(onFailed)
+        .addTranscriptRow(studentId, rowData)
+    : () => google.script.run
+        .withSuccessHandler(onSaved)
+        .withFailureHandler(onFailed)
+        .saveTranscriptRow(studentId, rowData);
+
+  function onSaved(result) {
+    if (!result || result.success === false) { onFailed(result); return; }
+    showToast(isNew ? 'Course added.' : 'Course updated.');
+    
+    _transcriptData = null;
+    _transcriptEditingRow = null;
+    _loadTranscriptTab();
+  }
+  function onFailed(err) {
+    const msg = (err && err.error) || (err && err.message) || 'Save failed — please try again.';
+    if (statusEl) { statusEl.textContent = msg; statusEl.style.color = 'var(--high)'; }
+  }
+
+  serverCall();
+}
+
+let _bulkPacingData     = null;  // full scan result from server
+let _bulkPacingSelected = new Set(); // studentIds currently checked
+let _bulkPacingOverrides = {};   // studentId -> { weeklyHours, activeWeeks } — manual edits to the suggestion
+
+// ── Open / Close ─────────────────────────────────────────────
+function openBulkPacingModal() {
+  document.getElementById('bulkPacingModal').classList.remove('hidden');
+  if (!_bulkPacingData) {
+    _loadBulkPacingScan();
+  } else {
+    document.getElementById('bulkPacingLoading').style.display = 'none';
+    document.getElementById('bulkPacingContent').classList.remove('hidden');
+    _renderBulkPacingTable();
+  }
+}
+
+function closeBulkPacingModal() {
+  document.getElementById('bulkPacingModal').classList.add('hidden');
+}
+
+function _loadBulkPacingScan() {
+  document.getElementById('bulkPacingLoading').style.display = 'block';
+  document.getElementById('bulkPacingContent').classList.add('hidden');
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      document.getElementById('bulkPacingLoading').style.display = 'none';
+      document.getElementById('bulkPacingContent').classList.remove('hidden');
+
+      if (!result || result.success === false) {
+        document.getElementById('bulkPacingContent').innerHTML =
+          '<div style="padding:24px;text-align:center;color:var(--high);">' +
+          esc(result && result.error ? result.error : 'Scan failed.') + '</div>';
+        return;
+      }
+
+      _bulkPacingData      = result;
+      _bulkPacingSelected  = new Set();
+      _bulkPacingOverrides = {};
+      _renderBulkPacingTable();
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('bulkPacingLoading').style.display = 'none';
+      document.getElementById('bulkPacingContent').classList.remove('hidden');
+      document.getElementById('bulkPacingContent').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);">Failed to scan: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
+    })
+    .scanAllStudentPacing();
+}
+
+// ── Filtering ──────────────────────────────────────────────────
+function _getFilteredPacingStudents() {
+  if (!_bulkPacingData) return [];
+  const search = (document.getElementById('bulkPacingSearch').value || '').toLowerCase().trim();
+  const status = document.getElementById('bulkPacingStatusFilter').value;
+
+  return _bulkPacingData.students.filter(s => {
+    if (status !== 'ALL' && s.status !== status) return false;
+    if (search && !s.displayName.toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+// ── Render table ────────────────────────────────────────────────
+function _renderBulkPacingTable() {
+  const filtered = _getFilteredPacingStudents();
+  const body = document.getElementById('bulkPacingBody');
+
+  const statusLabels = {
+    new: 'New', changed: 'Changed', unchanged: 'Unchanged', no_schedule: 'No Schedule',
+  };
+
+  body.innerHTML = filtered.map(s => {
+    const override = _bulkPacingOverrides[s.studentId];
+    const hours = override ? override.weeklyHours : s.detectedHours;
+    const weeks = override ? override.activeWeeks  : s.detectedActiveWeeks;
+    const isChecked = _bulkPacingSelected.has(s.studentId);
+    const rowUid = 'bp-' + s.studentId.replace(/\W/g, '');
+
+    const weekDots = ['w1','w2','w3','w4'].map((w, i) =>
+      `<span class="pacing-week-dot ${weeks[w] ? 'active' : ''}">${i+1}</span>`
+    ).join('');
+
+    const savedText = s.hasExisting
+      ? `${s.existingHours}h/wk (${['w1','w2','w3','w4'].filter(w => s.existingActiveWeeks[w]).map((w,i)=>i+1).join(',') || 'none'})`
+      : '—';
+
+    return `<tr>
+      <td><input type="checkbox" class="bp-row-check" data-id="${esc(s.studentId)}" ${isChecked ? 'checked' : ''} onchange="_toggleBulkPacingRow('${esc(s.studentId)}', this.checked)"></td>
+      <td style="font-weight:600;color:var(--text);">${esc(s.displayName)}</td>
+      <td><span class="pacing-status-pill pacing-status-${s.status}">${statusLabels[s.status] || s.status}</span></td>
+      <td>
+        <input type="number" value="${hours}" min="0" step="1" style="width:56px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:3px 6px;"
+          onchange="_setPacingOverride('${esc(s.studentId)}', 'hours', this.value)" ${!s.hasSchedule ? 'disabled' : ''}>
+      </td>
+      <td>
+        <span class="pacing-week-mini" id="${rowUid}-weeks">${weekDots}</span>
+        <button onclick="_cyclePacingWeekPreset('${esc(s.studentId)}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;margin-left:4px;" title="Cycle: Weeks 1&3 / Weeks 2&4 / All / None">⟳</button>
+      </td>
+      <td style="color:var(--text-muted);font-size:11.5px;">${savedText}</td>
+      <td>${!s.hasSchedule ? `<span style="color:var(--text-muted);font-size:11px;font-style:italic;">no schedule</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  // Summary chip
+  const total    = _bulkPacingData ? _bulkPacingData.students.length : 0;
+  const shown    = filtered.length;
+  const selected = _bulkPacingSelected.size;
+  document.getElementById('bulkPacingSummary').innerHTML =
+    `<strong>${shown}</strong> of ${total} shown · <strong>${selected}</strong> selected`;
+}
+
+// ── Row selection ────────────────────────────────────────────────
+function _toggleBulkPacingRow(studentId, checked) {
+  if (checked) _bulkPacingSelected.add(studentId);
+  else         _bulkPacingSelected.delete(studentId);
+  _renderBulkPacingTable();
+}
+
+function _toggleAllPacingRows(checked) {
+  const filtered = _getFilteredPacingStudents();
+  filtered.forEach(s => {
+    if (!s.hasSchedule) return; 
+    if (checked) _bulkPacingSelected.add(s.studentId);
+    else         _bulkPacingSelected.delete(s.studentId);
+  });
+  _renderBulkPacingTable();
+}
+
+// ── Per-row manual overrides ─────────────────────────────────────
+function _setPacingOverride(studentId, field, value) {
+  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
+  if (!student) return;
+
+  const current = _bulkPacingOverrides[studentId] || {
+    weeklyHours: student.detectedHours,
+    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
+  };
+
+  if (field === 'hours') {
+    current.weeklyHours = parseFloat(value) || 0;
+  }
+  _bulkPacingOverrides[studentId] = current;
+}
+
+const PACING_WEEK_PRESETS = [
+  { w1: true,  w2: false, w3: true,  w4: false }, // weeks 1 & 3
+  { w1: false, w2: true,  w3: false, w4: true  }, // weeks 2 & 4
+  { w1: true,  w2: true,  w3: true,  w4: true  }, // all weeks (full time academics)
+  { w1: false, w2: false, w3: false, w4: false }, // none (full time trades)
+];
+
+function _cyclePacingWeekPreset(studentId) {
+  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
+  if (!student) return;
+
+  const current = _bulkPacingOverrides[studentId] || {
+    weeklyHours: student.detectedHours,
+    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
+  };
+
+  const currentIndex = PACING_WEEK_PRESETS.findIndex(p =>
+    p.w1 === current.activeWeeks.w1 && p.w2 === current.activeWeeks.w2 &&
+    p.w3 === current.activeWeeks.w3 && p.w4 === current.activeWeeks.w4
+  );
+  const nextPreset = PACING_WEEK_PRESETS[(currentIndex + 1) % PACING_WEEK_PRESETS.length];
+
+  current.activeWeeks = Object.assign({}, nextPreset);
+  _bulkPacingOverrides[studentId] = current;
+  _renderBulkPacingTable();
+}
+
+// ── Apply to selected ────────────────────────────────────────────
+function _applyBulkPacing() {
+  const ids = [..._bulkPacingSelected];
+  if (!ids.length) {
+    showToast('Select at least one student first.', 'error');
+    return;
+  }
+
+  const updates = ids.map(studentId => {
+    const student  = _bulkPacingData.students.find(s => s.studentId === studentId);
+    const override = _bulkPacingOverrides[studentId];
+    return {
+      studentId,
+      weeklyHours: override ? override.weeklyHours : student.detectedHours,
+      activeWeeks: override ? override.activeWeeks  : student.detectedActiveWeeks,
+    };
+  });
+
+  const btn    = document.getElementById('bulkPacingApplyBtn');
+  const status = document.getElementById('bulkPacingApplyStatus');
+  btn.disabled = true;
+  status.textContent = `Applying to ${updates.length} students…`;
+  status.style.color = 'var(--text-muted)';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      if (!result || result.success === false) {
+        status.textContent = (result && result.error) || 'Apply failed.';
+        status.style.color = 'var(--high)';
+        return;
+      }
+      status.textContent = `✓ Applied to ${result.applied} students` +
+        (result.skippedCount ? ` — ${result.skippedCount} skipped (not found).` : '.');
+      status.style.color = 'var(--low)';
+      showToast(`Pacing settings applied to ${result.applied} students.`);
+      _bulkPacingData = null;
+      _bulkPacingSelected = new Set();
+      _bulkPacingOverrides = {};
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled = false;
+      status.textContent = (err && err.message) || 'Apply failed — please try again.';
+      status.style.color = 'var(--high)';
+    })
+    .batchApplyStudentPacing(updates);
+}
+
+function _cancelTranscriptAdd() {
+  const wrap = document.getElementById('tr-new-row-wrap');
+  if (wrap) wrap.remove();
+}
+
+// ── Pacing settings dialog (weekly hours + active weeks) ──────
+function _openTranscriptSettings() {
+  _ensureThemedDialogEl(); 
+  const el = document.getElementById('themedDialog');
+  el.querySelector('.modal-box').innerHTML = `
+    <div class="modal-header"><h2>Pacing Settings</h2></div>
+    <div class="modal-body" style="padding:20px 22px;">
+      <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
+        Controls how target completion dates are calculated for this student. Changing these updates every course's projected target date.
+      </p>
+      <div class="tr-edit-field" style="margin-bottom:14px;">
+        <label>Weekly Hours</label>
+        <input type="number" id="trsWeeklyHours" value="${_transcriptSettings.weeklyHours}" style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 9px;">
+      </div>
+      <div style="display:flex;gap:14px;margin-bottom:16px;">
+        ${['w1','w2','w3','w4'].map((w, i) => `
+          <label style="display:flex;align-items:center;gap:6px;font-size:12.5px;color:var(--text-soft);cursor:pointer;">
+            <input type="checkbox" id="trs${w}" ${_transcriptSettings.activeWeeks[w] ? 'checked' : ''}>
+            Week ${i+1}
+          </label>`).join('')}
+      </div>
+      <div class="override-actions">
+        <button class="btn-override" onclick="_saveTranscriptSettings()">Save</button>
+        <button class="btn-override danger" onclick="document.getElementById('themedDialog').classList.add('hidden')">Cancel</button>
+      </div>
+      <div id="trsError" class="override-error"></div>
+    </div>
+  `;
+  el.classList.remove('hidden');
+}
+
+function _saveTranscriptSettings() {
+  const weeklyHours = parseFloat(document.getElementById('trsWeeklyHours').value) || 10;
+  const activeWeeks = {
+    w1: document.getElementById('trsw1').checked,
+    w2: document.getElementById('trsw2').checked,
+    w3: document.getElementById('trsw3').checked,
+    w4: document.getElementById('trsw4').checked,
+  };
+  const newSettings = { weeklyHours, activeWeeks };
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        const box = document.getElementById('trsError');
+        if (box) { box.textContent = (result && result.error) || 'Save failed.'; box.classList.add('show'); }
+        return;
+      }
+      _transcriptSettings = newSettings;
+      document.getElementById('themedDialog').classList.add('hidden');
+      showToast('Pacing settings updated — target dates recalculated.');
+      if (_transcriptData && _transcriptData.courses) {
+        _transcriptData.courses = TargetDateEngine.recalculateAll(_transcriptData.courses, _transcriptSettings);
+      }
+      _renderTranscriptTab();
+    })
+    .withFailureHandler(function(err) {
+      const box = document.getElementById('trsError');
+      if (box) { box.textContent = (err && err.message) || 'Save failed.'; box.classList.add('show'); }
+    })
+    .saveTranscriptSettings(_transcriptStudentId, newSettings);
 }
 </script>
