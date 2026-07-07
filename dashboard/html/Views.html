@@ -6,8 +6,6 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Student Progress — Tulsa Job Corps</title>
   <script>
-    // Errors are logged to the console for debugging rather than surfaced
-    // in the UI — this keeps failures from disrupting what staff see.
     window.onerror = function(msg, url, line, col, error) {
       console.error('[Dashboard error]', msg, 'at line', line, error);
       return false;
@@ -175,6 +173,15 @@
       </div>
     </button>
 
+    <div class="sidebar-divider"></div>
+
+    <button class="sidebar-btn" onclick="openBulkPacingModal(); closeSidebar()">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
+      <div class="sidebar-btn-inner">
+        <span class="sb-label">Assign Student Hours</span>
+        <span class="sb-desc">Bulk-detect academic pacing from schedules</span>
+      </div>
+    </button>
   </div>
 </aside>
 
@@ -446,9 +453,13 @@
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L10.582 16.07a4.5 4.5 0 01-1.897 1.13L6 18l.8-2.685a4.5 4.5 0 011.13-1.897l8.932-8.931zm0 0L19.5 7.125"/></svg>
         Edit
       </button>
-      <button class="btn-override-toggle no-print" onclick="printStudentDetail()">
+      <button class="btn-override-toggle no-print" onclick="printOverview()" title="Print the Overview tab">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6.72 13.829c-.24.03-.48.062-.72.096m.72-.096a42.415 42.415 0 0110.56 0m-10.56 0L6.34 18m10.94-4.171c.24.03.48.062.72.096m-.72-.096L17.66 18m0 0l.229 2.523a1.125 1.125 0 01-1.12 1.227H7.231c-.662 0-1.18-.568-1.12-1.227L6.34 18m11.318 0h1.091A2.25 2.25 0 0021 15.75V9.456c0-1.081-.768-2.015-1.837-2.175a48.055 48.055 0 00-1.913-.247M6.34 18H5.25A2.25 2.25 0 013 15.75V9.456c0-1.081.768-2.015 1.837-2.175a48.041 48.041 0 011.913-.247m10.5 0a48.536 48.536 0 00-10.5 0m10.5 0V3.375c0-.621-.504-1.125-1.125-1.125h-8.25c-.621 0-1.125.504-1.125 1.125v3.659M18 10.5h.008v.008H18V10.5zm-3 0h.008v.008H15V10.5z"/></svg>
-        Print
+        Print Overview
+      </button>
+      <button class="btn-override-toggle no-print" onclick="printTranscript()" title="Print the Academic Transcript tab">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"/></svg>
+        Print Transcript
       </button>
       <button class="modal-close no-print" onclick="closeModalButton()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
@@ -747,6 +758,7 @@ const ICONS = {
   trophy:      '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 18.75h-9a.75.75 0 01-.75-.75v-1.5a.75.75 0 01.75-.75h9a.75.75 0 01.75.75v1.5a.75.75 0 01-.75.75zM7.5 3.75h9v6a4.5 4.5 0 01-9 0v-6zM7.5 5.25H4.875A1.875 1.875 0 003 7.125v.75a3.375 3.375 0 003.375 3.375H7.5M16.5 5.25h2.625A1.875 1.875 0 0121 7.125v.75a3.375 3.375 0 01-3.375 3.375H16.5M12 15.75v2.25"/></svg>',
 };
 </script>
+<?!= include('TargetDateEngine'); ?>
 <?!= include('Scripts'); ?>
 
 <script>
@@ -960,6 +972,69 @@ function closeSidebar() {
   </div>
 </div>
 <div id="dashTooltip"></div>
+<div id="bulkPacingModal" class="modal-overlay hidden" onclick="if(event.target===this)closeBulkPacingModal()">
+  <div class="modal-box" style="max-width:960px;width:96vw;max-height:90vh;display:flex;flex-direction:column;">
+    <div class="modal-header">
+      <h2>Assign Student Hours</h2>
+      <button class="modal-close" onclick="closeBulkPacingModal()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:20px 22px;flex:1;overflow-y:auto;">
+
+      <p style="font-size:12.5px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
+        Detects each student's current academic hours from their on-file schedule and suggests a pacing
+        configuration. Review the suggestions below, adjust anything that looks wrong, then apply to the
+        students you select.
+      </p>
+
+      <div id="bulkPacingLoading" style="padding:40px;text-align:center;color:var(--text-muted);">
+        <div class="spinner" style="margin:0 auto 14px;"></div>
+        Scanning all students' schedules…
+      </div>
+
+      <div id="bulkPacingContent" class="hidden">
+
+        <div class="pacing-filter-bar">
+          <input type="text" id="bulkPacingSearch" placeholder="Search student…" oninput="_renderBulkPacingTable()" style="min-width:180px;">
+          <select id="bulkPacingStatusFilter" onchange="_renderBulkPacingTable()">
+            <option value="ALL">All Statuses</option>
+            <option value="new">New (no settings yet)</option>
+            <option value="changed">Changed (differs from saved)</option>
+            <option value="unchanged">Unchanged</option>
+            <option value="no_schedule">No Schedule on File</option>
+          </select>
+          <span class="pacing-summary-chip" id="bulkPacingSummary"></span>
+          <span style="margin-left:auto;">
+            <button class="btn-override" onclick="_toggleAllPacingRows(true)" style="font-size:11.5px;padding:5px 10px;">Select All Visible</button>
+            <button class="btn-override danger" onclick="_toggleAllPacingRows(false)" style="font-size:11.5px;padding:5px 10px;">Clear Selection</button>
+          </span>
+        </div>
+
+        <div class="pacing-table-wrap">
+          <table class="pacing-table">
+            <thead>
+              <tr>
+                <th style="width:30px;"><input type="checkbox" onchange="_toggleAllPacingRows(this.checked)" title="Select all visible"></th>
+                <th>Student</th>
+                <th>Status</th>
+                <th>Detected Hrs</th>
+                <th>Detected Weeks</th>
+                <th>Currently Saved</th>
+                <th></th>
+              </tr>
+            </thead>
+            <tbody id="bulkPacingBody"></tbody>
+          </table>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:14px;">
+          <button class="btn-override" id="bulkPacingApplyBtn" onclick="_applyBulkPacing()">Apply to Selected</button>
+          <span id="bulkPacingApplyStatus" style="font-size:12px;color:var(--text-muted);"></span>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>
 <?!= include('ProductivityModal') ?>
 <?!= include('ProductivityScripts') ?>
 </body>
