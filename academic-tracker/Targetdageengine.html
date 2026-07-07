@@ -1,18 +1,8 @@
-// ============================================================
-// targetDateEngine.js
-// Client-side target date calculation for the transcript tab.
-// Paste this into Scripts.html or a new TranscriptScripts.html.
-//
-// This is a direct port of calculateTargetDate() from the
-// Academic Tracker. Identical logic, runs in the browser.
-// No round-trip to server needed — target dates update live
-// as teachers edit hours or dates.
-// ============================================================
-
+<script>
 const TargetDateEngine = {
 
   // ── Main calculation ───────────────────────────────────────
-  // Returns a date string (YYYY-MM-DD) or null if not calculable.
+  // Returns a date string (YYYY-MM-DD) or null
   //
   // Parameters:
   //   courseHours  {number}  — total hours for this course
@@ -68,7 +58,6 @@ const TargetDateEngine = {
   },
 
   // ── Status classifier ─────────────────────────────────────
-  // Returns 'overdue' | 'on-track' | 'completed' | 'transfer' | 'no-date'
 
   getStatus(targetDateStr, completed, transfer) {
     if (completed) return 'completed';
@@ -84,7 +73,6 @@ const TargetDateEngine = {
   },
 
   // ── Display formatter ─────────────────────────────────────
-  // Returns a human-readable date string like 'Aug 15, 2026'
 
   formatDisplay(dateStr) {
     if (!dateStr) return '—';
@@ -96,9 +84,6 @@ const TargetDateEngine = {
   },
 
   // ── Recalculate all courses ────────────────────────────────
-  // Takes an array of course objects and settings,
-  // returns the same array with targetDate filled in.
-  // Used when weekly hours or active weeks settings change.
 
   recalculateAll(courses, settings) {
     return courses.map(course => {
@@ -116,56 +101,59 @@ const TargetDateEngine = {
   },
 
   // ── Credit calculator ─────────────────────────────────────
-  // Takes courses array, returns credit totals by category.
-  // Mirrors calculateCreditsPerStudentSheet() from Academic Tracker.
 
-  calculateCredits(courses) {
-    const maxCredits = {
-      'English':       4,
-      'Math':          3,
-      'Science':       3,
-      'Social Studies': 3,
-      'Language':      1,
-      'Fine Arts':     1,
-      'Electives':     8
-    };
+calculateCredits(courses, courseIdToCategory) {
+  const maxCredits = {
+    'English':       4,
+    'Math':          3,
+    'Science':       3,
+    'Social Studies': 3,
+    'Language':      1,
+    'Fine Arts':     1,
+    'Electives':     8
+  };
 
-    const totals = {
-      'English': 0, 'Math': 0, 'Science': 0,
-      'Social Studies': 0, 'Language': 0,
-      'Fine Arts': 0, 'Electives': 0
-    };
+  const totals = {
+    'English': 0, 'Math': 0, 'Science': 0,
+    'Social Studies': 0, 'Language': 0,
+    'Fine Arts': 0, 'Electives': 0
+  };
 
-    courses.forEach(course => {
-      // Count completed and transfer courses
-      if (!course.completed && !course.transfer) return;
+  const lookup = courseIdToCategory || {};
 
-      const credit   = Number(course.credit) || 0;
-      let   category = this._normalizeCategory(course.subject || '');
+  courses.forEach(course => {
+    // Count completed and transfer courses
+    if (!course.completed && !course.transfer) return;
 
-      if (!totals.hasOwnProperty(category)) category = 'Electives';
+    const credit = Number(course.credit) || 0;
+    const courseId = String(course.courseId || '').trim();
+    let category = (courseId && lookup[courseId])
+      ? lookup[courseId]
+      : this._normalizeCategory(course.subject || '');
 
-      if (category === 'Electives') {
-        totals['Electives'] += credit;
-      } else {
-        const max     = maxCredits[category] || 0;
-        const space   = Math.max(max - totals[category], 0);
-        const applied = Math.min(credit, space);
-        totals[category]    += applied;
-        totals['Electives'] += credit - applied;
-      }
-    });
+    if (!totals.hasOwnProperty(category)) category = 'Electives';
 
-    // Build summary array
-    const order = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
+    if (category === 'Electives') {
+      totals['Electives'] += credit;
+    } else {
+      const max     = maxCredits[category] || 0;
+      const space   = Math.max(max - totals[category], 0);
+      const applied = Math.min(credit, space);
+      totals[category]    += applied;
+      totals['Electives'] += credit - applied;
+    }
+  });
 
-    return order.map(cat => ({
-      category:   cat,
-      earned:     Math.round(totals[cat] * 10) / 10,
-      max:        maxCredits[cat] || 0,
-      remaining:  Math.max((maxCredits[cat] || 0) - totals[cat], 0)
-    }));
-  },
+  // Build summary array
+  const order = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
+
+  return order.map(cat => ({
+    category:   cat,
+    earned:     Math.round(totals[cat] * 10) / 10,
+    max:        maxCredits[cat] || 0,
+    remaining:  Math.max((maxCredits[cat] || 0) - totals[cat], 0)
+  }));
+},
 
   // ── Private helpers ───────────────────────────────────────
 
@@ -207,20 +195,4 @@ const TargetDateEngine = {
   }
 
 };
-
-
-// ============================================================
-// Quick test — run in browser console to verify:
-// ============================================================
-//
-// TargetDateEngine.calculate(49, '2026-01-06', {
-//   weeklyHours: 10,
-//   activeWeeks: { w1: true, w2: true, w3: true, w4: true }
-// });
-// Expected: a date string approximately 5-6 months out
-//
-// TargetDateEngine.calculate(49, '2026-01-06', {
-//   weeklyHours: 10,
-//   activeWeeks: { w1: true, w2: false, w3: true, w4: false }
-// });
-// Expected: further out since only 2 weeks per month are active
+</script>
