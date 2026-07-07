@@ -14,6 +14,10 @@ let _hsMonthlyByStudent = {};
 let _hsMonthlyCohort    = [];
 let _tradeMonthlyCohort = [];
 
+// Small reusable warning glyph — same path as ICONS.alertTri, sized for
+// inline use in status text. Uses currentColor so it inherits whatever
+// color the surrounding span is set to, instead of relying on an emoji
+// glyph that renders differently (and in color) across platforms.
 const _warnGlyph = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px;vertical-align:-1px;display:inline-block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>';
 
 // ── Session state ────────────────────────────────────────────
@@ -21,7 +25,11 @@ let _currentRole       = SERVER_ROLE       || '';
 let _currentName       = SERVER_NAME       || '';
 let _currentEmployeeId = SERVER_EMPLOYEE_ID || '';
 
-
+// ────────────────────────────────────────────────────────────
+// Themed confirm / prompt / toast — replaces native alert()/confirm()/
+// prompt() so error and confirmation states stay inside the app's own
+// theme instead of dropping into an unstyled browser dialog.
+// ────────────────────────────────────────────────────────────
 function _ensureThemedDialogEl() {
   if (document.getElementById('themedDialog')) return;
   const el = document.createElement('div');
@@ -513,11 +521,12 @@ function _getFilteredSorted() {
   return filtered;
 }
 // ── COUNSELOR FILTER ─────────────────────────────────────────
-
+// Loaded once on dashboard init, persisted to localStorage so
+// the selection survives page refreshes.
  
 const COUNSELOR_STORAGE_KEY = 'tjc_counselor_filter';
-let _counselorList = []; 
-let _activeCounselorTrades = null; 
+let _counselorList = []; // full list from Staff Roles
+let _activeCounselorTrades = null; // Set of trade names, or null = all
  
 function initCounselorFilter() {
   google.script.run
@@ -535,6 +544,7 @@ function initCounselorFilter() {
         sel.appendChild(opt);
       });
  
+      // Restore saved selection
       const saved = localStorage.getItem(COUNSELOR_STORAGE_KEY);
       if (saved) {
         sel.value = saved;
@@ -564,6 +574,7 @@ function _applySelectedCounselor(name) {
 
   _activeCounselorTrades = new Set(counselor.trades.map(t => t.toLowerCase()));
 
+  // Update UI chrome
   document.getElementById('counselorClearBtn').style.display = '';
   document.getElementById('counselorFilterLabel').textContent =
     'Showing: ' + counselor.trades.join(', ');
@@ -581,9 +592,70 @@ function clearCounselorFilter() {
 }
 
 function _counselorMatchesTrade(trade) {
-  if (!_activeCounselorTrades) return true;
+  if (!_activeCounselorTrades) return true; // no filter active — show all
   return _activeCounselorTrades.has(String(trade || '').toLowerCase());
 }
+
+// ── TEACHER FILTER ─────────────────────────────────────────
+
+const TEACHER_STORAGE_KEY = 'tjc_teacher_filter';
+let _hsdAssignments   = {};   // studentId -> 'HSD 2' | 'HSD3' | 'HSE/HSD1'
+let _activeHSDFilter  = null; // currently selected HS class, or null = all
+
+function initTeacherFilter() {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        document.getElementById('teacherFilterBar').style.display = 'none';
+        return;
+      }
+      _hsdAssignments = result.assignments || {};
+
+      // Restore saved selection
+      const saved = localStorage.getItem(TEACHER_STORAGE_KEY);
+      if (saved) {
+        const sel = document.getElementById('teacherSelect');
+        sel.value = saved;
+        if (sel.value) _applySelectedTeacher(saved);
+      }
+    })
+    .withFailureHandler(function() {
+      document.getElementById('teacherFilterBar').style.display = 'none';
+    })
+    .getStudentHSDAssignments();
+}
+
+function applyTeacherFilter() {
+  const sel = document.getElementById('teacherSelect');
+  const hsdClass = sel.value;
+  if (!hsdClass) {
+    clearTeacherFilter();
+    return;
+  }
+  localStorage.setItem(TEACHER_STORAGE_KEY, hsdClass);
+  _applySelectedTeacher(hsdClass);
+}
+
+function _applySelectedTeacher(hsdClass) {
+  _activeHSDFilter = hsdClass;
+
+  document.getElementById('teacherClearBtn').style.display = '';
+  document.getElementById('teacherFilterLabel').textContent = 'Showing: ' + hsdClass;
+
+  applyFilters();
+}
+
+function clearTeacherFilter() {
+  _activeHSDFilter = null;
+  localStorage.removeItem(TEACHER_STORAGE_KEY);
+  document.getElementById('teacherSelect').value = '';
+  document.getElementById('teacherClearBtn').style.display = 'none';
+  document.getElementById('teacherFilterLabel').textContent = '';
+  applyFilters();
+}
+
+
+
 // ─────────────────────────────────────────────────────────────
 // Table Rendering
 // ─────────────────────────────────────────────────────────────
@@ -792,6 +864,8 @@ function openModal(id) {
     document.getElementById('modalBody').innerHTML   = buildModalBody(p);
     document.getElementById('detailModal').classList.remove('hidden');
   } catch(err) {
+    // Log the real detail to the console for debugging, but keep the
+    // person's screen calm — a toast, not a debug dump in a blank tab.
     console.error('Error opening modal for', p.displayName, err);
     showToast('Could not open details for ' + p.displayName + ' — try refreshing the page.', 'error');
   }
@@ -972,6 +1046,8 @@ function buildInterventionSection(iv) {
     const g = iv.gradGap.trim();
     const isOver   = g.includes('over limit') || g.startsWith('⛔');
     const isYellow = g.startsWith('🟡');
+    // Derived from the same theme tokens as everywhere else, instead of
+    // a hand-picked rgba snapshot that only matched the dark theme.
     const bgColor  = isOver ? 'var(--high-glow)' : isYellow ? 'var(--medium-glow)' : 'var(--accent-glow)';
     const txtColor = isOver ? 'var(--high)' : isYellow ? 'var(--medium)' : 'var(--low)';
     html += `<div style="background:${bgColor};border-radius:6px;padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;">
@@ -1542,6 +1618,7 @@ function confirmScheduleUpload() {
             <button class="btn-override" onclick="closeScheduleUpload()" style="max-width:160px;">Close</button>
           </div>`;
         status.className = 'schedule-status';
+        // Don't auto-close so staff can read the skipped list
       } else {
         status.textContent = `✓ Saved ${result.studentCount} student${result.studentCount !== 1 ? 's' : ''} for ${result.weekLabel}`;
         status.className   = 'schedule-status ok';
@@ -2294,6 +2371,7 @@ function applyPreset(value) {
 let _staleOnlyActive = false;
 
 const _originalGetFilteredSorted = _getFilteredSorted;
+// Override to inject stale filtering
 function _getFilteredSorted() {
   let results = allProfiles.filter(p => {
     if (activeRisk !== 'ALL' && p.risk.level !== activeRisk) return false;
@@ -2322,7 +2400,11 @@ function _getFilteredSorted() {
       ).toLowerCase();
       if (!_activeCounselorTrades.has(tradeName)) return false;
     }
-
+    if (_activeHSDFilter) {
+     const studentId = p.academicId || p.id || '';
+     if (_hsdAssignments[studentId] !== _activeHSDFilter) return false;
+    }
+    
     return true;
   });
 
@@ -2388,6 +2470,7 @@ function _wirePresetSelectListener() {
   });
 }
 
+// Also clear stale filter when chips are clicked manually
 const _origSetRiskFilter = setRiskFilter;
 setRiskFilter = function(el) { _staleOnlyActive = false; _origSetRiskFilter(el); };
 const _origSetTypeFilter = setTypeFilter;
@@ -2586,12 +2669,18 @@ function buildRiskSparkline(p) {
   </div>`;
 }
 
+// Print student detail
 
 // ============================================================
 // PRINT DOCUMENT BUILDERS
+// This REPLACES printOverview(), printTranscript(), and the
+// 'afterprint' listener entirely. Print output is now a fully
+// separate #printDoc element built from the same data already
+// in memory (currentModalProfile, _transcriptData) — not a
+// recolored copy of the on-screen modal.
 // ============================================================
 
-function _escP(str) { return esc(str); }
+function _escP(str) { return esc(str); } // alias for readability in this section
 
 function _docId(studentId, kind) {
   const now = new Date();
@@ -2724,6 +2813,9 @@ function _buildPrintOverviewDoc(p) {
   }
 
   // Schedule + TABE side by side, built synchronously from cached
+  // data if available (schedule is fetched async elsewhere in the
+  // app — for print we skip the async fetch and just omit the
+  // section if nothing is cached yet, rather than block printing).
   let scheduleHtml = '';
   const scheduleContainer = document.getElementById('schedule-' + String(p.academicId || p.id || '').replace(/\W/g, ''));
   if (scheduleContainer && scheduleContainer.dataset.printRows) {
@@ -3134,7 +3226,6 @@ function buildScheduleSection(p) {
     </div>
   </div>`;
 }
-  
 // ── buildTABESection ──────────────────────────────────────
 function buildTABESection(p) {
   if (!p.tabe || (!p.tabe.math && !p.tabe.reading)) return '';
@@ -3263,6 +3354,8 @@ function switchModalTab(tab) {
   overviewView.classList.toggle('hidden',   tab !== 'overview');
   transcriptView.classList.toggle('hidden', tab !== 'transcript');
  
+  // Widen the modal box only for the data-dense Transcript tab —
+  // matches the .modal-wide treatment the Productivity modal uses.
   const modalBox = document.querySelector('#detailModal .modal-box');
   if (modalBox) modalBox.classList.toggle('tr-wide', tab === 'transcript');
  
@@ -3271,7 +3364,17 @@ function switchModalTab(tab) {
   }
 }
  
-
+// REPLACEMENT for the final return of buildModalBody(p).
+// Everything above this in the real function (the `left += ...`
+// and `right += ...` accumulation) is unchanged — only the
+// return statement changes, from:
+//
+//   return `<div class="modal-columns">
+//     <div class="modal-col">${left}</div>
+//     <div class="modal-col">${right}</div>
+//   </div>`;
+//
+// to:
 function _buildModalBodyReturn(left, right) {
   return `
     <div class="modal-tab-bar">
@@ -3306,7 +3409,8 @@ function _buildModalBodyReturn(left, right) {
 
 const TRANSCRIPT_COURSE_CATEGORIES = ['English','Math','Science','Social Studies','Language','Fine Arts','Electives'];
 
-let _courseCatalogue = null; 
+let _courseCatalogue = null; // cached across the session — course list rarely changes
+
 function _getCourseIdCategoryMap() {
   const map = {};
   (_courseCatalogue || []).forEach(c => {
@@ -3523,6 +3627,7 @@ function _openTranscriptAddRow(blockNum) {
   const body   = document.getElementById(bodyId);
   if (!body) return;
 
+  // Remove any previous "new row" form if one is already open
   const existing = document.getElementById('tr-new-row-wrap');
   if (existing) existing.remove();
 
@@ -3531,6 +3636,7 @@ function _openTranscriptAddRow(blockNum) {
   wrap.innerHTML = `<td colspan="8" style="padding:0;">
     <div id="tr-new-panel" class="tr-edit-panel" style="margin:10px 14px;"></div>
   </td>`;
+  // Insert right before the "+ Add Course" row (which is always last)
   const addRow = body.querySelector('.tr-row-add');
   body.insertBefore(wrap, addRow);
 
@@ -3564,8 +3670,13 @@ function _renderTranscriptEditForm(panelId, course, isNew) {
         <input type="text" id="${panelId}-courseNameFree" value="${esc(course.courseName || '')}" placeholder="Course name" style="margin-top:${_courseCatalogue && _courseCatalogue.length ? '6px' : '0'};">
       </div>
       <div class="tr-edit-field">
-        <label>Subject</label>
-        <input type="text" id="${panelId}-subject" value="${esc(course.subject || '')}" placeholder="e.g. Math">
+        <label>Category</label>
+        <select id="${panelId}-subject">
+          <option value="">— Select category —</option>
+          ${TRANSCRIPT_COURSE_CATEGORIES.map(cat =>
+            `<option value="${esc(cat)}" ${course.subject === cat ? 'selected' : ''}>${esc(cat)}</option>`
+          ).join('')}
+        </select>
       </div>
 
       <div class="tr-edit-field">
@@ -3664,7 +3775,12 @@ function _recalcTranscriptPreview(panelId) {
 function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
   const studentId = _transcriptStudentId;
   const statusEl  = document.getElementById(panelId + '-status');
-
+  
+  const subjectVal = document.getElementById(panelId + '-subject').value;
+  if (!subjectVal) {
+    if (statusEl) { statusEl.textContent = 'Please select a category.'; statusEl.style.color = 'var(--high)'; }
+    return;
+  }
   const courseName = (document.getElementById(panelId + '-courseNameFree') || {}).value || '';
   if (!courseName.trim()) {
     if (statusEl) { statusEl.textContent = 'Course name is required.'; statusEl.style.color = 'var(--high)'; }
@@ -3710,7 +3826,9 @@ function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
   function onSaved(result) {
     if (!result || result.success === false) { onFailed(result); return; }
     showToast(isNew ? 'Course added.' : 'Course updated.');
-    
+    // Refetch the whole transcript so row indexes / target dates / block
+    // layout stay perfectly in sync with the sheet rather than patching
+    // local state and risking drift.
     _transcriptData = null;
     _transcriptEditingRow = null;
     _loadTranscriptTab();
@@ -3846,7 +3964,7 @@ function _toggleBulkPacingRow(studentId, checked) {
 function _toggleAllPacingRows(checked) {
   const filtered = _getFilteredPacingStudents();
   filtered.forEach(s => {
-    if (!s.hasSchedule) return; 
+    if (!s.hasSchedule) return; // don't auto-select students with nothing to apply
     if (checked) _bulkPacingSelected.add(s.studentId);
     else         _bulkPacingSelected.delete(s.studentId);
   });
@@ -3869,6 +3987,9 @@ function _setPacingOverride(studentId, field, value) {
   _bulkPacingOverrides[studentId] = current;
 }
 
+// Cycles a row's active-weeks pattern through the common presets,
+// so staff don't have to hand-edit checkboxes for the odd student
+// whose rotation doesn't match the biweekly guess.
 const PACING_WEEK_PRESETS = [
   { w1: true,  w2: false, w3: true,  w4: false }, // weeks 1 & 3
   { w1: false, w2: true,  w3: false, w4: true  }, // weeks 2 & 4
@@ -3932,6 +4053,9 @@ function _applyBulkPacing() {
         (result.skippedCount ? ` — ${result.skippedCount} skipped (not found).` : '.');
       status.style.color = 'var(--low)';
       showToast(`Pacing settings applied to ${result.applied} students.`);
+
+      // Force a fresh scan next time the modal opens, so "Currently
+      // Saved" reflects what was just written.
       _bulkPacingData = null;
       _bulkPacingSelected = new Set();
       _bulkPacingOverrides = {};
@@ -3951,7 +4075,9 @@ function _cancelTranscriptAdd() {
 
 // ── Pacing settings dialog (weekly hours + active weeks) ──────
 function _openTranscriptSettings() {
-  _ensureThemedDialogEl(); 
+  _ensureThemedDialogEl(); // reuse the themed dialog shell's DOM element as a base
+  // Build a small custom panel instead of using themedPrompt (which is
+  // single-input) — swap in transcript-specific content, same overlay pattern.
   const el = document.getElementById('themedDialog');
   el.querySelector('.modal-box').innerHTML = `
     <div class="modal-header"><h2>Pacing Settings</h2></div>
@@ -4000,6 +4126,8 @@ function _saveTranscriptSettings() {
       _transcriptSettings = newSettings;
       document.getElementById('themedDialog').classList.add('hidden');
       showToast('Pacing settings updated — target dates recalculated.');
+      // Recompute target dates for all loaded courses client-side (no
+      // need to hit the server again — TargetDateEngine mirrors it exactly).
       if (_transcriptData && _transcriptData.courses) {
         _transcriptData.courses = TargetDateEngine.recalculateAll(_transcriptData.courses, _transcriptSettings);
       }
