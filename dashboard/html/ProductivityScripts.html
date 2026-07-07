@@ -12,14 +12,7 @@ let _rosterNames         = null;
 let _cohortChartInstance = null;
 let _studentChartInst    = null;
 
-// ─────────────────────────────────────────────────────────────
-// Theme color resolution for Chart.js
-// Canvas cannot resolve CSS custom properties on its own — a bare
-// "var(--high)" string passed to a canvas fillStyle is silently
-// ignored. So charts read the *current* computed values of the
-// theme's tokens once per render and build concrete rgba() strings
-// from them, instead of hardcoding one theme's palette permanently.
-// ─────────────────────────────────────────────────────────────
+
 function _hexToRgba(hex, alpha) {
   hex = String(hex || '').trim();
   if (hex[0] === '#') {
@@ -30,7 +23,6 @@ function _hexToRgba(hex, alpha) {
     const b = parseInt(h.substring(4, 6), 16);
     return `rgba(${r},${g},${b},${alpha})`;
   }
-  // Already a resolved color (e.g. "rgb(...)") — return as-is.
   return hex;
 }
 
@@ -103,8 +95,6 @@ function _loadProductivityData() {
   if (statusEl) { statusEl.textContent = ''; statusEl.style.color = 'var(--text-muted)'; }
   document.getElementById('productivityContent').classList.add('hidden');
 
-  // Show a message if it takes too long — appended next to the skeleton
-  // rather than replacing it, so the loading state doesn't flash empty.
   const timeoutHandle = setTimeout(() => {
     if (statusEl) statusEl.textContent = 'Still loading… (if this takes more than 60 seconds, there may be an error)';
   }, 15000);
@@ -422,7 +412,11 @@ function renderStudentProductivity() {
   const name    = document.getElementById('prodStudentSelect').value;
   const student = _productivityData.find(s => s.name === name);
   if (!student) return;
-
+ 
+  // ── Filter out weeks with 0 assigned hours (student was in ──
+  // ── Trades / not scheduled that week — nothing meaningful to graph) ──
+  const activeWeeks = student.weeks.filter(w => w.assigned !== null && w.assigned > 0);
+ 
   // Trend badge
   const trendEl  = document.getElementById('prodStudentTrend');
   const trendMap = {
@@ -436,18 +430,18 @@ function renderStudentProductivity() {
   trendEl.style.color      = t.color;
   trendEl.style.border     = '1px solid ' + t.color;
   trendEl.title            = 'Whether this student\'s time usage has been improving, declining, or staying about the same over the weeks tracked.';
-
-  const labels       = student.weeks.map(w => w.label);
-  const productivity = student.weeks.map(w => w.productivity);
-  const assigned     = student.weeks.map(w => w.assigned);
-  const worked       = student.weeks.map(w => w.worked);
+ 
+  const labels       = activeWeeks.map(w => w.label);
+  const productivity = activeWeeks.map(w => w.productivity);
+  const assigned     = activeWeeks.map(w => w.assigned);
+  const worked       = activeWeeks.map(w => w.worked);
   const cohortAvgs   = labels.map(l => {
     const c = (_cohortSummary || []).find(w => w.label === l);
     return c ? c.avgProductivity : null;
   });
-
+ 
   if (_studentChartInst) { _studentChartInst.destroy(); _studentChartInst = null; }
-
+ 
   const cc   = _chartColors();
   const ctx2 = document.getElementById('studentChart').getContext('2d');
   _studentChartInst = new Chart(ctx2, {
@@ -540,23 +534,23 @@ function renderStudentProductivity() {
       }
     }
   });
-
+ 
   // Table
   const cohortMap = {};
   (_cohortSummary || []).forEach(w => { cohortMap[w.label] = w.avgProductivity; });
-
-  document.getElementById('studentTableBody').innerHTML = student.weeks.map(w => {
+ 
+  document.getElementById('studentTableBody').innerHTML = activeWeeks.map(w => {
     const prod    = w.productivity;
     const avg     = cohortMap[w.label] ?? null;
     const diff    = prod !== null && avg !== null ? prod - avg : null;
     const color   = _prodColor(prod);
     const isError = prod !== null && prod > PROD_ERROR_THRESHOLD;
-
+ 
     const diffHtml = diff === null ? '—'
       : diff > 5  ? `<span style="color:var(--low);">+${diff.toFixed(1)}%</span>`
       : diff < -5 ? `<span style="color:var(--high);">${diff.toFixed(1)}%</span>`
       : `<span style="color:var(--text-muted);">About avg</span>`;
-
+ 
     return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}">
       <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.label)}</td>
       <td style="padding:8px 10px;text-align:center;">${w.assigned !== null ? w.assigned.toFixed(1) + ' h' : '—'}</td>
@@ -567,7 +561,11 @@ function renderStudentProductivity() {
       <td style="padding:8px 10px;text-align:center;">${diffHtml}</td>
     </tr>`;
   }).join('');
-
+ 
+  // ── Suggested weekly hours, based on this student's own recent ──
+  // ── worked-hours trend (weighted toward their most recent weeks) ──
+  const suggestion = _computeSuggestedHours(activeWeeks);
+ 
   // Summary chips
   const hasErrors = student.weeks.some(w => w.productivity !== null && w.productivity > PROD_ERROR_THRESHOLD);
   document.getElementById('prodStudentSummary').innerHTML = [
@@ -577,8 +575,10 @@ function renderStudentProductivity() {
       tip: 'The total number of academic hours this student logged from April through June.' },
     { label: 'Total Scheduled',    value: student.totalAssigned.toFixed(1) + ' h',
       tip: 'The total number of academic hours this student was scheduled for from April through June.' },
-    { label: 'Weeks Tracked',      value: student.weeksWithData,
-      tip: 'How many weeks this student had scheduled hours and is included in the analysis.' },
+    { label: 'Weeks Tracked',      value: activeWeeks.length,
+      tip: 'How many weeks this student had scheduled hours and is included in the analysis (weeks in Trades are excluded).' },
+    { label: 'Suggested Weekly Hours', value: suggestion !== null ? suggestion + ' h' : '—',
+      tip: 'A recommended weekly scheduled-hours target based on how many hours this student actually tends to complete, weighted toward their most recent weeks. Use this to set more realistic pacing than a flat default.' },
   ].map(c => `
     <div class="prod-chip" title="${esc(c.tip)}" style="cursor:help;">
       <div class="prod-chip-label">${c.label}</div>
@@ -590,6 +590,23 @@ function renderStudentProductivity() {
         One or more weeks show over ${PROD_ERROR_THRESHOLD}% usage, which usually means the scheduled hours were entered too low. Check the Productivity Data sheet for this student.
       </div>
     </div>` : '');
+}
+function _computeSuggestedHours(activeWeeks) {
+  const withWorked = activeWeeks.filter(w => w.worked !== null && w.worked > 0);
+  if (!withWorked.length) return null;
+ 
+  const recent = withWorked.slice(-4);
+
+  let weightedSum = 0;
+  let weightTotal = 0;
+  recent.forEach((w, i) => {
+    const weight = i + 1;
+    weightedSum += w.worked * weight;
+    weightTotal += weight;
+  });
+ 
+  const weightedAvg = weightedSum / weightTotal;
+  return Math.max(1, Math.round(weightedAvg));
 }
 let _hsProgressChartInst    = null;
 let _tradeProgressChartInst = null;
