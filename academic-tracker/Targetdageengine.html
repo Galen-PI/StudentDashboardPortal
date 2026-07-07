@@ -1,4 +1,14 @@
 <script>
+const COURSE_ID_PREFIX_MAP = {
+  'EL': 'Electives',
+  'EN': 'English',
+  'FA': 'Fine Arts',
+  'LA': 'Language',
+  'MA': 'Math',
+  'SC': 'Science',
+  'SS': 'Social Studies',
+};
+
 const TargetDateEngine = {
 
   // ── Main calculation ───────────────────────────────────────
@@ -101,61 +111,78 @@ const TargetDateEngine = {
   },
 
   // ── Credit calculator ─────────────────────────────────────
+  // Category is now derived directly from the Course ID's 2-letter
+  // prefix (EL/EN/FA/LA/MA/SC/SS) rather than a catalogue lookup or
+  // free-text Subject matching. This works for both catalogue
+  // courses and manually-assigned transfer-course IDs, as long as
+  // the prefix was chosen to match the right category.
 
-calculateCredits(courses, courseIdToCategory) {
-  const maxCredits = {
-    'English':       4,
-    'Math':          3,
-    'Science':       3,
-    'Social Studies': 3,
-    'Language':      1,
-    'Fine Arts':     1,
-    'Electives':     8
-  };
+  calculateCredits(courses, courseIdToCategory) {
+    const maxCredits = {
+      'English':       4,
+      'Math':          3,
+      'Science':       3,
+      'Social Studies': 3,
+      'Language':      1,
+      'Fine Arts':     1,
+      'Electives':     8
+    };
 
-  const totals = {
-    'English': 0, 'Math': 0, 'Science': 0,
-    'Social Studies': 0, 'Language': 0,
-    'Fine Arts': 0, 'Electives': 0
-  };
+    const totals = {
+      'English': 0, 'Math': 0, 'Science': 0,
+      'Social Studies': 0, 'Language': 0,
+      'Fine Arts': 0, 'Electives': 0
+    };
 
-  const lookup = courseIdToCategory || {};
+    courses.forEach(course => {
+      if (!course.completed && !course.transfer) return;
+      const credit = Number(course.credit) || 0;
 
-  courses.forEach(course => {
-    // Count completed and transfer courses
-    if (!course.completed && !course.transfer) return;
+      let category = this._categoryFromCourseId(course.courseId);
 
-    const credit = Number(course.credit) || 0;
-    const courseId = String(course.courseId || '').trim();
-    let category = (courseId && lookup[courseId])
-      ? lookup[courseId]
-      : this._normalizeCategory(course.subject || '');
+      // Fall back to subject-text guessing only if the Course ID
+      // doesn't parse to a known prefix (e.g. truly blank/malformed ID)
+      if (!category) {
+        category = this._normalizeCategory(course.subject || '');
+      }
 
-    if (!totals.hasOwnProperty(category)) category = 'Electives';
+      if (!totals.hasOwnProperty(category)) category = 'Electives';
 
-    if (category === 'Electives') {
-      totals['Electives'] += credit;
-    } else {
-      const max     = maxCredits[category] || 0;
-      const space   = Math.max(max - totals[category], 0);
-      const applied = Math.min(credit, space);
-      totals[category]    += applied;
-      totals['Electives'] += credit - applied;
-    }
-  });
+      if (category === 'Electives') {
+        totals['Electives'] += credit;
+      } else {
+        const max     = maxCredits[category] || 0;
+        const space   = Math.max(max - totals[category], 0);
+        const applied = Math.min(credit, space);
+        totals[category]    += applied;
+        totals['Electives'] += credit - applied;
+      }
+    });
 
-  // Build summary array
-  const order = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
+    // Build summary array
+    const order = ['English', 'Math', 'Science', 'Social Studies', 'Language', 'Fine Arts', 'Electives'];
 
-  return order.map(cat => ({
-    category:   cat,
-    earned:     Math.round(totals[cat] * 10) / 10,
-    max:        maxCredits[cat] || 0,
-    remaining:  Math.max((maxCredits[cat] || 0) - totals[cat], 0)
-  }));
-},
+    return order.map(cat => ({
+      category:   cat,
+      earned:     Math.round(totals[cat] * 10) / 10,
+      max:        maxCredits[cat] || 0,
+      remaining:  Math.max((maxCredits[cat] || 0) - totals[cat], 0)
+    }));
+  },
 
   // ── Private helpers ───────────────────────────────────────
+
+  // Parses the 2-letter prefix off a Course ID (e.g. "MA-0018-S1",
+  // case-insensitive) and returns the matching category name, or
+  // null if the ID is blank, malformed, or uses an unrecognized prefix.
+  _categoryFromCourseId(courseId) {
+    const id = String(courseId || '').trim();
+    if (!id) return null;
+    const match = id.match(/^([A-Za-z]{2})-/);
+    if (!match) return null;
+    const prefix = match[1].toUpperCase();
+    return COURSE_ID_PREFIX_MAP[prefix] || null;
+  },
 
   _countWeekdaysInMonthWeek(date, week) {
     const year     = date.getFullYear();
