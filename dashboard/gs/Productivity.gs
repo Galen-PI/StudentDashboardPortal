@@ -14,7 +14,6 @@ function getProductivityPayload() {
 
     const hubSS = SpreadsheetApp.openById(SS_HUB);
 
-    // ── rosterNames from Name Mapping (cols B, C, D) ─────────
     const rosterNames = new Set();
     const mapSheet = hubSS.getSheetByName(SHEET_MAPPING);
     if (mapSheet && mapSheet.getLastRow() >= 2) {
@@ -44,8 +43,7 @@ function getProductivityPayload() {
       tabe:        data,
     }));
 
-    // ── HS + Trade monthly cohort — read straight from the dashboard,
-    //     already correctly shaped by Cohorts.gs. No reshaping here.
+    // ── HS + Trade monthly cohort
     const dashboard = getDashboardData();
     const hsMonthlyCohort    = dashboard.hsMonthlyCohort    || [];
     const tradeMonthlyCohort = dashboard.tradeMonthlyCohort || [];
@@ -79,9 +77,6 @@ function clearProductivityCache() {
 }
 
 // ── Per-student weekly productivity data ──────────────────────
-// Reads the Productivity Data sheet. Column layout:
-//   Col A: Student Name
-//   Col B+: Alternating "Xxx WkN Worked" / "Xxx WkN Assigned"
 function getProductivityData(hubSS) {
   try {
     const sheet = hubSS.getSheetByName(SHEET_PRODUCTIVITY);
@@ -194,36 +189,35 @@ function getProductivityData(hubSS) {
 }
 
 // ── Parse hours from a cell ───────────────────────────────────
-// Handles Date objects (time values stored as 1899-12-30 epoch),
-// numeric hours, HH:MM:SS strings, and NOT_IN_MONTH sentinel.
 function _parseProductivityHours(val) {
   if (val === null || val === undefined) return null;
   if (String(val).trim() === 'NOT_IN_MONTH') return null;
   if (val === '' || val === 0) return 0;
-
+ 
   if (val instanceof Date) {
-    // Google Sheets stores time durations as Date objects anchored
-    // to 1899-12-30. getHours() (local time) gives the correct value.
-    const h = val.getHours() + val.getMinutes() / 60 + val.getSeconds() / 3600;
+    // Sheets duration cells use Dec 30, 1899 as their zero point.
+    // Using elapsed time from that epoch (rather than .getHours())
+    // correctly captures durations of 24 hours or more.
+    const SHEETS_EPOCH = new Date(1899, 11, 30);
+    const diffMs = val.getTime() - SHEETS_EPOCH.getTime();
+    const h = diffMs / (1000 * 60 * 60);
     return h > 0 ? +h.toFixed(2) : 0;
   }
-
+ 
   const str = String(val).trim();
   if (!str || str === '—' || str === '-') return 0;
-
+ 
   if (str.includes(':')) {
     const parts = str.split(':').map(Number);
     if (parts.length === 3) return +((parts[0] + parts[1] / 60 + parts[2] / 3600)).toFixed(2);
     if (parts.length === 2) return +((parts[0] + parts[1] / 60)).toFixed(2);
   }
-
+ 
   const n = Number(str);
   return isNaN(n) ? 0 : +n.toFixed(2);
 }
 
 // ── Cohort weekly summary ─────────────────────────────────────
-// Internal version — takes productivityData array, returns cohort
-// array in the shape ProductivityScripts.html expects.
 function _buildProductivityCohortSummary(productivityData) {
   if (!productivityData || !productivityData.length) return [];
 
@@ -266,7 +260,6 @@ function _buildProductivityCohortSummary(productivityData) {
 }
 
 // ── HS Graduation Predictions (Graduates tab) ─────────────────
-// Public no-arg wrapper called by google.script.run
 function getHSGraduationPredictions() {
   try {
     const dashboard = getDashboardData();
@@ -328,7 +321,6 @@ function runClearAllCaches() {
       alert('Caches cleared. Reloading dashboard...');
       loadData();
       if (typeof _productivityData !== 'undefined') {
-        // Also force the productivity modal to refetch next time it's opened
         _productivityData = null;
         _cohortSummary = null;
         _hsMonthlyCohort = [];
