@@ -1,388 +1,19 @@
 // ============================================================
-// Profiles.gs — Student profile assembly
-// Takes parsed data from all sources and merges it into unified student profile objects. No spreadsheet I/O happens here.
-// ============================================================
-
-// ── Main entry point ──────────────────────────────────────────
-function buildStudentProfiles(
-  nameMap, hsData, hisetData, tradesData,
-  timeData, wirData, tradeMonthlyData,
-  overrides, scheduleData, tabeData, studentCourseData
-) {
-  scheduleData      = scheduleData      || {};
-  tabeData          = tabeData          || {};
-  studentCourseData = studentCourseData || {};
-  nameMap           = nameMap           || [];
-  hsData            = hsData            || [];
-  hisetData         = hisetData         || [];
-  tradesData        = tradesData        || [];
-  timeData          = timeData          || [];
-  tradeMonthlyData  = tradeMonthlyData  || [];
-  overrides         = overrides         || [];
-
-  // ── Index overrides by student ID ────────────────────────
-  const overridesByStudent = {};
-  overrides.forEach(o => {
-    (overridesByStudent[o.studentId] = overridesByStudent[o.studentId] || []).push(o);
-  });
-
-  // ── Build merge map (sourceId -> targetId) ────────────────
-  const mergeMap = {};
-  overrides.forEach(o => {
-    if (o.type === 'merged_into' && o.value) mergeMap[o.studentId] = String(o.value).trim();
-  });
-
-  // ── Build lookup indexes (strict + loose) ─────────────────
-  const hsIdx          = _indexBy(hsData,    r => _norm(r.student));
-  const hisetIdx       = _indexBy(hisetData, r => _norm(r.student));
-  const tradesIdx      = _indexByMulti(tradesData, r => _norm(r.student));
-  const timeIdx        = _indexBy(timeData,  r => _norm(r.student));
-  const hsLooseIdx     = _indexBy(hsData,    r => _normLoose(r.student));
-  const hisetLooseIdx  = _indexBy(hisetData, r => _normLoose(r.student));
-  const tradesLooseIdx = _indexByMulti(tradesData, r => _normLoose(r.student));
-  const timeLooseIdx   = _indexBy(timeData,  r => _normLoose(r.student));
-
-  // ── WIR index ─────────────────────────────────────────────
-  const wirIdx       = {};
-  const wirPrefixIdx = {};
-  if (wirData && wirData.rows) {
-    wirData.rows.forEach(r => {
-      const key    = _norm(r.student);
-      const prefix = key.slice(0, 20);
-      if (!wirIdx[key])          wirIdx[key]          = r;
-      if (!wirPrefixIdx[prefix]) wirPrefixIdx[prefix] = r;
-    });
-  }
-  const wirWeekLabel = wirData ? wirData.weekLabel : null;
-  function _wirLookup(normName) {
-    return wirIdx[normName] || wirPrefixIdx[normName.slice(0, 20)] || null;
-  }
-
-  // ── Trade monthly index ───────────────────────────────────
-  const tradeMonthlyIdx  = {};
-  const tradeCompleteIdx = {};
-  tradeMonthlyData.forEach(r => {
-    const key = _norm(r.student) + '||' + _norm(r.trade);
-    tradeMonthlyIdx[key] = r;
-    const months = r.months || [];
-    if (months.some(m => m.endOverallPct !== null && m.endOverallPct >= 100)) {
-      const studentKey = _norm(r.student);
-      (tradeCompleteIdx[studentKey] = tradeCompleteIdx[studentKey] || []).push(r.trade);
-    }
-  });
-
-  function _completedTrades(normNames) {
-    const out = new Set();
-    normNames.forEach(n => { (tradeCompleteIdx[n] || []).forEach(t => out.add(t)); });
-    return [...out];
-  }
-
-  // ── Build profiles from Name Mapping ──────────────────────
-  const profiles  = [];
-  const seenIds   = new Set();
-  const seenNorms = new Set();
-  const seenLoose = new Set();
-
-  nameMap.forEach(map => {
-    const rawId = String(map.id || '').trim();
-    const id    = rawId || _tempId(map.masterSheet || map.academicName || map.tradesName);
-
-    // Skip fully completed students (both trade and academic done)
-    if (map.tradeCompleteFlag && map.academicCompleteFlag) {
-      if (map.tradesName)   { seenNorms.add(_norm(map.tradesName));   seenLoose.add(_normLoose(map.tradesName)); }
-      if (map.academicName) { seenNorms.add(_norm(map.academicName)); seenLoose.add(_normLoose(map.academicName)); }
-      if (map.masterSheet)  { seenNorms.add(_norm(map.masterSheet));  seenLoose.add(_normLoose(map.masterSheet)); }
-      if (rawId) seenIds.add(rawId);
-      return;
-    }
-
-    if (seenIds.has(id)) {
-      if (map.tradesName)   { seenNorms.add(_norm(map.tradesName));   seenLoose.add(_normLoose(map.tradesName)); }
-      if (map.academicName) { seenNorms.add(_norm(map.academicName)); seenLoose.add(_normLoose(map.academicName)); }
-      if (map.masterSheet)  { seenNorms.add(_norm(map.masterSheet));  seenLoose.add(_normLoose(map.masterSheet)); }
-      return;
-    }
-
-    seenIds.add(id);
-    const normTrades    = _norm(map.tradesName);
-    const normAcademic  = _norm(map.academicName);
-    const normMaster    = _norm(map.masterSheet);
-    const looseTrades   = _normLoose(map.tradesName);
-    const looseAcademic = _normLoose(map.academicName);
-    const looseMaster   = _normLoose(map.masterSheet);
-
-    if (normTrades)    seenNorms.add(normTrades);
-    if (normAcademic)  seenNorms.add(normAcademic);
-    if (normMaster)    seenNorms.add(normMaster);
-    if (looseTrades)   seenLoose.add(looseTrades);
-    if (looseAcademic) seenLoose.add(looseAcademic);
-    if (looseMaster)   seenLoose.add(looseMaster);
-
-    const hsRow    = hsIdx[normAcademic]    || hsIdx[normTrades]    || hsIdx[normMaster]    || hsLooseIdx[looseAcademic]    || hsLooseIdx[looseTrades]    || hsLooseIdx[looseMaster]    || null;
-    const hisetRow = hisetIdx[normAcademic] || hisetIdx[normTrades] || hisetIdx[normMaster] || hisetLooseIdx[looseAcademic] || hisetLooseIdx[looseTrades] || hisetLooseIdx[looseMaster] || null;
-    const tradeRows= tradesIdx[normTrades]  || tradesIdx[normAcademic] || tradesIdx[normMaster] || tradesLooseIdx[looseTrades] || tradesLooseIdx[looseAcademic] || tradesLooseIdx[looseMaster] || [];
-    const timeRow  = timeIdx[normTrades]    || timeIdx[normAcademic]   || timeIdx[normMaster]   || timeLooseIdx[looseTrades]   || timeLooseIdx[looseAcademic]   || timeLooseIdx[looseMaster]   || null;
-    const wirRow   = _wirLookup(normAcademic) || _wirLookup(normTrades) || _wirLookup(normMaster) || null;
-
-    if (tradeRows.length) { seenNorms.add(_norm(tradeRows[0].student)); seenLoose.add(_normLoose(tradeRows[0].student)); }
-    if (hsRow)    { seenNorms.add(_norm(hsRow.student));    seenLoose.add(_normLoose(hsRow.student)); }
-    if (hisetRow) { seenNorms.add(_norm(hisetRow.student)); seenLoose.add(_normLoose(hisetRow.student)); }
-
-    const completedTrades = _completedTrades([normTrades, normAcademic, normMaster].filter(Boolean));
-    const displayName     = map.masterSheet || map.academicName || map.tradesName || id;
-
-    profiles.push(_buildProfile({
-      id, displayName, map,
-      hsRow, hisetRow, tradeRows, timeRow, wirRow, wirWeekLabel,
-      mappingMissing: false,
-      tradeMonthlyIdx, completedTrades,
-      scheduledAcademicHours: scheduleData[map.id] || null,
-      tabe:       tabeData[rawId]                        || null,
-      courseData: studentCourseData[map.academicName]    || null,
-    }));
-  });
-
-  // ── Unmapped HS / HiSET students ──────────────────────────
-  [...hsData, ...hisetData].forEach(row => {
-    const norm  = _norm(row.student);
-    const loose = _normLoose(row.student);
-    if (seenNorms.has(norm) || seenLoose.has(loose)) return;
-    const id = _tempId(row.student);
-    if (seenIds.has(id)) return;
-    seenIds.add(id); seenNorms.add(norm); seenLoose.add(loose);
-    const tradeRows = tradesIdx[norm]  || tradesLooseIdx[loose] || [];
-    const timeRow   = timeIdx[norm]    || timeLooseIdx[loose]   || null;
-    const wirRow    = _wirLookup(norm) || null;
-    if (tradeRows.length) { seenNorms.add(_norm(tradeRows[0].student)); seenLoose.add(_normLoose(tradeRows[0].student)); }
-    profiles.push(_buildProfile({
-      id, displayName: row.student,
-      map: { id: '', masterSheet: '', tradesName: '', academicName: '', tradeCompleteFlag: false, academicCompleteFlag: false },
-      hsRow:    row.type === 'hs'    ? row : null,
-      hisetRow: row.type === 'hiset' ? row : null,
-      tradeRows, timeRow, wirRow, wirWeekLabel,
-      mappingMissing: true, tradeMonthlyIdx,
-      completedTrades: _completedTrades([norm]),
-      scheduledAcademicHours: null, tabe: null, courseData: null,
-    }));
-  });
-
-  // ── Unmapped trades-only students ─────────────────────────
-  [...new Set(tradesData.map(r => _norm(r.student)))].forEach(norm => {
-    const tradeRows   = tradesIdx[norm] || [];
-    const displayName = (tradeRows[0] || {}).student || norm;
-    const loose       = _normLoose(displayName);
-    if (seenNorms.has(norm) || seenLoose.has(loose)) return;
-    const id = _tempId(displayName);
-    if (seenIds.has(id)) return;
-    seenIds.add(id); seenNorms.add(norm); seenLoose.add(loose);
-    profiles.push(_buildProfile({
-      id, displayName,
-      map: { id: '', masterSheet: '', tradesName: displayName, academicName: '', tradeCompleteFlag: false, academicCompleteFlag: false },
-      hsRow: null, hisetRow: null, tradeRows,
-      timeRow:  timeIdx[norm]    || null,
-      wirRow:   _wirLookup(norm) || null,
-      wirWeekLabel, mappingMissing: true, tradeMonthlyIdx,
-      completedTrades: _completedTrades([norm]),
-      scheduledAcademicHours: null, tabe: null, courseData: null,
-    }));
-  });
-
-  // ── Trade-complete-only students (no active trade record) ─
-  Object.keys(tradeCompleteIdx).forEach(norm => {
-    if (seenNorms.has(norm)) return;
-    const sampleRow   = tradeMonthlyData.find(r => _norm(r.student) === norm);
-    const displayName = sampleRow ? sampleRow.student : norm;
-    const loose       = _normLoose(displayName);
-    if (seenLoose.has(loose)) return;
-    const id = _tempId(displayName);
-    if (seenIds.has(id)) return;
-    seenIds.add(id); seenNorms.add(norm); seenLoose.add(loose);
-    profiles.push(_buildProfile({
-      id, displayName,
-      map: { id: '', masterSheet: '', tradesName: displayName, academicName: '', tradeCompleteFlag: false, academicCompleteFlag: false },
-      hsRow:    hsIdx[norm]      || hsLooseIdx[loose]    || null,
-      hisetRow: hisetIdx[norm]   || hisetLooseIdx[loose] || null,
-      tradeRows: [],
-      timeRow:  timeIdx[norm]    || timeLooseIdx[loose]  || null,
-      wirRow:   _wirLookup(norm) || null,
-      wirWeekLabel, mappingMissing: true, tradeMonthlyIdx,
-      completedTrades: tradeCompleteIdx[norm],
-      scheduledAcademicHours: null, tabe: null, courseData: null,
-    }));
-  });
-
-  // ── Apply overrides + risk trend to all profiles ──────────
-  profiles.forEach(p => {
-    _applyOverrides(p, overridesByStudent);
-    _computeRiskTrend(p);
-  });
-
-  const finalProfiles = _applyMerges(profiles, mergeMap);
-  finalProfiles.sort((a, b) => a.displayName.localeCompare(b.displayName));
-  return finalProfiles;
-}
-
-// ── Build a single profile object ─────────────────────────────
-function _buildProfile({
-  id, displayName, map, hsRow, hisetRow, tradeRows, timeRow,
-  wirRow, wirWeekLabel, mappingMissing, tradeMonthlyIdx,
-  completedTrades, scheduledAcademicHours, tabe, courseData
-}) {
-  tradeRows       = Array.isArray(tradeRows)       ? tradeRows       : [];
-  completedTrades = Array.isArray(completedTrades) ? completedTrades : [];
-
-  const academicType = hsRow ? 'HS' : hisetRow ? 'HISET' : null;
-  const acRow        = hsRow || hisetRow || null;
-  const hsComplete   = map.academicCompleteFlag === true;
-
-  const liveCompleteTrades = tradeRows
-    .filter(t => t.overallPct !== null && t.overallPct !== undefined && t.overallPct >= 100)
-    .map(t => t.tarName)
-    .filter(Boolean);
-  const allCompletedTrades = [...new Set([...liveCompleteTrades, ...completedTrades])];
-  const tradeComplete      = map.tradeCompleteFlag || allCompletedTrades.length > 0;
-
-  const academic    = _buildAcademic(acRow, academicType);
-  const normDisplay = _norm(displayName);
-  const normTrades  = _norm(map.tradesName || displayName);
-
-  const trades = tradeRows.length
-    ? tradeRows.map(t => _buildTradeRow(t, normTrades || normDisplay, normDisplay, tradeMonthlyIdx))
-    : null;
-
-  const time = timeRow ? {
-    totalHours: timeRow.totalHours ?? null,
-    sheets:     timeRow.sheets     || {},
-  } : null;
-
-  const intervention = wirRow ? _buildIntervention(wirRow, wirWeekLabel) : null;
-  const risk = _calcRisk(academic, trades, time, hsComplete, tradeComplete, allCompletedTrades, intervention, scheduledAcademicHours);
-
-  return {
-    id,
-    displayName,
-    mappingMissing:         mappingMissing && !map.id,
-    hsComplete,
-    tradeComplete,
-    completedTrades:        allCompletedTrades,
-    statusTag:              null,
-    academicStatusOverride: null,
-    tradeStatusOverride:    null,
-    tradeNameOverride:      null,
-    lastModified:           null,
-    notes:                  [],
-    progressSnapshot:       null,
-    progressSnapshots:      [],
-    isStale:                false,
-    riskTrend:              null,
-    staffNote:              null,
-    academicId:             map.id || null,
-    tradesId:               map.id || null,
-    academic,
-    trades,
-    time,
-    intervention,
-    risk,
-    hasAcademic:            !!academic,
-    hasTrades:              !!(trades && trades.length),
-    hasTime:                !!time,
-    hasIntervention:        !!intervention,
-    scheduledAcademicHours: scheduledAcademicHours || null,
-    tabe:                   tabe || null,
-    hasTABE:                !!(tabe && (tabe.math || tabe.reading)),
-    courseData:             courseData || null,
-  };
-}
-
-// ── Build academic sub-object ─────────────────────────────────
-function _buildAcademic(acRow, academicType) {
-  if (!acRow) return null;
-  return {
-    type:              academicType,
-    pace:              acRow.pace              ?? null,
-    progress:          acRow.progress          ?? null,
-    percent:           acRow.percent           ?? null,
-    hours:             acRow.hours             ?? null,
-    start:             acRow.start             ?? null,
-    graduation:        acRow.graduation        ?? null,
-    daysToGrad:        acRow.daysLeft          ?? null,
-    gCredits:          acRow.gCredits          ?? null,
-    credits:           acRow.credits           ?? null,
-    nextMilestone:     acRow.next              || null,
-    targetDate:        acRow.targetDate        ?? null,
-    targetDaysLeft:    acRow.targetDaysLeft    ?? null,
-    thisWeekHours:     acRow.thisWeekHours     ?? null,
-    lastWeekHours:     acRow.lastWeekHours     ?? null,
-    lastMonth:         acRow.lastMonth         ?? null,
-    lastMonthAssigned: acRow.lastMonthAssigned ?? null,
-    thisWeekCredits:   acRow.thisWeekCredits   ?? null,
-    worked:            acRow.worked            ?? null,
-  };
-}
-
-// ── Build trade row sub-object ────────────────────────────────
-function _buildTradeRow(t, normStudent, normDisplay, tradeMonthlyIdx) {
-  const tarNorm = _norm(t.tarName || '');
-  const monthly = tradeMonthlyIdx[normStudent + '||' + tarNorm]
-               || tradeMonthlyIdx[normDisplay  + '||' + tarNorm]
-               || null;
-  return {
-    tarName:          t.tarName          ?? null,
-    paceGap:          t.paceGap          ?? null,
-    status:           t.status           ?? null,
-    enrollment:       t.enrollment       ?? null,
-    progress:         t.progress         ?? null,
-    staffPct:         t.staffPct         ?? null,
-    studentPct:       t.studentPct       ?? null,
-    overallPct:       t.overallPct       ?? null,
-    etarStart:        t.etarStart        ?? null,
-    earliestEnd:      t.earliestEnd      ?? null,
-    daysToEarliest:   t.daysToEarliest   ?? null,
-    etarProjectedEnd: t.etarProjectedEnd ?? null,
-    daysToETAR:       t.daysLeft         ?? null,
-    weeklyPctChange:  t.weeklyPctChange  ?? null,
-    monthlyProgress:  monthly ? monthly.months : [],
-  };
-}
-
-// ── Build intervention sub-object ─────────────────────────────
-function _buildIntervention(wirRow, wirWeekLabel) {
-  return {
-    weekLabel:         wirWeekLabel              || '',
-    status:            wirRow.status             || null,
-    priority:          wirRow.priority           || null,
-    adminPriority:     wirRow.adminPriority      || null,
-    urgency:           wirRow.urgency            || null,
-    percent:           wirRow.percent            || null,
-    thisWeekHours:     wirRow.thisWeekHours      || null,
-    lastActiveHours:   wirRow.lastActiveHours    || null,
-    lastActiveLabel:   wirRow.lastActiveLabel    || null,
-    credits:           wirRow.credits            || null,
-    courseDaysLeft:    wirRow.courseDaysLeft     ?? null,
-    issueTags:         wirRow.issueTags          || null,
-    detectedPatterns:  wirRow.detectedPatterns   || null,
-    instructorAction:  wirRow.instructorAction   || null,
-    coordinatorAction: wirRow.coordinatorAction  || null,
-    reason:            wirRow.reason             || null,
-    streak:            wirRow.streak             || null,
-    trajectory:        wirRow.trajectory         || null,
-    gradGap:           wirRow.gradGap            || null,
-    comments:          wirRow.comments           || null,
-    caseOwner:         wirRow.caseOwner          || null,
-    caseStatus:        wirRow.caseStatus         || null,
-    focus:             wirRow.focus              || null,
-    followUp:          wirRow.followUp           || null,
-    caseNotes:         wirRow.caseNotes          || null,
-    lastUpdated:       wirRow.lastUpdated        || null,
-  };
-}
+// Profiles.gs — Shared profile helpers
+// ------------------------------------------------------------
 
 // ── Risk calculation ──────────────────────────────────────────
 function _calcRisk(academic, trades, time, hsComplete, tradeComplete, completedTrades, intervention, scheduledAcademicHours) {
   const flags = [];
   let score   = 0;
 
-  if (academic) {
+  // Completion guard -- a student marked academically complete
+  // should never be scored on academic pace/hours/deadline data,
+  // even if that data is stale (e.g. course-data recompute hasn't
+  // caught up yet after a course was just finished). Without this,
+  // a "Complete" tag and a "Needs Attention" risk score could
+  // display simultaneously and contradict each other.
+  if (academic && !hsComplete) {
     const pace = String(academic.pace || '').toLowerCase();
     if (pace.includes('at risk')) {
       score += 40; flags.push('Academic at-risk pace');
@@ -409,7 +40,7 @@ function _calcRisk(academic, trades, time, hsComplete, tradeComplete, completedT
       const isComplete = (t.overallPct !== null && t.overallPct >= 100)
                        || completedTrades.includes(tradeName);
 
-      if (isComplete) { flags.push(tradeName + ': ✅ Trade Complete'); return; }
+      if (isComplete) { flags.push(tradeName + ': Trade Complete'); return; }
 
       if ((t.paceGap || 0) < -10) {
         score += 20; flags.push(tradeName + ': large pace gap (' + t.paceGap + '%)');
@@ -457,11 +88,11 @@ function _calcRisk(academic, trades, time, hsComplete, tradeComplete, completedT
   }
 
   if ((!trades || !trades.length) && completedTrades.length) {
-    completedTrades.forEach(name => { flags.push(name + ': ✅ Trade Complete'); });
+    completedTrades.forEach(name => { flags.push(name + ': Trade Complete'); });
   }
 
   // Scheduled hours comparison (weekdays only)
-  if (academic && scheduledAcademicHours !== null && scheduledAcademicHours > 0) {
+  if (academic && !hsComplete && scheduledAcademicHours !== null && scheduledAcademicHours > 0) {
     const thisWk = academic.thisWeekHours;
     const actual = (thisWk === 'NWH' || thisWk === null) ? 0 : +thisWk;
     if (actual === 0) {
@@ -512,6 +143,8 @@ function _applyOverrides(profile, overridesByStudent) {
   ov.forEach(o => {
     switch (o.type) {
       case 'academic_status': profile.academicStatusOverride = o.value; break;
+      case 'trade_projected_end':     profile.tradeProjectedEndOverride     = o.value; break;
+      case 'trade_enrollment_status': profile.tradeEnrollmentStatusOverride = o.value; break;
       case 'trade_status':    profile.tradeStatusOverride    = o.value; break;
       case 'trade_name':      profile.tradeNameOverride      = o.value; break;
       case 'status_tag':      profile.statusTag              = o.value; break;
@@ -582,6 +215,22 @@ function _applyOverrides(profile, overridesByStudent) {
   }
   return profile;
 }
+function _shouldAutoClearNotStarted_(profile, type) {
+  if (type === 'academic_status') {
+    return profile.academicStatusOverride === 'NOT_STARTED' &&
+           !!(profile.academic && profile.academic.start && profile.academic.targetDate);
+  }
+  if (type === 'trade_status') {
+    return profile.tradeStatusOverride === 'NOT_STARTED' &&
+           profile.hasTrades === true;
+  }
+  return false;
+}
+
+// Writes a fresh, blank override row for each entry — same effect as
+// staff clicking "Clear" on that override, just done automatically.
+// Overrides are last-write-wins per student+type, so appending a
+// blank one here overrides the old NOT_STARTED value going forward.
 
 // ── Compute risk trend arrow ──────────────────────────────────
 function _computeRiskTrend(profile) {
@@ -638,12 +287,10 @@ function computeSummaryMetrics(profiles) {
   const total      = profiles.length;
   const riskCounts = { HIGH: 0, MEDIUM: 0, LOW: 0, UNKNOWN: 0 };
   profiles.forEach(p => { riskCounts[p.risk?.level || 'UNKNOWN']++; });
-
   const withIntervention = profiles.filter(p => p.hasIntervention).length;
   const unmapped         = profiles.filter(p => p.mappingMissing).length;
   const stale            = profiles.filter(p => p.isStale).length;
   const hasNotes         = profiles.filter(p => p.notes && p.notes.length).length;
-
   const avgAcademicPct = _avg(
     profiles.filter(p => p.academic && p.academic.percent !== null).map(p => p.academic.percent)
   );
