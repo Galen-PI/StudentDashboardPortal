@@ -4,6 +4,23 @@
 
 // ── Main payload ──────────────────────────────────────────────
 function getProductivityPayload() {
+  if (USE_VAULT_PRODUCTIVITY) return getProductivityPayloadFromVault_();
+}
+
+// ============================================================
+// VAULT PATH
+// ============================================================
+// Composes the same payload shape as the legacy version, but every
+// piece comes from Vault: Name Mapping (masterName, single field —
+// no tradesName/academicName to fold in like the legacy roster-name
+// builder did), Productivity Data (flat weekly rows), TABE Data
+// (schema-identical, reused via parseTABESheet unchanged).
+//
+// productivityData[].name is populated via Name Mapping's masterName
+// lookup, same as everywhere else — if a studentId isn't in Name
+// Mapping this falls back to the raw ID, which the frontend will
+// display as-is rather than a proper name.
+function getProductivityPayloadFromVault_() {
   try {
     const cache    = CacheService.getScriptCache();
     const cacheKey = 'productivityData';
@@ -12,30 +29,24 @@ function getProductivityPayload() {
       try { return JSON.parse(cached); } catch(e) { /* fall through */ }
     }
 
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
+    const nameMap = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
 
     const rosterNames = new Set();
-    const mapSheet = hubSS.getSheetByName(SHEET_MAPPING);
-    if (mapSheet && mapSheet.getLastRow() >= 2) {
-      const mapValues = mapSheet.getRange(2, 1, mapSheet.getLastRow() - 1, 4).getValues();
-      mapValues.forEach(row => {
-        [row[1], row[2], row[3]].forEach(n => {
-          const s = String(n || '').trim();
-          if (s) rosterNames.add(
-            s.toLowerCase().replace(/[^a-z ]/g, '').trim().split(' ').filter(Boolean).sort().join(' ')
-          );
-        });
-      });
-    }
+    const nameById = {};
+    nameMap.forEach(m => {
+      const name = String(m.masterName || '').trim();
+      if (name) {
+        rosterNames.add(name.toLowerCase().replace(/[^a-z ]/g, '').trim().split(' ').filter(Boolean).sort().join(' '));
+      }
+      if (m.studentId) nameById[String(m.studentId).trim()] = name || String(m.studentId).trim();
+    });
 
-    // ── Productivity data ─────────────────────────────────────
-    const productivityData   = getProductivityData(hubSS);
-    const productivityCohort = _buildProductivityCohortSummary(productivityData);
+    const productivityRows   = readVaultSheetAsObjects_(VAULT_SHEET_PRODUCTIVITY, VAULT_PRODUCTIVITY_HEADERS);
+    const productivityData   = _buildProductivityDataFromVault_(productivityRows, nameById);
+    const productivityCohort = _buildProductivityCohortSummary(productivityData); // unchanged, reused as-is
 
-    // ── TABE profiles ─────────────────────────────────────────
-    const tabeSheet  = hubSS.getSheetByName(SHEET_TABE);
-    const tabeValues = tabeSheet ? tabeSheet.getDataRange().getValues() : [];
-    const tabeByStudent = parseTABESheet(tabeValues);
+    const tabeValues    = getVaultSheet_(VAULT_SHEET_TABE).getDataRange().getValues();
+    const tabeByStudent = parseTABESheet(tabeValues); // unchanged, TABE schema-identical under Vault
     const tabeProfiles = Object.entries(tabeByStudent).map(([id, data]) => ({
       id,
       displayName: data.name,
@@ -43,7 +54,6 @@ function getProductivityPayload() {
       tabe:        data,
     }));
 
-    // ── HS + Trade monthly cohort
     const dashboard = getDashboardData();
     const hsMonthlyCohort    = dashboard.hsMonthlyCohort    || [];
     const tradeMonthlyCohort = dashboard.tradeMonthlyCohort || [];
@@ -66,9 +76,102 @@ function getProductivityPayload() {
     return result;
 
   } catch(e) {
-    Logger.log('getProductivityPayload error: ' + e.message);
+    Logger.log('getProductivityPayloadFromVault_ error: ' + e.message);
     return { error: e.message };
   }
+}
+
+// Groups flat Productivity Data rows by studentId and computes the
+// same per-student summary shape getProductivityData() produced —
+// peak/trough week, trend (first-half vs. second-half average),
+// totals — just driven by whatever weeks actually exist in the
+// data instead of a fixed April-June week list. month/week are
+// left null per week (no fixed month grouping under Vault);
+// `label` (== weekLabel) is the only grouping key
+// _buildProductivityCohortSummary() needs, and it's reused unchanged.
+function _buildProductivityDataFromVault_(productivityRows, nameById) {
+  const byStudent = {};
+  (productivityRows || []).forEach(row => {
+    const sid = String(row.studentId || '').trim();
+    if (!sid) return;
+    (byStudent[sid] = byStudent[sid] || []).push(row);
+  });
+
+  const results = [];
+  Object.entries(byStudent).forEach(([sid, rows]) => {
+    rows.sort((a, b) => {
+      const aKey = _normVaultDateField_(a.weekLabel, 'yyyy-MM-dd');
+      const bKey = _normVaultDateField_(b.weekLabel, 'yyyy-MM-dd');
+      return aKey < bKey ? -1 : aKey > bKey ? 1 : 0;
+    });
+
+    const weeks = [];
+    let totalWorked   = 0;
+    let totalAssigned = 0;
+
+    rows.forEach(row => {
+      const worked   = row.actualWorkedTime !== undefined && row.actualWorkedTime !== '' ? Number(row.actualWorkedTime) : null;
+      const assigned = row.assignedHours     !== undefined && row.assignedHours     !== '' ? Number(row.assignedHours)     : null;
+
+      // No assigned hours on file for this week — skip it entirely,
+      // same rule the legacy path used for NOT_IN_MONTH/blank cells.
+      if (assigned === null) return;
+
+      const productivity = assigned > 0
+        ? +(((worked || 0) / assigned) * 100).toFixed(1)
+        : null;
+
+      weeks.push({
+        month:         _normVaultDateField_(row.monthLabel, 'MMM yyyy') || null,
+        week:         null, // no week-number field exists — only monthLabel + weekLabel(date)
+        label:        _normVaultDateField_(row.weekLabel, 'yyyy-MM-dd'),
+        worked:       worked ?? 0,
+        assigned,
+        productivity,
+        notScheduled: assigned === 0,
+      });
+
+      if (worked   !== null) totalWorked   += worked;
+      if (assigned !== null) totalAssigned += assigned;
+    });
+
+    if (!weeks.length) return;
+
+    const overallProductivity = totalAssigned > 0
+      ? +((totalWorked / totalAssigned) * 100).toFixed(1)
+      : null;
+
+    const sorted     = [...weeks].filter(w => w.productivity !== null).sort((a, b) => b.productivity - a.productivity);
+    const peakWeek   = sorted[0]                 || null;
+    const troughWeek = sorted[sorted.length - 1] || null;
+
+    const half      = Math.floor(weeks.length / 2);
+    const firstHalf = weeks.slice(0, half);
+    const secHalf   = weeks.slice(half);
+    const avgFirst  = firstHalf.length ? firstHalf.reduce((s, w) => s + (w.productivity || 0), 0) / firstHalf.length : null;
+    const avgSecond = secHalf.length   ? secHalf.reduce((s, w) => s + (w.productivity || 0), 0) / secHalf.length   : null;
+
+    let trend = 'stable';
+    if (avgFirst !== null && avgSecond !== null) {
+      if (avgSecond - avgFirst >  5) trend = 'improving';
+      if (avgSecond - avgFirst < -5) trend = 'declining';
+    }
+
+    results.push({
+      name: nameById[sid] || sid,
+      weeks,
+      totalWorked:         +totalWorked.toFixed(2),
+      totalAssigned:       +totalAssigned.toFixed(2),
+      overallProductivity,
+      peakWeek,
+      troughWeek,
+      trend,
+      weeksWithData:       weeks.length,
+    });
+  });
+
+  Logger.log('Productivity Data (vault): ' + results.length + ' students');
+  return results;
 }
 
 function clearProductivityCache() {
@@ -76,10 +179,10 @@ function clearProductivityCache() {
   Logger.log('Productivity cache cleared.');
 }
 
-// ── Per-student weekly productivity data ──────────────────────
+// ── Per-student weekly productivity data (legacy path only) ────
 function getProductivityData(hubSS) {
   try {
-    const sheet = hubSS.getSheetByName(SHEET_PRODUCTIVITY);
+    const sheet = hubSS.getSheetByName(VAULT_SHEET_PRODUCTIVITY);
     if (!sheet) {
       Logger.log('Productivity Data sheet not found — skipping.');
       return [];
@@ -188,7 +291,9 @@ function getProductivityData(hubSS) {
   }
 }
 
-// ── Parse hours from a cell ───────────────────────────────────
+// ── Parse hours from a cell (legacy path only — Vault stores
+// plain decimals already, no Date-duration cells or NOT_IN_MONTH
+// markers to unpack) ─────────────────────────────────────────
 function _parseProductivityHours(val) {
   if (val === null || val === undefined) return null;
   if (String(val).trim() === 'NOT_IN_MONTH') return null;
@@ -218,6 +323,9 @@ function _parseProductivityHours(val) {
 }
 
 // ── Cohort weekly summary ─────────────────────────────────────
+// No Vault branch needed — operates on already-built productivityData
+// (either path), grouping purely by w.label. Confirmed compatible
+// as-is; reused unchanged by getProductivityPayloadFromVault_ above.
 function _buildProductivityCohortSummary(productivityData) {
   if (!productivityData || !productivityData.length) return [];
 
@@ -260,6 +368,15 @@ function _buildProductivityCohortSummary(productivityData) {
 }
 
 // ── HS Graduation Predictions (Graduates tab) ─────────────────
+// No branch needed — getDashboardData() already dispatches
+// internally, and _computeHSGraduationPredictions (Predictions.gs)
+// is a pure function of whatever profiles/hsMonthlyByStudent it's
+// given. IMPORTANT: see the note delivered alongside this file —
+// under the Vault profile path, p.academic.type and p.academic.graduation
+// are currently always null (ProfilesVault.gs has no source for
+// either), so this will silently return zero graduates once
+// USE_VAULT_PROFILES is on. That gap lives in ProfilesVault.gs /
+// Vault schema availability, not here.
 function getHSGraduationPredictions() {
   try {
     const dashboard = getDashboardData();
@@ -306,7 +423,7 @@ function debugProductivityPayload() {
     Logger.log('overallProductivity: '   + first.overallProductivity);
     Logger.log('trend: '                 + first.trend);
   } else {
-    Logger.log('productivityData is EMPTY');A
+    Logger.log('productivityData is EMPTY');
   }
 
   const firstWeek = (payload.productivityCohort || [])[0];
@@ -315,20 +432,16 @@ function debugProductivityPayload() {
   Logger.log('First rosterName: ' + (payload.rosterNames || [])[0]);
 }
 
-function runClearAllCaches() {
-  google.script.run
-    .withSuccessHandler(function() {
-      alert('Caches cleared. Reloading dashboard...');
-      loadData();
-      if (typeof _productivityData !== 'undefined') {
-        _productivityData = null;
-        _cohortSummary = null;
-        _hsMonthlyCohort = [];
-        _tradeMonthlyCohort = [];
-      }
-    })
-    .withFailureHandler(function(err) {
-      alert('Failed to clear caches: ' + (err && err.message ? err.message : 'unknown error'));
-    })
-    .clearAllCaches();
+
+
+// ── Normalize a Vault date-ish field that Sheets may have silently
+// auto-converted from a plain string into a real Date object.
+// Always returns a clean, stable string so two rows for the same
+// calendar week/month can never fracture into separate groups just
+// because one was written with a different time-of-day component.
+function _normVaultDateField_(val, fmt) {
+  if (val instanceof Date && !isNaN(val.getTime())) {
+    return Utilities.formatDate(val, Session.getScriptTimeZone(), fmt);
+  }
+  return String(val || '').trim();
 }
