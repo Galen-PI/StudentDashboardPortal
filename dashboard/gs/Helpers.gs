@@ -1,6 +1,6 @@
-// ============================================================
+// ======
 // Helpers.gs — Shared utility functions
-// ============================================================
+// ======
 
 // ── String / name normalization ───────────────────────────────
 
@@ -13,8 +13,6 @@ function _norm(name) {
     .trim();
 }
 
-// Loose norm — reverses Last, First → First Last and sorts words
-// Used for fuzzy matching across sheets with inconsistent name formats
 function _normLoose(name) {
   let n = _norm(name);
   if (!n) return '';
@@ -42,7 +40,6 @@ function _toPercent(val) {
   }
   const n = Number(val);
   if (isNaN(n)) return null;
-  // Sheets sometimes stores percentages as decimals (0.85 instead of 85)
   if (n > 0 && n <= 1) return +(n * 100).toFixed(1);
   return +n.toFixed(1);
 }
@@ -58,7 +55,6 @@ function _toHours(val) {
   return isNaN(n) ? null : +n.toFixed(2);
 }
 
-// Returns 'NWH' string for "in trades" cells, otherwise hours number
 function _toHoursOrNWH(val) {
   if (val === null || val === undefined || val === '') return null;
   const str = String(val).trim();
@@ -82,7 +78,6 @@ function _toWeeklyChange(val) {
 
 // ── Date helpers ──────────────────────────────────────────────
 
-// Converts a Sheets date or string to YYYY-MM-DD
 function _toDateStr(val) {
   if (!val) return null;
   if (val instanceof Date) {
@@ -93,12 +88,11 @@ function _toDateStr(val) {
   if (!str || str === '—' || str === '-') return null;
   return str;
 }
-// Returns today as YYYY-MM-DD in script timezone
+
 function _todayStr() {
   return Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
-// Parses a YYYY-MM-DD string as LOCAL midnight (avoids UTC offset shifting the date)
-// new Date("2026-08-01") = UTC midnight = July 31 in Central time — use this instead
+
 function _parseLocalDate(str) {
   if (!str || str === 'null') return null;
   const parts = String(str).split('-');
@@ -109,7 +103,6 @@ function _parseLocalDate(str) {
 
 // ── Time helpers ──────────────────────────────────────────────
 
-// Converts HH:MM:SS or HH:MM string to total seconds
 function _hmsToSeconds(str) {
   if (!str) return 0;
   const parts = String(str).split(':').map(Number);
@@ -120,7 +113,6 @@ function _hmsToSeconds(str) {
 
 // ── Array / index helpers ─────────────────────────────────────
 
-// Builds a single-value index (first match wins)
 function _indexBy(arr, keyFn) {
   const idx = {};
   arr.forEach(item => {
@@ -130,7 +122,6 @@ function _indexBy(arr, keyFn) {
   return idx;
 }
 
-// Builds a multi-value index (all matches collected into arrays)
 function _indexByMulti(arr, keyFn) {
   const idx = {};
   arr.forEach(item => {
@@ -168,8 +159,6 @@ function _requirePermission(role, permission) {
 }
 
 // ── Lock helper ───────────────────────────────────────────────
-
-// Wraps a function in a script lock to prevent concurrent edits
 function _withLock(fn) {
   const lock = LockService.getScriptLock();
   try {
@@ -185,9 +174,6 @@ function _withLock(fn) {
 }
 
 // ── Chunked cache helpers ─────────────────────────────────────
-// Apps Script cache values are limited to 100KB each.
-// These helpers split large JSON payloads into chunks automatically.
-
 function _cachePutChunked(cache, key, str, ttl) {
   const chunks = [];
   for (let i = 0; i < str.length; i += CACHE_CHUNK_SIZE) {
@@ -204,6 +190,7 @@ function _cachePutChunked(cache, key, str, ttl) {
   chunks.forEach((chunk, i) => { entries[key + '_' + i] = chunk; });
   cache.putAll(entries, ttl);
 }
+
 function _cacheGetChunked(cache, key) {
   const meta = cache.get(key + '_meta');
   if (!meta) return null;
@@ -220,6 +207,7 @@ function _cacheGetChunked(cache, key) {
   }
   return result;
 }
+
 function _cacheRemoveChunked(cache, key) {
   const meta = cache.get(key + '_meta');
   if (!meta) { cache.remove(key); return; }
@@ -231,4 +219,184 @@ function _cacheRemoveChunked(cache, key) {
 
 function _clearDashboardCache() {
   _cacheRemoveChunked(CacheService.getScriptCache(), 'dashboardData');
+}
+// ── Trade pace helpers ─────────────────────────────────────────
+
+
+const TRADE_EARLIEST_END_WORKDAYS = 150; 
+const TRADE_PACE_WINDOW_DAYS      = 150; 
+
+
+function _addWorkdays_(startDate, numWorkdays) {
+  const d = new Date(startDate);
+  d.setHours(0, 0, 0, 0);
+  let added = 0;
+  while (added < numWorkdays) {
+    d.setDate(d.getDate() + 1);
+    const day = d.getDay();
+    if (day >= 1 && day <= 5) added++;
+  }
+  return d;
+}
+
+function _computeTradePaceMetrics_(overallPercentRaw, tarBeginDateStr, tradeName, enrollmentStatus) {
+  const result = { paceGap: null, earliestEnd: null, daysToEarliest: null };
+
+  if (!tradeName || tradeName === 'Undecided/Shadow/New') return result;
+
+  const start = tarBeginDateStr ? _parseLocalDate(String(tarBeginDateStr).slice(0, 10)) : null;
+
+  // Earliest End / Days to Earliest — computable regardless of
+  // enrollment status, as long as there's a start date.
+  if (start) {
+    const earliestEndDate = _addWorkdays_(start, TRADE_EARLIEST_END_WORKDAYS);
+    result.earliestEnd    = _toDateStr(earliestEndDate);
+    result.daysToEarliest = _daysUntil_(result.earliestEnd);
+  }
+
+  // Pace Gap — mirrors the legacy formula's branches exactly.
+  if (String(enrollmentStatus || '').trim().toUpperCase() === 'CO') {
+    result.paceGap = 'Completed';
+    return result;
+  }
+  if (overallPercentRaw === null || overallPercentRaw === undefined || !start) {
+    return result; // stays null — matches the formula's blank ("") case
+  }
+
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  const startMidnight = new Date(start);
+  startMidnight.setHours(0, 0, 0, 0);
+
+  if (today < startMidnight) {
+    result.paceGap = 'Not Started';
+    return result;
+  }
+
+  const daysElapsed      = (today - startMidnight) / 86400000;
+  const expectedFraction = Math.min(1, Math.max(0, daysElapsed / TRADE_PACE_WINDOW_DAYS));
+  result.paceGap = +((overallPercentRaw - expectedFraction) * 100).toFixed(1); // e.g. +22.3
+  return result;
+}
+function _computeGradGap_(s) {
+  return s.programDeadline && s.programDeadline.daysLeft != null ? s.programDeadline.daysLeft : '';
+}
+function _computeWeeklyPctChange_(snapshots) {
+  const weekly = snapshots
+    .filter(s => String(s.cadence || '').trim().toLowerCase() === 'weekly')
+    .sort((a, b) => String(a.snapshotDate || '') < String(b.snapshotDate || '') ? -1 : 1);
+  if (weekly.length < 2) return null;
+  const latest = weekly[weekly.length - 1];
+  const prev   = weekly[weekly.length - 2];
+  const latestPct = Number(latest.overallPercent);
+  const prevPct   = Number(prev.overallPercent);
+  if (isNaN(latestPct) || isNaN(prevPct)) return null;
+  return +(latestPct - prevPct).toFixed(1);
+}
+// ── Centralized week-of-month calculation ────────────────────
+function getCurrentWeekOfMonth_(dateInput) {
+  const override = PropertiesService.getScriptProperties().getProperty('CURRENT_WEEK_OVERRIDE');
+  if (override) return parseInt(override, 10);
+
+  const d = dateInput ? new Date(dateInput) : new Date();
+  const day = d.getDate();
+  if (day <= 7)  return 1;
+  if (day <= 14) return 2;
+  if (day <= 21) return 3;
+  return 4; // covers days 22-31 as "week 4" — no separate W5 concept
+}
+
+function setWeekOverride(weekNum) {
+  const props = PropertiesService.getScriptProperties();
+  if (weekNum) props.setProperty('CURRENT_WEEK_OVERRIDE', String(weekNum));
+  else         props.deleteProperty('CURRENT_WEEK_OVERRIDE');
+}
+
+function getWeekOverride() {
+  return PropertiesService.getScriptProperties().getProperty('CURRENT_WEEK_OVERRIDE') || null;
+}
+// ============================================================
+// writeResults — backing function for Verify Roster upload
+// ------------------------------------------------------------
+// Cross-checks parsed CIS roster data against Name Mapping.
+// Rules (per the Verify Roster modal's own description):
+//   - Never downgrades an existing "Complete" status back to incomplete
+//   - Adds new students to Name Mapping if not already present
+//   - Never removes/deactivates existing active students
+// ============================================================
+
+function writeResults(results) {
+  try {
+    if (!results || !results.length) {
+      return { added: 0, updated: 0 };
+    }
+
+    const lock = LockService.getScriptLock();
+    lock.waitLock(10000);
+
+    try {
+      const sheet = getVaultSheet_(VAULT_SHEET_NAME_MAPPING);
+      const existing = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
+
+      const rowIndexById = {}; // studentId -> 0-based index into existing[]
+      existing.forEach((row, i) => {
+        const id = String(row.studentId || '').trim();
+        if (id) rowIndexById[id] = i;
+      });
+
+      let added = 0;
+      let updated = 0;
+      const newRows = [];
+
+      results.forEach(r => {
+        const id = String(r.id || '').trim();
+        if (!id) return;
+
+        const incomingTradeComplete    = r.tradeComplete    === 'Complete';
+        const incomingAcademicComplete = r.academicComplete === 'Complete';
+
+        const existingIndex = rowIndexById[id];
+
+        if (existingIndex !== undefined) {
+          const row = existing[existingIndex];
+          const currentTradeComplete    = String(row.tradeComplete    || '').trim().toUpperCase() === 'COMPLETE';
+          const currentAcademicComplete = String(row.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
+
+          // Never downgrade — only ever flip false -> true, never true -> false
+          const newTradeComplete    = currentTradeComplete    || incomingTradeComplete;
+          const newAcademicComplete = currentAcademicComplete || incomingAcademicComplete;
+
+          const changed = (newTradeComplete !== currentTradeComplete) || (newAcademicComplete !== currentAcademicComplete);
+
+          if (changed) {
+            const sheetRow = VAULT_DATA_START_ROW + existingIndex;
+            sheet.getRange(sheetRow, VNM_COL_TRADE_COMPLETE).setValue(newTradeComplete ? 'Complete' : '');
+            sheet.getRange(sheetRow, VNM_COL_ACADEMIC_COMPLETE).setValue(newAcademicComplete ? 'Complete' : '');
+            updated++;
+          }
+        } else {
+          // New student — add to Name Mapping, active by default
+          newRows.push({
+            studentId: id,
+            masterName: r.name || id,
+            tradeComplete: incomingTradeComplete ? 'Complete' : '',
+            academicComplete: incomingAcademicComplete ? 'Complete' : '',
+            active: true,
+          });
+          added++;
+        }
+      });
+
+      if (newRows.length) {
+        appendVaultRows_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS, newRows);
+      }
+
+      return { added, updated };
+    } finally {
+      lock.releaseLock();
+    }
+  } catch(e) {
+    Logger.log('writeResults error: ' + e.message);
+    throw new Error(e.message); // surfaces to withFailureHandler on the client
+  }
 }
