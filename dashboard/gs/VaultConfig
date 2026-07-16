@@ -1,0 +1,169 @@
+// ============================================================
+// VaultConfig.gs — Single source of truth for Student Data Vault
+// ============================================================
+
+// ── Spreadsheet ID ────────────────────────────────────────────
+const SS_VAULT = '15AdLxifwIXSjT5ja9bpuBOhp8b6u4r2sniHbU4cA_2o';
+
+
+// ── Sheet names — SS_VAULT ────────────────────────────────────
+const VAULT_SHEET_TRANSCRIPT_ROWS     = 'Transcript Rows';
+const VAULT_SHEET_COURSE_CATALOGUE    = 'Course Catalogue';
+const VAULT_SHEET_CLASSES_ORDER       = 'Master Schedule Hours';
+const VAULT_SHEET_TRANSCRIPT_LOG      = 'Transcript Log';
+
+const VAULT_SHEET_TABE                = 'TABE Data';
+const VAULT_SHEET_TABE_HISTORY        = 'TABE History';
+const VAULT_SHEET_TABE_PREDICTIONS    = 'TABE Gain Predictions';
+
+const VAULT_SHEET_WEEKLY_SCHEDULE     = 'Weekly Schedule';
+
+const VAULT_SHEET_PRODUCTIVITY        = 'Productivity Data';
+
+const VAULT_SHEET_TRADE_CODES         = 'Trade Proficiency Codes';
+const VAULT_SHEET_TRADE_PROGRESS      = 'Trade Progress';
+const VAULT_SHEET_TRADE_OVERVIEW      = 'Trade Overview';
+const VAULT_SHEET_TRADE_SNAPSHOTS     = 'Trade Snapshots';
+
+const VAULT_SHEET_ACADEMIC_SNAPSHOTS  = 'Academic Snapshots';
+
+const VAULT_SHEET_WIR_REPORTS         = 'WIR Reports';
+const VAULT_SHEET_WIR_CASE            = 'WIR Case Management';
+const VAULT_SHEET_STUDENT_INFO        = 'Student Info';
+
+const VAULT_SHEET_NAME_MAPPING        = 'Name Mapping';
+const VAULT_SHEET_OVERRIDES_NOTES     = 'Overrides And Notes';
+const VAULT_SHEET_STUDENT_ALIASES     = 'Student Aliases'; 
+const VAULT_SHEET_STUDENT_COURSE_DATA = 'Student Course Data';
+const VAULT_SHEET_TESTING_ATTEMPTS    = 'Testing Attempts';
+
+
+const VAULT_STUDENT_COURSE_DATA_HEADERS = ['studentId', 'remainingCredits', 'remainingHours', 'courseCountLeft', 'nextCourse', 'nextCourseHours', 'nextCourseTarget', 'totalCredits', 'totalHours', 'completionPct', 'lastSynced'];
+const VAULT_SHEET_STUDENT_PACING = 'Student Pacing Settings';
+const VAULT_STUDENT_PACING_HEADERS = ['studentId', 'weeklyHours', 'w1', 'w2', 'w3', 'w4', 'lastUpdated']
+const VAULT_NAME_MAPPING_HEADERS = ['studentId', 'masterName', 'tradeComplete', 'academicComplete', 'active', 'examProgram'];
+const VAULT_SHEET_CREDIT_SNAPSHOTS = 'Credit Report Snapshots';
+const VAULT_CREDIT_SNAPSHOT_HEADERS = ['snapshotId','name','weekLabel','savedDate','savedBy','reportJson'];
+
+// ── Data start rows ──────────────────────────────────────
+const VAULT_DATA_START_ROW = 2;
+
+// ── Name Mapping column indices (1-based) ─────────────────────
+const VNM_COL_ID                = 1; // studentId
+const VNM_COL_MASTER_NAME       = 2; // masterName
+const VNM_COL_TRADE_COMPLETE    = 3; // tradeComplete
+const VNM_COL_ACADEMIC_COMPLETE = 4; // academicComplete
+const VNM_COL_ACTIVE            = 5; // active (true/false)
+
+// ── Transcript Rows headers ────────────────────────────────────
+const VAULT_TRANSCRIPT_HEADERS = [
+  'studentId', 'sourceTabName', 'rowId', 'courseId', 'courseName', 'instance', 'transfer',
+  'subject', 'credit', 'classHours', 'startDate', 'adjStart', 'targetDate',
+  'completed', 'lastModified', 'block',
+];
+// ── Testing Attmpets Rows headers ────────────────────────────────────
+const VAULT_TESTING_ATTEMPTS_HEADERS = [
+  'rowId', 'studentId', 'examProgram', 'subtest', 'dateTested',
+  'score', 'result', 'enteredBy', 'enteredDate'
+];
+// ── Course Catalogue / Classes Order headers ───────────────────
+const VAULT_COURSE_CATALOGUE_HEADERS = ['className', 'category', 'classId'];
+const VAULT_CLASSES_ORDER_HEADERS    = ['courseName', 'hours', 'units', 'lessons', 'minimumHours'];
+
+// ── Weekly Schedule headers ─────────────────────────────────────
+const VAULT_SCHEDULE_HEADERS = ['studentId', 'weekLabel', 'slot', 'scheduleJson', 'lastUpdated'];
+
+// ── Productivity Data headers ───────────────────────────────────
+const VAULT_PRODUCTIVITY_HEADERS = [
+  'studentId', 'monthLabel', 'weekLabel', 'completedWork', 'idleTime',
+  'actualWorkedTime', 'assignedHours', 'assignedHoursSource', 'entryMethod',
+  'lastUpdated', 'lastUpdatedBy',
+];
+
+// ── Trade headers ────────────────────────────────────────────────
+const VAULT_TRADE_CODES_HEADERS    = ['trade', 'code', 'category', 'proficienciesCount'];
+const VAULT_TRADE_PROGRESS_HEADERS = ['studentId', 'trade', 'code', 'completedCount', 'avgRating'];
+const VAULT_TRADE_OVERVIEW_HEADERS = [
+  'studentId', 'trade', 'tarBeginDate', 'staffPercent', 'studentPercent', 'overallPercent', 'enrollmentStatus',
+];
+const VAULT_TRADE_SNAPSHOT_HEADERS = ['studentId', 'trade', 'snapshotDate', 'cadence', 'overallPercent', 'gain', 'status'];
+
+// ── Academic Snapshots headers ──────────────────────────────────
+const VAULT_ACADEMIC_SNAPSHOT_HEADERS = ['studentId', 'cadence', 'snapshotDate', 'creditsRemaining', 'gain', 'status'];
+
+// ── TABE headers (identical to legacy — schema matched 1:1) ────
+function VAULT_TABE_HEADERS_() { return TABE_HEADERS; }
+function VAULT_TABE_HISTORY_HEADERS_() { return TABE_HISTORY_HEADERS; }
+function VAULT_TABE_PREDICTIONS_HEADERS_() { return TABE_PREDICTIONS_HEADERS; }
+
+// ── Overrides And Notes headers ─────────────────────────────────
+const VAULT_OVERRIDES_NOTES_HEADERS = ['studentId', 'type', 'value', 'note', 'setBy', 'date'];
+
+// ── Trade totals (reuse existing constant — same 23-credit rule) ─
+function VAULT_TOTAL_CREDITS_REQUIRED_() { return TOTAL_CREDITS_REQUIRED; }
+
+// ── Migration flags
+const USE_VAULT_TRANSCRIPTS = true;
+const USE_VAULT_TABE        = true;
+const USE_VAULT_SCHEDULE    = true;
+const USE_VAULT_PRODUCTIVITY = true;
+const USE_VAULT_TRADES      = true;
+const USE_VAULT_WIR         = true;
+const USE_VAULT_ACADEMIC_SNAPSHOTS = true;
+const USE_VAULT_NAME_MAPPING = true;
+const USE_VAULT_OVERRIDES = true;
+const USE_VAULT_PROFILES  = true;
+
+
+// ============================================================
+// SHARED VAULT CONNECTOR HELPERS
+// ============================================================
+
+let _vaultSpreadsheetCache_ = null;
+
+function getVaultSpreadsheet_() {
+  if (!_vaultSpreadsheetCache_) {
+    _vaultSpreadsheetCache_ = SpreadsheetApp.openById(SS_VAULT);
+  }
+  return _vaultSpreadsheetCache_;
+}
+
+
+function getVaultSheet_(sheetName) {
+  const ss = getVaultSpreadsheet_();
+  const sheet = ss.getSheetByName(sheetName);
+  if (!sheet) {
+    throw new Error('Vault sheet not found: "' + sheetName + '". Check VaultConfig.gs sheet name constants.');
+  }
+  return sheet;
+}
+
+function readVaultSheetAsObjects_(sheetName, headers) {
+  const sheet = getVaultSheet_(sheetName);
+  const lastRow = sheet.getLastRow();
+  if (lastRow < VAULT_DATA_START_ROW) return [];
+
+  const numRows = lastRow - VAULT_DATA_START_ROW + 1;
+  const values = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, headers.length).getValues();
+
+  return values.map(row => {
+    const obj = {};
+    headers.forEach((key, i) => { obj[key] = row[i]; });
+    return obj;
+  });
+}
+
+function readVaultRowsForStudent_(sheetName, headers, studentId) {
+  const id = String(studentId).trim();
+  return readVaultSheetAsObjects_(sheetName, headers)
+    .filter(row => String(row.studentId).trim() === id);
+}
+
+
+function appendVaultRows_(sheetName, headers, rowObjects) {
+  if (!rowObjects || !rowObjects.length) return 0;
+  const sheet = getVaultSheet_(sheetName);
+  const values = rowObjects.map(obj => headers.map(h => obj[h] !== undefined ? obj[h] : ''));
+  sheet.getRange(sheet.getLastRow() + 1, 1, values.length, headers.length).setValues(values);
+  return values.length;
+}
