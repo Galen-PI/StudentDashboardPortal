@@ -1,8 +1,5 @@
 // ============================================================
 // Predictions.gs — Prediction models
-// Computes forward-looking estimates for HS graduation timing
-// and TABE score gains. No spreadsheet I/O — operates on data
-// already loaded by Code.gs and written by the callers.
 // ============================================================
 
 // ── HS Graduation Predictions ─────────────────────────────────
@@ -22,7 +19,6 @@ function _computeHSGraduationPredictions(profiles, hsMonthlyData) {
     const ac         = p.academic;
     const courseData = p.courseData || null;
 
-    // Only include students whose graduation date is within the next 2 months
     const graduationDate = ac.graduation ? _parseLocalDate(ac.graduation) : null;
     if (!graduationDate) return;
     if (graduationDate > twoMonthsOut) return;
