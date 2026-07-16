@@ -1,35 +1,7 @@
 /****************************************************
  * WIREngineDataGather.gs — V2
  * ------------------------------------------------
- * Gathers one student's raw inputs for the flag-based WIR
- * Engine (WIREngineV2.gs). Replaces the old point-based
- * engine's gather step.
- *
- * SUPERSEDED FROM THE OLD FILE (kept only as historical
- * context, not used):
- *   - monthRatio (plain rolling 4-week ratio, no trade-week
- *     awareness) -> replaced by weekHistory + the pace flag's
- *     own HS-week-filtered rolling window.
- *   - _wirGetActiveWeekFlag_ (Student Pacing Settings W1-W4
- *     toggle) -> superseded by the assignedHours-based
- *     HS-week inference. If Student Pacing Settings still
- *     serves some OTHER purpose outside WIR, leave that file/
- *     table alone — just no longer read here.
- *   - targetDaysLeft / _wirComputeTargetDaysLeft_ (raw calendar
- *     days to nextCourseTarget) -> replaced by
- *     wirComputeEffectiveCourseDays_ (trade-week-adjusted).
- *
- * CONFIRMED FIXES FROM TESTING (2026-07-15 test session):
- *   - Weekly Schedule only holds ~2 weeks of history and
- *     cannot answer "was this an HS week" for any prior week.
- *     HS-week is now inferred from assignedHours > 0 in
- *     Productivity Data, uniformly for every week.
- *   - Academic Snapshots' weekly snapshotDate is always a
- *     Friday; Productivity Data's weekLabel is always the
- *     Monday of the same week. wirBuildWeekHistory_ shifts
- *     the Friday date back 4 days before using it as a lookup
- *     key against Productivity Data — without this, credits
- *     silently read as 0 for every week.
+ * Gathers one student's raw inputs for the flag-based WIR Engine (WIREngineV2.gs).
  ****************************************************/
 
 // ── Active roster — unchanged from the original file ────────
@@ -56,8 +28,7 @@ function getActiveStudentIdsForWIR() {
 function gatherWIRInputForStudent(studentId, weekLabel) {
   const id = String(studentId).trim();
 
-  // ── Completion status — checked first; if true, the engine
-  // short-circuits and skips all flag evaluation for this student.
+  // ── Completion status — checked first; if true, the engine short-circuits and skips all flag evaluation for this student.
   const nameMapRow = readVaultRowsForStudent_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS, id)[0];
   const academicComplete = !!nameMapRow &&
     String(nameMapRow.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
@@ -81,10 +52,7 @@ function gatherWIRInputForStudent(studentId, weekLabel) {
   const courseCountLeft = courseData ? Number(courseData.courseCountLeft) : null;
   const nextCourseTarget = courseData ? _normVaultDateField_(courseData.nextCourseTarget, 'yyyy-MM-dd') : null;
 
-  // ── Course pacing — trade-week-adjusted effective days left,
-  // derived from the course's start date (first course ever ->
-  // Student Info.startDate; every course after -> previous
-  // course's targetDate in Transcript Rows).
+  // ── Course pacing — trade-week-adjusted effective days left, derived from the course's start date (first course ever -> Student Info.startDate; every course after -> previous course's targetDate in Transcript Rows).
   let effectiveCourseDaysLeft = null;
   if (courseData && nextCourseTarget) {
     const courseStartDate = wirDeriveCourseStartDate_(id, courseData.nextCourse);
