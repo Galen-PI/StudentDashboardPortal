@@ -1,6 +1,45 @@
 <script>
+// ============================================================
+// Student Progress Dashboard — Client Script
+// ------------------------------------------------------------
+// TABLE OF CONTENTS
+//   1.  State & constants
+//   2.  Themed dialog / toast helpers
+//   3.  Client-side permission helpers (Lock Mode, _can, _canEdit)
+//   4.  Bootstrap (DOMContentLoaded)
+//   5.  Staff login
+//   6.  Data loading (loadData, refreshData, onDataLoaded)
+//   7.  Freshness banner
+//   8.  Summary cards
+//   9.  Filters (risk / type / counselor / teacher) + presets
+//   10. Table rendering
+//   11. Shared student display builder (_buildStudentDisplay)
+//   12. Detail modal (open/build/sections)
+//   13. Overrides panel
+//   14. Merge students
+//   15. Trade summary modal
+//   16. Uploads (schedule, roster, TABE, academic credits)
+//   17. UI helpers (loading, escaping, formatting)
+//   18. Quick Edit drawer
+//   19. Change history
+//   20. Archived students
+//   21. First-visit walkthrough
+//   22. View toggle (table / cards / action) + renderers
+//   23. CSV export
+//   24. Staff notes
+//   25. Filter presets (custom)
+//   26. Bulk selection + bulk actions
+//   27. Risk sparkline
+//   28. Print document builders
+//   29. Role-based presets
+//   30. Email digest
+//   31. Schedule section (student modal)
+//   32. TABE section (student modal)
+//   33. Modal tabs: Transcript / Testing / Trades / Time Log
+//   34. Academic credits snapshot + Weekly Credit Report
+//   35. Bulk pacing tool
 // ─────────────────────────────────────────────────────────────
-// State
+// 1. State & constants
 // ─────────────────────────────────────────────────────────────
 let allProfiles  = [];
 let activeRisk   = 'ALL';
@@ -14,10 +53,6 @@ let _hsMonthlyByStudent = {};
 let _hsMonthlyCohort    = [];
 let _tradeMonthlyCohort = [];
 
-// Small reusable warning glyph — same path as ICONS.alertTri, sized for
-// inline use in status text. Uses currentColor so it inherits whatever
-// color the surrounding span is set to, instead of relying on an emoji
-// glyph that renders differently (and in color) across platforms.
 const _warnGlyph = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px;vertical-align:-1px;display:inline-block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>';
 
 // ── Session state ────────────────────────────────────────────
@@ -25,11 +60,10 @@ let _currentRole       = SERVER_ROLE       || '';
 let _currentName       = SERVER_NAME       || '';
 let _currentEmployeeId = SERVER_EMPLOYEE_ID || '';
 
-// ────────────────────────────────────────────────────────────
-// Themed confirm / prompt / toast — replaces native alert()/confirm()/
-// prompt() so error and confirmation states stay inside the app's own
-// theme instead of dropping into an unstyled browser dialog.
-// ────────────────────────────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// 2. Themed dialog / toast helpers
+// ─────────────────────────────────────────────────────────────
 function _ensureThemedDialogEl() {
   if (document.getElementById('themedDialog')) return;
   const el = document.createElement('div');
@@ -114,7 +148,7 @@ function themedPrompt(message, defaultValue, opts) {
   });
 }
 
-function showToast(message, type) {
+function showToast(message, type, duration) {
   let toast = document.getElementById('themedToast');
   if (!toast) {
     toast = document.createElement('div');
@@ -129,34 +163,93 @@ function showToast(message, type) {
   toast.style.border     = '1px solid ' + (isError ? 'color-mix(in srgb, var(--high) 32%, transparent)' : 'color-mix(in srgb, var(--ok) 32%, transparent)');
   toast.style.opacity    = '1';
   clearTimeout(toast._hideTimer);
-  toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, 3400);
+  toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, duration || 3400);
 }
 
-// ────────────────────────────────────────────────────────────
-// Client-side permission helper
-// ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// 3. Client-side permission helpers
+// ─────────────────────────────────────────────────────────────
 const CLIENT_PERMISSIONS = {
-  'Admin':               ['view','add_note','delete_note','edit_status','edit_risk','bulk_edit','merge','send_digest','manage_overrides','revert_changes'],
-  'Program Manager':     ['view','add_note','delete_note','edit_status','edit_risk','bulk_edit','merge','send_digest','manage_overrides','revert_changes'],
-  'Manager':             ['view','add_note','delete_note','edit_status','edit_risk','bulk_edit','merge','send_digest','manage_overrides','revert_changes'],
-  'Counselor':           ['view','add_note','delete_note','edit_status','bulk_edit','merge','manage_overrides','revert_changes'],
-  'Academic Instructor': ['view','add_note','edit_status','merge'],
+  'Admin': ['*'],
+
+  'Program Manager': [
+    'view_all', 'add_note', 'delete_note', 'edit_status', 'edit_risk',
+    'bulk_edit', 'merge', 'send_digest', 'manage_overrides', 'revert_changes',
+    'export_csv', 'upload_schedule', 'upload_roster', 'generate_wir',
+    'upload_etar', 'edit_transcript', 'edit_timelog', 'archive_student',
+  ],
+  'Manager': [ // same as Program Manager, but subject to Lock Mode toggle
+    'view_all', 'add_note', 'delete_note', 'edit_status', 'edit_risk',
+    'bulk_edit', 'merge', 'send_digest', 'manage_overrides', 'revert_changes',
+    'export_csv', 'upload_schedule', 'upload_roster', 'generate_wir',
+    'upload_etar', 'edit_transcript', 'edit_timelog', 'archive_student',
+  ],
+
+  'Counselor': [
+    'view_all', 'export_csv', 'send_digest',
+    'view_etar', 'view_transcript', 'view_timelog',
+    'add_note', 'delete_note',
+  ],
+
+  'Academic Instructor': [ // = "Teacher"
+    'export_csv', 'send_digest', 'upload_etar',
+    'edit_transcript', 'edit_timelog', 'add_note',
+  ],
 };
 
 function _can(permission) {
   if (!_currentRole) return false;
-  return (CLIENT_PERMISSIONS[_currentRole] || []).includes(permission);
+  const perms = CLIENT_PERMISSIONS[_currentRole] || [];
+  if (perms.includes('*')) {
+    return !(_lockModeActive && _isEditPermission(permission)); // Admin unaffected unless lock is on for them too — see note below
+  }
+  if (_lockModeActive && _isEditPermission(permission)) return false;
+  return perms.includes(permission);
+}
+
+// Permissions considered "editing" — blocked entirely while Lock Mode is on,
+// regardless of role, so a Manager can browse without risk of accidental changes.
+function _isEditPermission(permission) {
+  return ['add_note', 'delete_note', 'edit_status', 'edit_risk', 'bulk_edit',
+          'merge', 'manage_overrides', 'revert_changes', 'upload_schedule',
+          'upload_roster', 'generate_wir', 'upload_etar', 'edit_transcript',
+          'edit_timelog', 'archive_student'].includes(permission);
+}
+let _lockModeActive = false;
+
+function toggleLockMode() {
+  _lockModeActive = !_lockModeActive;
+  try { localStorage.setItem('dashLockMode', _lockModeActive ? '1' : ''); } catch(e) {}
+  _applyRoleUI();
+  showToast(_lockModeActive ? 'Lock Mode on — editing disabled.' : 'Lock Mode off — editing enabled.');
+  const btn = document.getElementById('lockModeBtn');
+  if (btn) btn.classList.toggle('active', _lockModeActive);
+}
+
+function _canEdit(section) {
+  if (section === 'transcript') return _can('edit_transcript');
+  if (section === 'timelog')    return _can('edit_timelog');
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Bootstrap
+// 4. Bootstrap
 // ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
+
+  // Load login announcements
+  loadLoginAnnouncements(() => {
+    document.getElementById('loginScreen').classList.remove('hidden');
+  });
   document.getElementById('studentsBody').addEventListener('click', e => {
     const btn = e.target.closest('.detail-btn');
     if (btn) openModal(btn.dataset.id);
   });
-
+  document.getElementById('cardsGrid').addEventListener('click', e => {
+    const btn = e.target.closest('.detail-btn');
+    if (btn) openModal(btn.dataset.id);
+  });
+  try { _lockModeActive = localStorage.getItem('dashLockMode') === '1'; } catch(e) {}
   try {
     if (localStorage.getItem('dashColsExpanded')) {
       _colsExpanded = true;
@@ -165,10 +258,8 @@ document.addEventListener('DOMContentLoaded', () => {
       if (btn) { btn.textContent = '－'; btn.classList.add('open'); }
     }
   } catch(e) {}
-
   _renderCustomPresets();
   _wirePresetSelectListener();
-
   try {
     const savedRole = localStorage.getItem('dashRole');
     if (savedRole) {
@@ -176,29 +267,29 @@ document.addEventListener('DOMContentLoaded', () => {
       if (roleEl) roleEl.value = savedRole;
     }
   } catch(e) {}
-
   if (window.innerWidth <= 768) {
+    setView('cards');
     _currentView = 'cards';
-    document.getElementById('btnCardView').classList.add('active');
-    document.getElementById('btnTableView').classList.remove('active');
+    document.getElementById('btnCardView')?.classList.add('active');
+    document.getElementById('btnTableView')?.classList.remove('active');
   }
-
   if (_currentRole) {
     document.getElementById('loginScreen').classList.add('hidden');
     _applyRoleUI();
     loadData();
     initCounselorFilter();
+    initTeacherFilter();
   }
 });
 
-// ────────────────────────────────────────────────────────────
-// Staff Login
-// ────────────────────────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// 5. Staff login
+// ─────────────────────────────────────────────────────────────
 function staffLogin() {
   const input = document.getElementById('employeeIdInput');
   const id    = (input ? input.value : '').trim();
   if (!id) {
-    _showLoginError('Please enter your Employee ID.');
+    _showLoginError('Please enter your Employee ID. If you do not know your Employee ID you can find it on CIS or Contact Admin');
     return;
   }
 
@@ -244,21 +335,43 @@ function _completeLogin() {
   _applyRoleUI();
   loadData();
   initCounselorFilter();
+  initTeacherFilter();
+}
+
+function loadLoginAnnouncements(callback) {
+  google.script.run
+    .withSuccessHandler(function(announcements) {
+      const box = document.getElementById("loginAnnouncements");
+      if (announcements && announcements.length) {
+        box.innerHTML = `
+          <strong>📢 Dashboard Updates</strong>
+          <ul>
+            ${announcements.map(a => `
+              <li>${a.message}</li>
+            `).join("")}
+          </ul>
+        `;
+        box.classList.remove("hidden");
+      }
+      if (callback) callback();
+    })
+    .getDashboardAnnouncements();
 }
 
 function _applyRoleUI() {
   _setVisible('btnMergeProfiles',   _can('merge'));
   _setVisible('btnSendDigest',      _can('send_digest'));
-  _setVisible('btnBulkEdit',        _can('bulk_edit'));
   _setVisible('bulkNoteBtn',        _can('add_note'));
   _setVisible('bulkStatusBtn',      _can('bulk_edit'));
-  _setVisible('btnProductivity',    _can('send_digest'));
+  _setVisible('btnGenerateWIR',     _can('generate_wir'));
+  _setVisible('btnProductivity',    _can('send_digest'));   
+  _setVisible('btnBulkPacing',      _can('bulk_edit')); 
+  _setVisible('btnCreditReport',    _can('generate_wir'));
 
-  if (_currentRole === 'Academic Instructor') {
-    document.querySelectorAll('.btn-override-toggle').forEach(btn => {
-      if (btn.textContent.trim() === 'Edit') btn.style.display = 'none';
-    });
-  }
+  document.querySelectorAll('[onclick*="openScheduleUpload"]').forEach(el => el.style.display = _can('upload_schedule') ? '' : 'none');
+  document.querySelectorAll('[onclick*="openRosterUpload"]').forEach(el => el.style.display = _can('upload_roster') ? '' : 'none');
+
+  _setVisible('lockModeBtn', _currentRole === 'Manager' || _currentRole === 'Admin' || _currentRole === 'Program Manager');
 }
 
 function _setVisible(id, visible) {
@@ -267,7 +380,7 @@ function _setVisible(id, visible) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Data loading
+// 6. Data loading
 // ─────────────────────────────────────────────────────────────
 function loadData() {
   setLoading(true);
@@ -278,12 +391,40 @@ function loadData() {
     .getDashboardData();
 }
 
+let _refreshTimerInterval = null;
+
 function refreshData() {
+  const btn   = document.getElementById('refreshBtn');
+  const label = document.getElementById('refreshBtnLabel');
+  if (btn && btn.disabled) return;
+
+  if (btn)   { btn.disabled = true; btn.style.opacity = '0.6'; btn.style.pointerEvents = 'none'; }
+
+  const startTime = Date.now();
+  if (label) label.textContent = 'Refreshing… 0:00';
+
+  clearInterval(_refreshTimerInterval);
+  _refreshTimerInterval = setInterval(() => {
+    if (!label) return;
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    const mins = Math.floor(elapsed / 60);
+    const secs = elapsed % 60;
+    label.textContent = `Refreshing… ${mins}:${String(secs).padStart(2, '0')}`;
+  }, 1000);
+
   setLoading(true);
   _startLoadTimeoutWatch();
+
+  function finish(fn, arg) {
+    clearInterval(_refreshTimerInterval);
+    if (btn)   { btn.disabled = false; btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+    if (label) label.textContent = 'Refresh';
+    fn(arg);
+  }
+
   google.script.run
-    .withSuccessHandler(onDataLoaded)
-    .withFailureHandler(onError)
+    .withSuccessHandler(result => finish(onDataLoaded, result))
+    .withFailureHandler(err    => finish(onError, err))
     .refreshData();
 }
 
@@ -308,24 +449,20 @@ function onDataLoaded(result) {
   wirWeekLabel = result.wirWeekLabel || null;
 
   renderSummaryCards(result.metrics || {});
+  if (_archivedCount === null) _loadArchivedCount();
+  _lastRenderFingerprint = '';
   applyFilters();
-
-
-  renderFreshnessBanner(result.lastUpdated, wirWeekLabel);
-
+  renderFreshnessBanner(result.lastUpdated, wirWeekLabel, result.rosterLastUpdated);
   document.getElementById('dashContent').classList.remove('hidden');
-
   if (result.lastUpdated) {
     const d = new Date(result.lastUpdated);
     document.getElementById('lastUpdated').textContent =
       'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
   }
-
   const wirLabel = document.getElementById('wirWeekLabel');
   if (wirLabel && !_currentName) {
     wirLabel.textContent = wirWeekLabel ? 'WIR: ' + wirWeekLabel : '';
   }
-
   _maybeStartWalkthrough();
 }
 
@@ -335,38 +472,34 @@ function onError(err) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Freshness Banner
+// 7. Freshness banner
 // ─────────────────────────────────────────────────────────────
-function renderFreshnessBanner(lastUpdated, wirLabel) {
+function renderFreshnessBanner(lastUpdated, wirLabel, rosterLastUpdated) {
   try {
     const banner  = document.getElementById('freshnessBanner');
     const sources = document.getElementById('freshnessSources');
     if (!banner || !sources) return;
     try { if (sessionStorage.getItem('freshnessDismissed')) return; } catch(e) {}
-
     const now   = new Date();
     const today = now.getDay();
     const hour  = now.getHours();
-
     const daysSinceFriday = today === 5 ? (hour >= 17 ? 0 : 7)
                           : today === 6 ? 1 : today === 0 ? 2 : today + 2;
     const lastFriday = new Date(now);
     lastFriday.setDate(now.getDate() - daysSinceFriday);
-
     const timeUpdateDays = [1, 3, 5];
     let daysSinceTime = 0;
     for (let d = 0; d <= 7; d++) {
       const checkDay = ((today - d) + 7) % 7;
       if (timeUpdateDays.includes(checkDay)) { daysSinceTime = d; break; }
     }
-
     const fmtDate = d => d.toLocaleDateString([], { weekday: 'short', month: 'short', day: 'numeric' });
-
     const items = [
       { label: 'Academic', sub: 'updates daily',                cls: 'fi-today', tip: 'High School & HiSET data refreshes daily from Edgenuity' },
       { label: 'Trades',   sub: 'as of ' + fmtDate(lastFriday), cls: daysSinceFriday <= 1 ? 'fi-today' : 'fi-week', tip: 'Trade Summary & monthly % data updates every Friday' },
       { label: 'Time',     sub: daysSinceTime === 0 ? 'updated today' : daysSinceTime === 1 ? 'updated yesterday' : daysSinceTime + ' days ago', cls: daysSinceTime <= 1 ? 'fi-today' : daysSinceTime <= 3 ? 'fi-week' : 'fi-old', tip: 'Worked time data updates Monday, Wednesday, and Friday' },
       { label: 'WIR',      sub: wirLabel ? 'week of ' + wirLabel : 'not loaded', cls: wirLabel ? 'fi-week' : 'fi-old', tip: 'Weekly Intervention Report — one report per week' },
+      { label: 'Roster',   sub: rosterLastUpdated ? 'as of ' + new Date(rosterLastUpdated).toLocaleDateString([], { month:'short', day:'numeric' }) : 'never run', cls: rosterLastUpdated ? 'fi-week' : 'fi-old', tip: 'Last time the roster upload tool was run to verify student status' },
     ];
 
     let sourcesHtml = items.map(i => `
@@ -397,9 +530,10 @@ function dismissFreshness() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Summary Cards
+// 8. Summary cards
 // ─────────────────────────────────────────────────────────────
 function renderSummaryCards(m) {
+  _lastMetrics = m;
   const container = document.getElementById('summaryCards');
   const rc        = m.riskCounts || {};
   const total         = m.total            || 0;
@@ -426,13 +560,13 @@ function renderSummaryCards(m) {
     { label: 'No Data Yet',     value: unknown,       cls: 'accent', sub: unknown === 1 ? 'student' : 'students' },
     { label: 'Trade Complete',  value: tradeComplete, cls: 'low',    sub: 'finished trades' },
     { label: 'High School Complete', value: hsComplete, cls: 'low', sub: 'finished high school' },
-    { label: 'Not Set Up',      value: unmapped,      cls: 'medium', sub: 'missing from map' },
+    { label: 'Archived', value: _archivedCount ?? '…', cls: 'medium', sub: 'view / restore', clickable: true },
     { label: 'Interventions',   value: wir,           cls: 'high',   sub: 'on WIR this week' },
     { label: 'With Notes',      value: hasNotes,      cls: 'accent', sub: 'have staff notes' },
   ];
 
   container.innerHTML = cards.map(c => `
-    <div class="card card-${c.cls}">
+    <div class="card card-${c.cls}" ${c.clickable ? `onclick="openArchivedModal()" style="cursor:pointer;"` : ''}>
       <div class="card-label">${c.label}</div>
       <div class="card-value ${c.cls}">${c.value}</div>
       <div class="card-sub">${c.sub}</div>
@@ -440,7 +574,7 @@ function renderSummaryCards(m) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Filters
+// 9. Filters (risk / type / counselor / teacher) + presets
 // ─────────────────────────────────────────────────────────────
 function setRiskFilter(el) {
   document.querySelectorAll('[data-risk]').forEach(b => b.classList.remove('active'));
@@ -458,76 +592,24 @@ function setTypeFilter(el) {
 
 function applyFilters() {
   const filtered = _getFilteredSorted();
-
   const sortKey     = document.getElementById('sortSelect').value;
   const fingerprint = _currentView + '|' + sortKey + '|' + filtered.map(p => p.id + p.risk.score).join(',');
-
   const countEl = document.getElementById('resultCount');
   countEl.textContent = `${filtered.length} student${filtered.length !== 1 ? 's' : ''}`;
-
   if (fingerprint === _lastRenderFingerprint) return;
   _lastRenderFingerprint = fingerprint;
-
   selectedIds.clear();
   updateBulkBar();
-
   if      (_currentView === 'cards')  renderCards(filtered);
   else if (_currentView === 'action') renderActionView(filtered);
   else                                renderTable(filtered);
 }
 
-function _getFilteredSorted() {
-  const search  = (document.getElementById('searchInput').value || '').toLowerCase().trim();
-  const sortKey = document.getElementById('sortSelect').value;
-
-  let filtered = allProfiles.filter(p => {
-    if (activeRisk !== 'ALL' && p.risk.level !== activeRisk) return false;
-    if (activeType !== 'ALL') {
-      if (activeType === 'HS'             && (!p.academic || p.academic.type !== 'HS'))    return false;
-      if (activeType === 'HISET'          && (!p.academic || p.academic.type !== 'HISET')) return false;
-      if (activeType === 'TRADES'         && (p.hasAcademic || !p.hasTrades))              return false;
-      if (activeType === 'INTERVENTION'   && !p.hasIntervention)                           return false;
-      if (activeType === 'TRADE_COMPLETE' && !p.tradeComplete)                             return false;
-      if (activeType === 'HS_COMPLETE'    && !p.hsComplete)                                return false;
-      if (activeType === 'UNMAPPED'       && !p.mappingMissing)                            return false;
-    }
-    if (search) {
-      const hay = (p.displayName + ' ' + (p.academicId||'') + ' ' + (p.tradesId||'')).toLowerCase();
-      if (!hay.includes(search)) return false;
-    }
-    return true;
-  });
-
-  filtered.sort((a, b) => {
-    switch (sortKey) {
-      case 'risk': {
-        const o = { HIGH:0, MEDIUM:1, LOW:2, UNKNOWN:3 };
-        return (o[a.risk.level]||3) - (o[b.risk.level]||3);
-      }
-      case 'academicPct':  return (b.academic?.percent ?? -1) - (a.academic?.percent ?? -1);
-      case 'tradesPct':    return (b.trades?.[0]?.overallPct ?? -1) - (a.trades?.[0]?.overallPct ?? -1);
-      case 'tradeName': {
-        const an = (a.tradeNameOverride || a.trades?.[0]?.tarName || (a.tradeComplete ? (a.completedTrades||[])[0] : '') || '').toString();
-        const bn = (b.tradeNameOverride || b.trades?.[0]?.tarName || (b.tradeComplete ? (b.completedTrades||[])[0] : '') || '').toString();
-        if (!an && !bn) return a.displayName.localeCompare(b.displayName);
-        if (!an) return 1; if (!bn) return -1;
-        return an.localeCompare(bn) || a.displayName.localeCompare(b.displayName);
-      }
-      case 'daysLeft': return (a.academic?.daysToGrad ?? 9999) - (b.academic?.daysToGrad ?? 9999);
-      default:         return a.displayName.localeCompare(b.displayName);
-    }
-  });
-
-  return filtered;
-}
-// ── COUNSELOR FILTER ─────────────────────────────────────────
-// Loaded once on dashboard init, persisted to localStorage so
-// the selection survives page refreshes.
- 
+// ── Counselor filter ─────────────────────────────────────────
 const COUNSELOR_STORAGE_KEY = 'tjc_counselor_filter';
 let _counselorList = []; // full list from Staff Roles
 let _activeCounselorTrades = null; // Set of trade names, or null = all
- 
+
 function initCounselorFilter() {
   google.script.run
     .withSuccessHandler(function(result) {
@@ -543,7 +625,7 @@ function initCounselorFilter() {
         opt.textContent = c.name + ' (' + c.trades.join(', ') + ')';
         sel.appendChild(opt);
       });
- 
+
       // Restore saved selection
       const saved = localStorage.getItem(COUNSELOR_STORAGE_KEY);
       if (saved) {
@@ -556,7 +638,7 @@ function initCounselorFilter() {
     })
     .getCounselorList();
 }
- 
+
 function applyCounselorFilter() {
   const sel  = document.getElementById('counselorSelect');
   const name = sel.value;
@@ -567,21 +649,18 @@ function applyCounselorFilter() {
   localStorage.setItem(COUNSELOR_STORAGE_KEY, name);
   _applySelectedCounselor(name);
 }
- 
+
 function _applySelectedCounselor(name) {
   const counselor = _counselorList.find(c => c.name === name);
   if (!counselor) return;
-
   _activeCounselorTrades = new Set(counselor.trades.map(t => t.toLowerCase()));
-
-  // Update UI chrome
   document.getElementById('counselorClearBtn').style.display = '';
   document.getElementById('counselorFilterLabel').textContent =
     'Showing: ' + counselor.trades.join(', ');
 
   applyFilters();
 }
- 
+
 function clearCounselorFilter() {
   _activeCounselorTrades = null;
   localStorage.removeItem(COUNSELOR_STORAGE_KEY);
@@ -591,13 +670,7 @@ function clearCounselorFilter() {
   applyFilters();
 }
 
-function _counselorMatchesTrade(trade) {
-  if (!_activeCounselorTrades) return true; // no filter active — show all
-  return _activeCounselorTrades.has(String(trade || '').toLowerCase());
-}
-
-// ── TEACHER FILTER ─────────────────────────────────────────
-
+// ── Teacher filter ───────────────────────────────────────────
 const TEACHER_STORAGE_KEY = 'tjc_teacher_filter';
 let _hsdAssignments   = {};   // studentId -> 'HSD 2' | 'HSD3' | 'HSE/HSD1'
 let _activeHSDFilter  = null; // currently selected HS class, or null = all
@@ -654,10 +727,8 @@ function clearTeacherFilter() {
   applyFilters();
 }
 
-
-
 // ─────────────────────────────────────────────────────────────
-// Table Rendering
+// 10. Table rendering
 // ─────────────────────────────────────────────────────────────
 function renderTable(profiles) {
   const tbody = document.getElementById('studentsBody');
@@ -736,7 +807,7 @@ function riskLevelLabel(level) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Shared student display computed values
+// 11. Shared student display builder
 // ─────────────────────────────────────────────────────────────
 function _buildStudentDisplay(p) {
   const acPct      = p.academic?.percent ?? null;
@@ -754,6 +825,7 @@ function _buildStudentDisplay(p) {
   const ACADEMIC_STATUS_MAP = {
     HS:          { label: 'HS',          cls: 'tag-hs' },
     HISET:       { label: 'HISET',       cls: 'tag-hiset' },
+    GED:         { label: 'GED',         cls: 'tag-ged' },
     HS_COMPLETE: { label: 'HS Complete', cls: 'tag-complete' },
     NOT_STARTED: { label: 'Not Started', cls: 'tag-warn' },
   };
@@ -806,7 +878,9 @@ function _buildStudentDisplay(p) {
     (p.trades?.[0]?.tarName?.toUpperCase() === 'USN');
 
   let thisWkCell;
-  if (p.hsComplete) {
+  if (p.hsComplete && p.tradeComplete) {
+    thisWkCell = '<span class="in-trades-badge" style="background:var(--low-glow);color:var(--low);">Program Complete</span>';
+  } else if (p.hsComplete) {
     thisWkCell = '<span class="in-trades-badge">Full Time Trades</span>';
   } else if (isUSNorNotStarted && p.hasTrades) {
     thisWkCell = '<span class="in-trades-badge">In Trades</span>';
@@ -835,11 +909,12 @@ function _buildStudentDisplay(p) {
     tradesNameCell, tradesPctCell, thisWkCell, etarCell, tradeName,
     intBadge: p.hasIntervention ? interventionBadge(p.intervention) : '—',
     trendHtml: riskTrendIcon(p.riskTrend),
+    currentCourseTargetDate: p.academic?.targetDate || null,
   };
 }
 
 // ─────────────────────────────────────────────────────────────
-// Detail Modal
+// 12. Detail modal
 // ─────────────────────────────────────────────────────────────
 function openModal(id) {
   const p = allProfiles.find(x => x.id === id);
@@ -989,35 +1064,6 @@ function buildModalBody(p) {
 
   if (p.intervention) right += buildInterventionSection(p.intervention);
 
-  if (p.time) {
-    const MONTHS = ['April','May','June','July','August','September'];
-    let timeHtml = `<div class="info-section"><h3>${ICONS.time} Time Logged</h3>
-      <div class="info-row"><span class="label tip" data-tip="Total hours logged across all time sheets.">Total Hours ⓘ</span><span class="value">${num(p.time.totalHours)} h</span></div>`;
-
-    const sheets    = p.time.sheets || {};
-    const monthKeys = Object.keys(sheets).filter(k => MONTHS.some(m => k.startsWith(m)));
-    if (monthKeys.length) {
-      timeHtml += '<div class="time-months">';
-      MONTHS.forEach(month => {
-        const monthEntries = Object.entries(sheets).filter(([k]) => k.startsWith(month));
-        if (!monthEntries.length) return;
-        timeHtml += `<div class="time-month"><div class="time-month-label">${month}</div><div class="time-weeks">`;
-        monthEntries.forEach(([key, hrs], i) => {
-          const wkLabel = key.replace(month, '').trim() || `W${i+1}`;
-          timeHtml += `<div class="time-week"><span class="tw-label">${esc(wkLabel)}</span><span class="tw-val">${num(hrs)}h</span></div>`;
-        });
-        timeHtml += '</div></div>';
-      });
-      timeHtml += '</div>';
-    } else {
-      Object.entries(sheets).forEach(([sheet, hrs]) => {
-        timeHtml += `<div class="info-row"><span class="label">${esc(sheet)}</span><span class="value">${num(hrs)} h</span></div>`;
-      });
-    }
-    timeHtml += '</div>';
-    right += timeHtml;
-  }
-
   right += buildScheduleSection(p);
   right += buildTABESection(p);
   right += buildHSMonthlySection(p);
@@ -1042,8 +1088,8 @@ function buildInterventionSection(iv) {
     ${iv.status        ? `<span class="wir-status-text">${esc(iv.status)}</span>` : ''}
   </div>`;
 
-  if (iv.gradGap && iv.gradGap.trim()) {
-    const g = iv.gradGap.trim();
+  if (iv.gradGap && String(iv.gradGap).trim()) {
+    const g = String(iv.gradGap).trim();
     const isOver   = g.includes('over limit') || g.startsWith('⛔');
     const isYellow = g.startsWith('🟡');
     // Derived from the same theme tokens as everywhere else, instead of
@@ -1121,15 +1167,9 @@ function buildInterventionSection(iv) {
   return html;
 }
 
-// ─────────────────────────────────────────────────────────────
-// Risk Explainer
-// ─────────────────────────────────────────────────────────────
 function showRiskExplainer()  { document.getElementById('riskExplainer').classList.remove('hidden'); }
 function closeRiskExplainer() { document.getElementById('riskExplainer').classList.add('hidden'); }
 
-// ─────────────────────────────────────────────────────────────
-// Modal helpers
-// ─────────────────────────────────────────────────────────────
 function infoRows(rows) {
   return rows.map(([label, value]) =>
     `<div class="info-row"><span class="label">${esc(label)}</span><span class="value">${esc(String(value ?? '—'))}</span></div>`
@@ -1159,7 +1199,8 @@ document.addEventListener('keydown', e => {
     document.getElementById('digestModal').classList.add('hidden');
   }
 });
-// ── HS Monthly Progress Section ───────────────────────────
+
+// ── Academic / Trade monthly progress sections ──────────────
 function buildHSMonthlySection(p) {
   if (!p.academic || p.academic.type !== 'HS') return '';
 
@@ -1205,20 +1246,27 @@ function buildHSMonthlySection(p) {
     <tbody>`;
 
   student.months.forEach(m => {
-    const gained  = m.creditsGained;
-    const color   = m.inProgress ? 'var(--text-muted)'
-                  : gained > 0   ? 'var(--low)'
-                  : gained === 0 ? 'var(--medium)'
+    // Treat both null and undefined as "no value" — a strict
+    // === null check alone lets undefined slip through and turn
+    // into +NaN a few lines down (Math.abs(undefined) === NaN).
+    const gained = (m.creditsGained === null || m.creditsGained === undefined) ? null : m.creditsGained;
+
+    const color   = m.inProgress   ? 'var(--text-muted)'
+                  : gained === null ? 'var(--text-muted)'
+                  : gained > 0     ? 'var(--low)'
+                  : gained === 0   ? 'var(--medium)'
                   : 'var(--high)';
-    const gainStr = m.inProgress ? '—'
-                  : gained > 0   ? '-' + gained
-                  : gained === 0 ? '0'
+
+    const gainStr = m.inProgress    ? '—'
                   : gained === null ? '—'
+                  : gained > 0      ? '-' + gained
+                  : gained === 0    ? '0'
                   : '+' + Math.abs(gained) + ' ' + _warnGlyph;
+
     const status  = m.inProgress ? '<span style="color:var(--text-muted);font-style:italic;">In Progress</span>'
                   : gained === null ? '<span style="color:var(--text-muted);">No Data</span>'
-                  : gained < 0   ? `<span style="color:var(--high);">${_warnGlyph} Credits Added</span>`
-                  : gained === 0 ? '<span style="color:var(--medium);">No Change</span>'
+                  : gained < 0      ? `<span style="color:var(--high);">${_warnGlyph} Credits Added</span>`
+                  : gained === 0    ? '<span style="color:var(--medium);">No Change</span>'
                   : '<span style="color:var(--low);">✓ Progress</span>';
 
     html += `<tr style="border-bottom:1px solid var(--border);">
@@ -1234,89 +1282,105 @@ function buildHSMonthlySection(p) {
   return html;
 }
 
-// ── Trade Monthly Progress Section ────────────────────────
 function buildTradeMonthlySection(p) {
   if (!p.trades || !p.trades.length) return '';
 
-  const normName = p.displayName.toLowerCase().replace(/[^a-z ]/g, '').trim().split(' ').filter(Boolean).sort().join(' ');
-  const tradeRecords = (p.trades || []).map(t => {
-    return {
-      tarName:  t.tarName,
-      monthly:  t.monthlyProgress || [],
-    };
-  }).filter(t => t.monthly.length > 0);
+  // Only build sections for trades that actually have monthly
+  // snapshot history — a trade with zero monthly rows contributes
+  // nothing to render (e.g. brand new enrollment, no monthly
+  // snapshot cadence run yet).
+  const tradesWithHistory = p.trades.filter(t => t.monthlyProgress && t.monthlyProgress.length);
+  if (!tradesWithHistory.length) return '';
 
-  if (!tradeRecords.length) return '';
+  return tradesWithHistory.map(t => _buildSingleTradeMonthlySection(p, t)).join('');
+}
 
-  const uid = 'trademonthly-' + (p.id || '').replace(/\W/g, '');
+function _buildSingleTradeMonthlySection(p, trade) {
+  const months = trade.monthlyProgress;
+  const uid = 'trademonthly-' + (p.id || '').replace(/\W/g, '') + '-' + String(trade.tarName || '').replace(/\W/g, '');
+
+  // Totals — mirrors the HS section's "Credits at Start / Now / Total Reduced"
+  // cards, but for trade % gained instead of credits reduced. Trade gain is
+  // additive (going up is good), the reverse sign convention of HS credits
+  // (going down is good), so labels and coloring are flipped accordingly.
+  const completed = months.filter(m => !m.addedPostFirst && m.overallGain !== null && m.overallGain !== undefined);
+  const totalGained = +completed.reduce((sum, m) => sum + m.overallGain, 0).toFixed(1);
+  const earliestPct = months[0] ? months[0].endOverallPct : null;
+  const latestPct   = months[months.length - 1] ? months[months.length - 1].endOverallPct : null;
 
   let html = `<div class="info-section">
     <h3 onclick="toggleSection('${uid}', this)" style="cursor:pointer;">
-      ${ICONS.trades} Trade Progress Over Time
+      ${ICONS.sparkline} Trade Progress Over Time
+      <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px;">${esc(trade.tarName || 'Trade')} · ${months.length} month${months.length !== 1 ? 's' : ''}</span>
       <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">▾</span>
     </h3>
     <div id="${uid}">`;
 
-  const MONTH_ORDER = { jan:0, feb:1, mar:2, apr:3, may:4, jun:5, jul:6, aug:7, sep:8, oct:9, nov:10, dec:11 };
+  html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
+    <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">% at Start</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text);">${earliestPct != null ? earliestPct.toFixed(1) + '%' : '—'}</div>
+    </div>
+    <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">% Now</div>
+      <div style="font-size:18px;font-weight:700;color:var(--text);">${latestPct != null ? latestPct.toFixed(1) + '%' : '—'}</div>
+    </div>
+    <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
+      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Total Gained</div>
+      <div style="font-size:18px;font-weight:700;color:${totalGained > 0 ? 'var(--low)' : totalGained < 0 ? 'var(--high)' : 'var(--text)'};">${totalGained > 0 ? '+' + totalGained : totalGained}%</div>
+    </div>
+  </div>`;
 
-  tradeRecords.forEach(t => {
-    t.monthly = [...t.monthly].sort((a, b) => {
-      const [am, ay] = String(a.month).split(' ');
-      const [bm, by] = String(b.month).split(' ');
-      const aKey = (parseInt(ay) || 0) * 100 + (MONTH_ORDER[(am || '').toLowerCase().slice(0,3)] ?? 0);
-      const bKey = (parseInt(by) || 0) * 100 + (MONTH_ORDER[(bm || '').toLowerCase().slice(0,3)] ?? 0);
-      return aKey - bKey;
-    });
+  html += `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead>
+      <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+        <th style="padding:7px 10px;text-align:left;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Month</th>
+        <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">% at End</th>
+        <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Gain</th>
+        <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Status</th>
+      </tr>
+    </thead>
+    <tbody>`;
 
-    if (tradeRecords.length > 1) {
-      html += `<div style="font-size:13px;font-weight:700;color:var(--accent);margin-bottom:10px;">${esc(t.tarName)}</div>`;
-    }
+  months.forEach(m => {
+    // Treat null/undefined the same way the HS section does — a strict
+    // === null check alone would let undefined slip through into NaN.
+    const gained = (m.overallGain === null || m.overallGain === undefined) ? null : m.overallGain;
+    const isNew  = m.addedPostFirst === true;
 
-    html += `<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:14px;">
-      <thead>
-        <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
-          <th style="padding:7px 10px;text-align:left;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Month</th>
-          <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">End %</th>
-          <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Gain</th>
-          <th style="padding:7px 10px;text-align:center;color:var(--text-muted);font-size:11px;font-weight:700;text-transform:uppercase;">Status</th>
-        </tr>
-      </thead>
-      <tbody>`;
+    const color   = isNew           ? 'var(--text-muted)'
+                  : gained === null ? 'var(--text-muted)'
+                  : gained >= 3     ? 'var(--low)'
+                  : gained > 0      ? 'var(--medium)'
+                  : gained === 0    ? 'var(--medium)'
+                  : 'var(--high)';
 
-    t.monthly.forEach(m => {
-      const gain    = (m.overallGain    !== undefined) ? m.overallGain    : null;
-      const endPct  = (m.endOverallPct  !== undefined) ? m.endOverallPct  : null;
-      const isComplete = endPct !== null && endPct >= 100;
-      const isStalled  = !m.addedPostFirst && gain !== null && gain < 3;
-      const color   = isComplete  ? 'var(--low)'
-                    : isStalled   ? 'var(--high)'
-                    : (gain !== null && gain > 3) ? 'var(--low)'
-                    : 'var(--medium)';
-      const status  = isComplete        ? '<span style="color:var(--low);">✓ Complete</span>'
-                    : m.addedPostFirst   ? '<span style="color:var(--text-muted);">Added Mid-Program</span>'
-                    : isStalled         ? `<span style="color:var(--high);">${_warnGlyph} Stalled</span>`
-                    : (gain === null && endPct === null) ? '<span style="color:var(--text-muted);">No Data</span>'
-                    : '<span style="color:var(--low);">✓ Progress</span>';
+    const gainStr = isNew            ? '—'
+                  : gained === null  ? '—'
+                  : gained > 0       ? '+' + gained + '%'
+                  : gained === 0     ? '0%'
+                  : gained + '%' + ' ' + _warnGlyph;
 
-      html += `<tr style="border-bottom:1px solid var(--border);">
-        <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
-        <td style="padding:8px 10px;text-align:center;">${endPct !== null ? endPct.toFixed(1) + '%' : '—'}</td>
-        <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">
-          ${gain !== null ? '+' + gain.toFixed(1) + '%' : '—'}
-        </td>
-        <td style="padding:8px 10px;text-align:center;">${status}</td>
-      </tr>`;
-    });
+    const status  = isNew            ? '<span style="color:var(--text-muted);">Added Mid-Program</span>'
+                  : gained === null  ? '<span style="color:var(--text-muted);">No Data</span>'
+                  : gained < 0       ? `<span style="color:var(--high);">${_warnGlyph} Lost Ground</span>`
+                  : gained < 3       ? '<span style="color:var(--medium);">Stalled</span>'
+                  : '<span style="color:var(--low);">✓ Progress</span>';
 
-    html += `</tbody></table>`;
+    html += `<tr style="border-bottom:1px solid var(--border);">
+      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
+      <td style="padding:8px 10px;text-align:center;">${m.endOverallPct != null ? m.endOverallPct.toFixed(1) + '%' : '—'}</td>
+      <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">${gainStr}</td>
+      <td style="padding:8px 10px;text-align:center;">${status}</td>
+    </tr>`;
   });
 
-  html += `</div></div>`;
+  html += `</tbody></table></div></div>`;
   return html;
 }
 
 // ─────────────────────────────────────────────────────────────
-// Overrides
+// 13. Overrides panel
 // ─────────────────────────────────────────────────────────────
 function toggleOverridePanel() {
   const panel = document.getElementById('overridePanel');
@@ -1327,6 +1391,7 @@ function buildOverridePanel(p) {
   const ACADEMIC_STATUS_OPTIONS = [
     { value: 'HS',           label: 'HS' },
     { value: 'HISET',        label: 'HISET' },
+    { value: 'GED',          label: 'GED' },
     { value: 'HS_COMPLETE',  label: 'HS Complete' },
     { value: 'NOT_STARTED',  label: 'Not Started' },
   ];
@@ -1420,8 +1485,18 @@ function onOverrideError(id, err) {
   if (box) { box.textContent = msg; box.classList.add('show'); setTimeout(() => box.classList.remove('show'), 4000); }
 }
 
+function toggleSection(uid, headerEl) {
+  const body = document.getElementById(uid);
+  if (!body) return;
+  const isHidden = body.style.display === 'none' || body.classList.contains('hidden');
+  body.style.display = isHidden ? '' : 'none';
+  body.classList.remove('hidden');
+  const chevron = headerEl.querySelector('.sidebar-chevron') || headerEl.querySelector('span:last-child');
+  if (chevron) chevron.textContent = isHidden ? '▾' : '▸';
+}
+
 // ─────────────────────────────────────────────────────────────
-// Merge Students
+// 14. Merge students
 // ─────────────────────────────────────────────────────────────
 function openMergeModal()        { renderMergePanel(); document.getElementById('mergeModal').classList.remove('hidden'); }
 function closeMergeModal(e)      { if (e && e.target !== document.getElementById('mergeModal')) return; document.getElementById('mergeModal').classList.add('hidden'); }
@@ -1516,7 +1591,97 @@ function confirmMerge(sourceId, targetId) {
     .mergeStudents(sourceId, targetId, _currentEmployeeId, _currentRole);
 }
 
-// ── Schedule upload ──────────────────────────────────────────
+// ─────────────────────────────────────────────────────────────
+// 15. Trade summary modal
+// ─────────────────────────────────────────────────────────────
+function openTradeSummaryModal() {
+  document.getElementById('tradeSummaryModal').classList.remove('hidden');
+  const search = document.getElementById('tradeSummarySearch');
+  if (search) search.value = '';
+  _renderTradeSummary();
+}
+
+function closeTradeSummaryModal(e) {
+  if (e && e.target !== document.getElementById('tradeSummaryModal')) return;
+  document.getElementById('tradeSummaryModal').classList.add('hidden');
+}
+
+function _renderTradeSummary() {
+  const search = (document.getElementById('tradeSummarySearch').value || '').toLowerCase().trim();
+  const byTrade = {};
+
+  allProfiles.forEach(p => {
+    (p.trades || []).forEach(t => {
+      const name = t.tarName || 'Unknown';
+      (byTrade[name] = byTrade[name] || []).push({
+        displayName: p.displayName,
+        staffPct:    t.staffPct,
+        studentPct:  t.studentPct,
+        overallPct:  t.overallPct,
+        complete:    false,
+      });
+    });
+    // Students who've finished a trade drop out of p.trades[] entirely
+    // (per the existing "Trade Complete" card logic elsewhere) — pull
+    // them in from completedTrades so they still show up at 100%.
+    if (p.tradeComplete && (!p.trades || !p.trades.length) && p.completedTrades && p.completedTrades.length) {
+      p.completedTrades.forEach(name => {
+        (byTrade[name] = byTrade[name] || []).push({
+          displayName: p.displayName, staffPct: 100, studentPct: 100, overallPct: 100, complete: true,
+        });
+      });
+    }
+  });
+
+  const tradeNames = Object.keys(byTrade).sort();
+  const container = document.getElementById('tradeSummaryBody');
+
+  if (!tradeNames.length) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No trade data loaded.</div>';
+    return;
+  }
+
+  const sections = tradeNames.map(trade => {
+    let students = byTrade[trade];
+    if (search) students = students.filter(s => s.displayName.toLowerCase().includes(search));
+    if (!students.length) return '';
+    students.sort((a, b) => (b.overallPct ?? -1) - (a.overallPct ?? -1));
+
+    return `
+      <div class="info-section" style="margin-bottom:14px;">
+        <h3 style="margin-bottom:8px;">${esc(trade)}
+          <span style="font-size:11px;font-weight:400;color:var(--text-muted);margin-left:6px;">${students.length} student${students.length !== 1 ? 's' : ''}</span>
+        </h3>
+        <table style="width:100%;border-collapse:collapse;font-size:12px;">
+          <thead>
+            <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+              <th style="padding:6px 8px;text-align:left;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Student</th>
+              <th style="padding:6px 8px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Staff %</th>
+              <th style="padding:6px 8px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Student %</th>
+              <th style="padding:6px 8px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Overall %</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${students.map(s => `
+              <tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px 8px;font-weight:600;color:var(--text);">${esc(s.displayName)}</td>
+                <td style="padding:6px 8px;text-align:center;">${s.staffPct != null ? s.staffPct.toFixed(1) + '%' : '—'}</td>
+                <td style="padding:6px 8px;text-align:center;">${s.studentPct != null ? s.studentPct.toFixed(1) + '%' : '—'}</td>
+                <td style="padding:6px 8px;text-align:center;font-weight:700;color:${s.complete ? 'var(--low)' : 'var(--text)'};">${s.overallPct != null ? s.overallPct.toFixed(1) + '%' : '—'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  }).filter(Boolean);
+
+  container.innerHTML = sections.length
+    ? sections.join('')
+    : '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No students match that search.</div>';
+}
+
+// ─────────────────────────────────────────────────────────────
+// 16. Uploads: schedule / roster / TABE
+// ─────────────────────────────────────────────────────────────
 function openScheduleUpload() {
   document.getElementById('scheduleUploadModal').classList.remove('hidden');
   document.getElementById('scheduleFileInput').value = '';
@@ -1583,7 +1748,6 @@ function onScheduleFileSelected(input) {
   reader.readAsArrayBuffer(file);
 }
 
-
 function confirmScheduleUpload() {
   const preview = document.getElementById('schedulePreview');
   const base64  = preview.dataset.base64;
@@ -1633,6 +1797,241 @@ function confirmScheduleUpload() {
     })
     .saveWeeklySchedule(base64, _currentRole);
 }
+
+let _wirGenerating = false; // guards against closing mid-run
+
+function openWIRGenerateModal() {
+  _wirGenerating = false;
+  document.getElementById('wirGenerateModal').classList.remove('hidden');
+  document.getElementById('wirGenerateForm').classList.remove('hidden');
+  document.getElementById('wirGenerateLoading').classList.add('hidden');
+  document.getElementById('wirGenerateCloseBtn').style.display = '';
+  const input = document.getElementById('wirGenerateWeekInput');
+  if (!input.value) input.value = _defaultTimeLogWeek_();
+  document.getElementById('wirGenerateStatus').textContent = '';
+  document.getElementById('wirGenerateStatus').className = 'schedule-status';
+}
+
+function closeWIRGenerateModal() {
+  if (_wirGenerating) return; // ignore close attempts while a run is in progress
+  document.getElementById('wirGenerateModal').classList.add('hidden');
+}
+
+function confirmGenerateWIR() {
+  const week   = document.getElementById('wirGenerateWeekInput').value;
+  const status = document.getElementById('wirGenerateStatus');
+
+  if (!week) { status.textContent = 'Pick a week first.'; status.className = 'schedule-status err'; return; }
+
+  _wirGenerating = true;
+  document.getElementById('wirGenerateForm').classList.add('hidden');
+  document.getElementById('wirGenerateLoading').classList.remove('hidden');
+  document.getElementById('wirGenerateCloseBtn').style.display = 'none';
+  status.textContent = '';
+  status.className   = 'schedule-status';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      _wirGenerating = false;
+      document.getElementById('wirGenerateLoading').classList.add('hidden');
+      document.getElementById('wirGenerateForm').classList.remove('hidden');
+      document.getElementById('wirGenerateCloseBtn').style.display = '';
+
+      if (!result || result.success === false) {
+        status.textContent = (result && result.error) || 'Generation failed.';
+        status.className   = 'schedule-status err';
+        return;
+      }
+      status.textContent = `✓ Week of ${result.weekLabel}: ${result.written} reports written` +
+        (result.skipped ? `, ${result.skipped} already existed.` : '.');
+      status.className = 'schedule-status ok';
+      showToast(`WIR generated — ${result.written} written for week of ${result.weekLabel}.`);
+      refreshData();
+      setTimeout(closeWIRGenerateModal, 1800);
+    })
+    .withFailureHandler(function(err) {
+      _wirGenerating = false;
+      document.getElementById('wirGenerateLoading').classList.add('hidden');
+      document.getElementById('wirGenerateForm').classList.remove('hidden');
+      document.getElementById('wirGenerateCloseBtn').style.display = '';
+      status.textContent = err && err.message ? err.message : 'Generation failed — please try again.';
+      status.className   = 'schedule-status err';
+    })
+    .generateWeeklyWIR(week, _currentEmployeeId, _currentRole);
+}
+
+function previewWIRStudent() {
+  const studentId = document.getElementById('wirPreviewStudentId').value.trim();
+  const week = document.getElementById('wirGenerateWeekInput').value;
+  const resultEl = document.getElementById('wirPreviewResult');
+  if (!studentId || !week) { showToast('Enter a student ID and pick a week first.', 'error'); return; }
+
+  resultEl.innerHTML = '<div style="padding:10px;color:var(--text-muted);font-size:12px;">Loading…</div>';
+
+  google.script.run
+    .withSuccessHandler(result => {
+      if (!result || result.success === false) {
+        resultEl.innerHTML = `<div style="color:var(--high);font-size:12px;">${esc(result?.error || 'Failed.')}</div>`;
+        return;
+      }
+      resultEl.innerHTML = `
+        <div style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:10px 12px;font-size:12px;">
+          <div style="font-weight:700;margin-bottom:6px;">Priority: <span style="color:var(--accent-mid);">${esc(result.priority)}</span> · Urgency: ${esc(result.urgencyLabel)} · Tier Score: ${result.wirTierScore}</div>
+          <div style="color:var(--text-muted);margin-bottom:6px;">${esc(result.reason)}</div>
+          <div style="font-size:11px;color:var(--text-muted);">This week hours: ${result.input.thisWeekHours} / target ${result.input.weeklyTarget} · Active week: ${result.input.isActiveWeek ? 'Yes' : 'No'} · Tags: ${result.tags.join(', ') || 'none'}</div>
+        </div>`;
+    })
+    .withFailureHandler(err => {
+      resultEl.innerHTML = `<div style="color:var(--high);font-size:12px;">${esc(err?.message || 'Failed.')}</div>`;
+    })
+    .previewWIRForStudent(studentId, week, _currentRole);
+}
+
+const ROSTER_TRADE_COURSES    = ["BCT","Carpentry","CNA","Culinary Arts","Pharmacy Tech",
+                                  "Security& Protective","Security&Protect 2","OTP-MFR","OTP/ACT"];
+const ROSTER_ACADEMIC_COURSES = ["HSE/HSD1","HSD 2","HSD3"];
+
+function openRosterUpload() {
+  document.getElementById('rosterUploadModal').classList.remove('hidden');
+  document.getElementById('rosterFileInput').value = '';
+  document.getElementById('rosterUploadStatus').textContent = '';
+  document.getElementById('rosterUploadStatus').className = 'schedule-status';
+  document.getElementById('rosterUploadLog').textContent = '';
+}
+
+function closeRosterUpload() {
+  document.getElementById('rosterUploadModal').classList.add('hidden');
+}
+
+function _rosterIsMatch(courseName, list) {
+  const lower = courseName.toLowerCase();
+  return list.some(kw => lower.includes(kw.toLowerCase()));
+}
+
+function _rosterSplitIntoBlocks(rows) {
+  const blocks = [];
+  let current = [];
+  rows.forEach(row => {
+    const isBlank = !row || row.every(c => c === null || c === undefined || String(c).trim() === "");
+    if (isBlank) {
+      if (current.length > 0) { blocks.push(current); current = []; }
+    } else {
+      current.push(row);
+    }
+  });
+  if (current.length > 0) blocks.push(current);
+  return blocks;
+}
+
+function _rosterParseStudentBlock(block) {
+  if (!block || block.length === 0) return null;
+
+  const headerCell = block[0][0] ? String(block[0][0]) : "";
+  const lines = headerCell.split("\n").map(l => l.trim()).filter(l => l !== "");
+  if (lines.length < 2) return null;
+
+  const studentName = lines[0].replace(/\s+/g, " ").trim();
+  const idMatch     = lines[1].match(/\d{5,}/);
+  if (!idMatch) return null;
+  const studentId   = idMatch[0];
+
+  const latestStatus = {};
+  block.slice(2).forEach(row => {
+    const courseName = row[1] ? String(row[1]).trim() : "";
+    const status     = row[6] ? String(row[6]).trim() : "";
+    if (!courseName || !status) return;
+    if (_rosterIsMatch(courseName, ROSTER_TRADE_COURSES) || _rosterIsMatch(courseName, ROSTER_ACADEMIC_COURSES)) {
+      latestStatus[courseName] = status;
+    }
+  });
+
+  let tradeFound = false, tradeComplete = true;
+  let academicFound = false, academicComplete = true;
+
+  Object.entries(latestStatus).forEach(([courseName, status]) => {
+    const inProgress = status === "Currently Enrolled";
+    if (_rosterIsMatch(courseName, ROSTER_TRADE_COURSES)) {
+      tradeFound = true;
+      if (inProgress) tradeComplete = false;
+    }
+    if (_rosterIsMatch(courseName, ROSTER_ACADEMIC_COURSES)) {
+      academicFound = true;
+      if (inProgress) academicComplete = false;
+    }
+  });
+
+  return {
+    id:               studentId,
+    name:             studentName,
+    tradeComplete:    (tradeFound    && tradeComplete)    ? "Complete" : "",
+    academicComplete: (academicFound && academicComplete) ? "Complete" : ""
+  };
+}
+
+function handleRosterUpload() {
+  const file = document.getElementById("rosterFileInput").files[0];
+  const status = document.getElementById('rosterUploadStatus');
+  const log    = document.getElementById('rosterUploadLog');
+  const btn    = document.getElementById('rosterUploadBtn');
+
+  if (!file) { status.textContent = "Please select a file."; status.className = 'schedule-status err'; return; }
+
+  status.textContent = "Reading file…";
+  status.className   = 'schedule-status';
+  log.textContent    = '';
+  btn.disabled = true;
+
+  const reader = new FileReader();
+  reader.onerror = () => { status.textContent = "FileReader failed."; status.className = 'schedule-status err'; btn.disabled = false; };
+
+  reader.onload = function(e) {
+    try {
+      const data     = new Uint8Array(e.target.result);
+      const workbook = XLSX.read(data, { type: "array", cellDates: false });
+      const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+      const rows     = XLSX.utils.sheet_to_json(sheet, { header: 1, defval: null, blankrows: true });
+
+      const dataRows = rows.slice(5);
+      const blocks   = _rosterSplitIntoBlocks(dataRows);
+      const results  = [];
+
+      blocks.forEach(block => {
+        const student = _rosterParseStudentBlock(block);
+        if (student) {
+          results.push(student);
+          log.textContent += `✓ ${student.name} | Trade: ${student.tradeComplete || '—'} | Academic: ${student.academicComplete || '—'}\n`;
+        }
+      });
+      log.scrollTop = log.scrollHeight;
+
+      status.textContent = `Parsed ${results.length} students. Writing to sheet…`;
+
+      google.script.run
+        .withSuccessHandler(result => {
+          btn.disabled = false;
+          status.textContent = `:) Done! ${result.added} added, ${result.updated} updated.`;
+          status.className   = 'schedule-status ok';
+          showToast(`Roster verified — ${result.added} added, ${result.updated} updated.`);
+          refreshData();
+        })
+        .withFailureHandler(err => {
+          btn.disabled = false;
+          status.textContent = "Error: " + (err?.message || 'Save failed — please try again.');
+          status.className   = 'schedule-status err';
+        })
+        .writeResults(results);
+
+    } catch(err) {
+      btn.disabled = false;
+      status.textContent = "Error: " + err.message;
+      status.className   = 'schedule-status err';
+      log.textContent += "Exception: " + err.stack;
+    }
+  };
+
+  reader.readAsArrayBuffer(file);
+}
+
 function openTABEUpload() {
   document.getElementById('tabeUploadModal').classList.remove('hidden');
   document.getElementById('tabeFileInput').value       = '';
@@ -1642,25 +2041,25 @@ function openTABEUpload() {
   document.getElementById('tabePreview').innerHTML        = '';
   document.getElementById('tabePreview').classList.add('hidden');
 }
- 
+
 function closeTABEUpload() {
   document.getElementById('tabeUploadModal').classList.add('hidden');
 }
- 
+
 function onTABEFileSelected(input) {
   const file   = input.files[0];
   const status = document.getElementById('tabeUploadStatus');
   if (!file) return;
- 
+
   status.textContent = 'Reading file…';
   status.className   = 'schedule-status';
- 
+
   if (!file.name.toLowerCase().endsWith('.xls') && !file.name.toLowerCase().endsWith('.xlsx')) {
     status.textContent = '✕ Please upload the .xls file exported from CIS.';
     status.className   = 'schedule-status err';
     return;
   }
- 
+
   const reader = new FileReader();
   reader.onload = function(e) {
     try {
@@ -1671,7 +2070,7 @@ function onTABEFileSelected(input) {
         binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
       }
       const base64 = btoa(binary);
- 
+
       const preview = document.getElementById('tabePreview');
       preview.innerHTML = `
         <div class="schedule-preview-row"><span class="sp-label">File</span><span class="sp-val">${esc(file.name)}</span></div>
@@ -1680,7 +2079,7 @@ function onTABEFileSelected(input) {
       `;
       preview.classList.remove('hidden');
       preview.dataset.base64 = base64;
- 
+
       status.textContent = 'Ready to upload.';
       status.className   = 'schedule-status ok';
       document.getElementById('tabeUploadBtn').disabled = false;
@@ -1691,19 +2090,19 @@ function onTABEFileSelected(input) {
   };
   reader.readAsArrayBuffer(file);
 }
- 
+
 function confirmTABEUpload() {
   const preview = document.getElementById('tabePreview');
   const base64  = preview.dataset.base64;
   if (!base64) return;
- 
+
   const btn    = document.getElementById('tabeUploadBtn');
   const status = document.getElementById('tabeUploadStatus');
   btn.disabled    = true;
   btn.textContent = 'Uploading…';
   status.textContent = 'Sending to server…';
   status.className   = 'schedule-status';
- 
+
   google.script.run
     .withSuccessHandler(function(result) {
       btn.textContent = 'Upload Scores';
@@ -1713,7 +2112,7 @@ function confirmTABEUpload() {
         btn.disabled       = false;
         return;
       }
- 
+
       if (result.skippedCount && result.skippedCount > 0) {
         const skippedNames = (result.skipped || []).map(s => s.name || s.id).join(', ');
         status.innerHTML = `
@@ -1734,10 +2133,10 @@ function confirmTABEUpload() {
       status.className   = 'schedule-status err';
     })
     .uploadTABEData(base64, _currentRole);
-
 }
+
 // ─────────────────────────────────────────────────────────────
-// UI helpers
+// 17. UI helpers
 // ─────────────────────────────────────────────────────────────
 function setLoading(on) {
   document.getElementById('loadingState').classList.add('hidden');
@@ -1805,9 +2204,6 @@ function formatTimestamp(iso) {
   } catch(e) { return '—'; }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Click-to-copy student ID
-// ─────────────────────────────────────────────────────────────
 function copyId(event, id) {
   event.stopPropagation();
   const el   = event.currentTarget;
@@ -1836,7 +2232,7 @@ function copyId(event, id) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Quick Edit Drawer
+// 18. Quick Edit drawer
 // ─────────────────────────────────────────────────────────────
 let _qeStudentId = null;
 
@@ -1862,8 +2258,68 @@ function closeQuickEdit() {
   _qeStudentId = null;
 }
 
+function archiveFromQuickEdit() {
+  if (!_qeStudentId) return;
+  const p = allProfiles.find(x => x.id === _qeStudentId);
+  if (!p) return;
+  themedConfirm(
+    `${p.displayName} will be removed from the dashboard until restored from the Archived list.`,
+    { title: 'Archive this student?', okLabel: 'Archive', danger: true }
+  ).then(ok => {
+    if (!ok) return;
+    google.script.run
+      .withSuccessHandler(() => {
+        showToast(p.displayName + ' archived.');
+        closeQuickEdit();
+        refreshData();
+      })
+      .withFailureHandler(err => showToast(err?.message || 'Archive failed — please try again.', 'error'))
+      .setStudentActive(_qeStudentId, false, _currentEmployeeId, _currentRole);
+  });
+}
+
+async function saveQuickEdit() {
+  if (!_qeStudentId) return;
+  const id        = _qeStudentId;
+  const acStatus  = document.getElementById('qeAcademicStatus').value;
+  const trStatus  = document.getElementById('qeTradeStatus').value;
+  const tradeName = document.getElementById('qeTradeName').value;
+  const noteText  = (document.getElementById('qeNoteInput').value || '').trim();
+  const statusEl  = document.getElementById('qeStatus');
+  const btn       = document.getElementById('qeSaveBtn');
+
+  if (!acStatus && !trStatus && !tradeName && !noteText) {
+    statusEl.textContent = 'Nothing to save — make a change first.';
+    statusEl.className   = 'qe-status err show';
+    return;
+  }
+
+  btn.disabled = true; btn.textContent = 'Saving…';
+  statusEl.textContent = ''; statusEl.className = 'qe-status';
+
+  const saves = [];
+  if (acStatus)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'academic_status', acStatus, '', 'staff')));
+  if (trStatus)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'trade_status',    trStatus,  '', 'staff')));
+  if (tradeName) saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'trade_name',      tradeName, '', 'staff')));
+  if (noteText)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).addStudentNote(id, noteText, _currentEmployeeId, _currentRole)));
+
+  for (const fn of saves) await fn();
+
+  const p = allProfiles.find(x => x.id === id);
+  if (p) {
+    if (acStatus)  p.academicStatusOverride = acStatus;
+    if (trStatus)  p.tradeStatusOverride    = trStatus;
+    if (tradeName) p.tradeNameOverride      = tradeName;
+    if (noteText)  { if (!p.notes) p.notes = []; p.notes.unshift({ text: noteText, setBy: 'staff', date: new Date().toISOString() }); }
+  }
+  applyFilters();
+  btn.textContent = 'Save Changes'; btn.disabled = false;
+  statusEl.textContent = 'Saved!'; statusEl.className = 'qe-status show';
+  setTimeout(() => { statusEl.className = 'qe-status'; closeQuickEdit(); }, 1200);
+}
+
 // ─────────────────────────────────────────────────────────────
-// Change History
+// 19. Change history
 // ─────────────────────────────────────────────────────────────
 function openHistoryPanel() {
   document.getElementById('historyModal').classList.remove('hidden');
@@ -1959,7 +2415,67 @@ function confirmRevert(btn, studentId, type, rowIndex) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// First-Visit Walkthrough
+// 20. Archived students
+// ─────────────────────────────────────────────────────────────
+let _archivedCount = null; // cached after first fetch, so the summary card doesn't need a server round trip on every render
+
+function _loadArchivedCount() {
+  google.script.run
+    .withSuccessHandler(result => {
+      _archivedCount = (result.archived || []).length;
+      renderSummaryCards(_lastMetrics || {});
+    })
+    .withFailureHandler(() => { _archivedCount = 0; })
+    .getArchivedStudents();
+}
+
+function openArchivedModal() {
+  document.getElementById('archivedModal').classList.remove('hidden');
+  document.getElementById('archivedListBody').innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>';
+  google.script.run
+    .withSuccessHandler(result => {
+      _archivedCount = (result.archived || []).length;
+      const body = document.getElementById('archivedListBody');
+      if (!result.archived.length) {
+        body.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No archived students.</div>';
+        return;
+      }
+      body.innerHTML = result.archived.map(s => `
+        <div class="action-row">
+          <div class="ar-name-wrap"><div class="ar-name">${esc(s.displayName)}</div></div>
+          <button class="btn-override" onclick="restoreStudent('${esc(s.studentId)}', this)">Restore</button>
+        </div>`).join('');
+    })
+    .withFailureHandler(err => {
+      document.getElementById('archivedListBody').innerHTML =
+        '<div style="padding:16px;text-align:center;color:var(--high);">' + esc(err?.message || 'Failed to load.') + '</div>';
+    })
+    .getArchivedStudents();
+}
+
+function closeArchivedModal(e) {
+  if (e && e.target !== document.getElementById('archivedModal')) return;
+  document.getElementById('archivedModal').classList.add('hidden');
+}
+
+function restoreStudent(studentId, btn) {
+  btn.disabled = true; btn.textContent = 'Restoring…';
+  google.script.run
+    .withSuccessHandler(() => {
+      btn.closest('.action-row').remove();
+      showToast('Student restored.');
+      _archivedCount = Math.max(0, (_archivedCount || 1) - 1);
+      refreshData();
+    })
+    .withFailureHandler(err => {
+      btn.disabled = false; btn.textContent = 'Restore';
+      showToast(err?.message || 'Restore failed — please try again.', 'error');
+    })
+    .setStudentActive(studentId, true, _currentEmployeeId, _currentRole);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 21. First-visit walkthrough
 // ─────────────────────────────────────────────────────────────
 const WT_STEPS = [
   { title: 'Welcome', body: 'This is the student progress dashboard for Tulsa Job Corps. It pulls from your academic, trades, and intervention data automatically. Here\'s a quick look at the four things you\'ll use most.', target: null, position: 'center' },
@@ -2034,7 +2550,7 @@ function _maybeStartWalkthrough() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// View Toggle
+// 22. View toggle (table / cards / action) + renderers
 // ─────────────────────────────────────────────────────────────
 let _currentView = 'table';
 
@@ -2053,14 +2569,14 @@ function setView(view) {
 function renderCards(profiles) {
   const grid = document.getElementById('cardsGrid');
   if (!grid) return;
-  if (!profiles.length) { grid.innerHTML = ''; return; }
+  if (!Array.isArray(profiles) || profiles.length === 0) {grid.innerHTML = ''; return;}
 
   grid.innerHTML = profiles.map(p => {
     const d       = _buildStudentDisplay(p);
     const level   = p.risk?.level || 'UNKNOWN';
     const score   = p.risk?.score ?? 0;
     const flags   = (p.risk?.flags || []).slice(0, 2);
-    const gradGap = p.intervention?.gradGap?.trim() || null;
+    const gradGap = p.intervention?.gradGap ? String(p.intervention.gradGap).trim() : null;
 
     let gwColor = 'var(--text-muted)';
     if (gradGap) {
@@ -2077,22 +2593,33 @@ function renderCards(profiles) {
           <div class="sc-name-wrap">
             <div class="sc-name">${esc(p.displayName)}</div>
             <div class="sc-sub">
-              ${p.academic ? `<span class="type-tag tag-${p.academic.type.toLowerCase()}" style="margin:0">${p.academic.type}</span>` : ''}
+              ${p.academic && p.academic.type ? `<span class="type-tag tag-${p.academic.type.toLowerCase()}" style="margin:0">${p.academic.type}</span>` : ''}
               ${d.tradeName ? `<span class="type-tag tag-trades" style="margin:0">${esc(d.tradeName)}</span>` : ''}
               ${p.isStale ? '<span class="stale-badge" style="margin:0">Stale</span>' : ''}
             </div>
           </div>
           <div class="sc-score ${level}" title="Risk score">${score}</div>
         </div>
+
         <div class="sc-bars">
-          ${d.acPct !== null ? `<div class="sc-bar-row"><span class="sc-bar-label">Academic</span><div class="sc-bar-wrap"><div class="sc-bar-fill" style="width:${Math.min(d.acPct,100)}%;background:${barColor}"></div></div><span class="sc-bar-pct">${d.acPct.toFixed(0)}%</span></div>` : ''}
+          ${d.acPct !== null ? `<div class="sc-bar-row"><span class="sc-bar-label">Academic</span><div class="sc-bar-wrap"><div class="sc-bar-fill" style="width:${Math.min(d.acPct,100)}%;background:${barColor}"></div></div><span class="sc-bar-pct">${Number(d.acPct).toFixed(0)}%</span></div>` : ''}
           ${d.trPct !== null ? `<div class="sc-bar-row"><span class="sc-bar-label">Trade</span><div class="sc-bar-wrap"><div class="sc-bar-fill" style="width:${Math.min(d.trPct,100)}%;background:var(--accent-dim)"></div></div><span class="sc-bar-pct">${d.trPct.toFixed(0)}%</span></div>` : ''}
         </div>
+
+        <div class="sc-target-date">
+          <span class="sc-target-label">Target Date for Current Course:</span>
+          <span class="sc-target-value">
+            ${d.currentCourseTargetDate ? esc(d.currentCourseTargetDate) : '—'}
+          </span>
+        </div>
+
         ${flags.length ? `<div class="sc-flags">${flags.map(f => `<div class="sc-flag ${level === 'MEDIUM' ? 'medium' : ''}">${esc(f)}</div>`).join('')}</div>` : ''}
+
         <div class="sc-footer">
           ${gradGap ? `<span class="sc-grad-window" style="color:${gwColor}">${esc(gradGap)}</span>` : '<span class="sc-grad-window" style="color:var(--text-muted)">—</span>'}
           ${d.intBadge}
-          <div style="display:flex;gap:6px;margin-left:auto;">
+          <div style="display:flex;gap:6px;margin-left:auto;"></div>
+          <div class="action-btns">
             <button class="detail-btn" data-id="${esc(p.id)}" style="padding:4px 10px;font-size:11px;">View</button>
             <button class="btn-quick-edit" onclick="openQuickEdit('${esc(p.id)}')" style="font-size:11px;">Edit</button>
           </div>
@@ -2101,9 +2628,6 @@ function renderCards(profiles) {
   }).join('');
 }
 
-// ─────────────────────────────────────────────────────────────
-// Action Needed View
-// ─────────────────────────────────────────────────────────────
 function renderActionView(profiles) {
   const container = document.getElementById('actionGroups');
   const dateEl    = document.getElementById('actionViewDate');
@@ -2111,10 +2635,10 @@ function renderActionView(profiles) {
   if (dateEl) dateEl.textContent = new Date().toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 
   const groups = [
-    { key: 'grad_critical', icon: ICONS.blocked,     cls: 'critical', title: 'Over Program Limit',               sub: 'Graduation window has passed — immediate action required',       test: p => (p.intervention?.gradGap || '').includes('over limit') },
+    { key: 'grad_critical', icon: ICONS.blocked,     cls: 'critical', title: 'Over Program Limit',               sub: 'Graduation window has passed — immediate action required',       test: p => String(p.intervention?.gradGap || '').includes('over limit') },
     { key: 'wir_critical',  icon: ICONS.alertTri,    cls: 'critical', title: 'Critical Intervention This Week',  sub: 'Admin priority is CRITICAL in the latest WIR',                   test: p => (p.intervention?.adminPriority || '').toUpperCase() === 'CRITICAL' },
-    { key: 'grad_watch',    icon: ICONS.calendar,    cls: 'high',     title: 'Graduation Deadline — Under 60 Days', sub: 'Students approaching the two-year program limit',             test: p => { const g = p.intervention?.gradGap || ''; if (g.includes('over limit')) return false; if (g.startsWith('🟡')) return true; const m = g.match(/(\d+)d left/); return !!m && parseInt(m[1], 10) <= 60; } },
-    { key: 'wir_high',      icon: ICONS.flag,        cls: 'high',     title: 'High Intervention Priority',        sub: 'Admin priority is HIGH in the latest WIR',                      test: p => { const pri = (p.intervention?.adminPriority || '').toUpperCase(); const critg = p.intervention?.gradGap || ''; return pri === 'HIGH' && !critg.includes('over limit'); } },
+    { key: 'grad_watch',    icon: ICONS.calendar,    cls: 'high',     title: 'Graduation Deadline — Under 60 Days', sub: 'Students approaching the two-year program limit',             test: p => { const g = String(p.intervention?.gradGap || ''); if (g.includes('over limit')) return false; if (g.startsWith('🟡')) return true; const m = g.match(/(\d+)d left/); return !!m && parseInt(m[1], 10) <= 60; } },
+    { key: 'wir_high',      icon: ICONS.flag,        cls: 'high',     title: 'High Intervention Priority',        sub: 'Admin priority is HIGH in the latest WIR',                      test: p => { const pri = (p.intervention?.adminPriority || '').toUpperCase(); const critg = String(p.intervention?.gradGap || ''); return pri === 'HIGH' && !critg.includes('over limit'); } },
     { key: 'followup',      icon: ICONS.checkCircle, cls: 'follow',   title: 'Follow-Up Due',                     sub: 'WIR follow-up date is today or in the past',                    test: p => { if (!p.intervention?.followUp) return false; const d = new Date(p.intervention.followUp); if (isNaN(d.getTime())) return false; const t = new Date(); t.setHours(0,0,0,0); return d <= t; } },
     { key: 'no_hours',      icon: ICONS.clock,       cls: 'medium',   title: 'No Academic Hours This Week',       sub: 'Students with zero hours logged so far this week',               test: p => { const h = p.academic?.thisWeekHours; return h !== 'NWH' && (h === null || h === 0) && p.hasAcademic; } },
     { key: 'stale',         icon: ICONS.noData,      cls: 'medium',   title: 'No Recent Progress Updates',        sub: 'Progress % unchanged for 3+ weeks — possible data gap',          test: p => p.isStale === true },
@@ -2132,7 +2656,7 @@ function renderActionView(profiles) {
       : members.map(p => {
           const acPct = p.academic?.percent ?? null;
           const trPct = p.trades?.[0]?.overallPct ?? null;
-          const gradG = p.intervention?.gradGap?.trim() || '';
+          const gradG = String(p.intervention?.gradGap || '').trim();
           const wir   = p.intervention ? interventionBadge(p.intervention) : '';
           let detail  = '';
           if (acPct !== null) detail += `Academic ${acPct.toFixed(0)}%`;
@@ -2174,48 +2698,8 @@ function toggleActionGroup(header, bodyId) {
   header.classList.toggle('collapsed', !isHidden);
 }
 
-async function saveQuickEdit() {
-  if (!_qeStudentId) return;
-  const id        = _qeStudentId;
-  const acStatus  = document.getElementById('qeAcademicStatus').value;
-  const trStatus  = document.getElementById('qeTradeStatus').value;
-  const tradeName = document.getElementById('qeTradeName').value;
-  const noteText  = (document.getElementById('qeNoteInput').value || '').trim();
-  const statusEl  = document.getElementById('qeStatus');
-  const btn       = document.getElementById('qeSaveBtn');
-
-  if (!acStatus && !trStatus && !tradeName && !noteText) {
-    statusEl.textContent = 'Nothing to save — make a change first.';
-    statusEl.className   = 'qe-status err show';
-    return;
-  }
-
-  btn.disabled = true; btn.textContent = 'Saving…';
-  statusEl.textContent = ''; statusEl.className = 'qe-status';
-
-  const saves = [];
-  if (acStatus)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'academic_status', acStatus, '', 'staff')));
-  if (trStatus)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'trade_status',    trStatus,  '', 'staff')));
-  if (tradeName) saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).setOverride(id, 'trade_name',      tradeName, '', 'staff')));
-  if (noteText)  saves.push(() => new Promise(res => google.script.run.withSuccessHandler(res).withFailureHandler(res).addStudentNote(id, noteText, _currentEmployeeId, _currentRole)));
-
-  for (const fn of saves) await fn();
-
-  const p = allProfiles.find(x => x.id === id);
-  if (p) {
-    if (acStatus)  p.academicStatusOverride = acStatus;
-    if (trStatus)  p.tradeStatusOverride    = trStatus;
-    if (tradeName) p.tradeNameOverride      = tradeName;
-    if (noteText)  { if (!p.notes) p.notes = []; p.notes.unshift({ text: noteText, setBy: 'staff', date: new Date().toISOString() }); }
-  }
-  applyFilters();
-  btn.textContent = 'Save Changes'; btn.disabled = false;
-  statusEl.textContent = 'Saved!'; statusEl.className = 'qe-status show';
-  setTimeout(() => { statusEl.className = 'qe-status'; closeQuickEdit(); }, 1200);
-}
-
 // ─────────────────────────────────────────────────────────────
-// CSV Export
+// 23. CSV export
 // ─────────────────────────────────────────────────────────────
 function exportCSV() {
   const filtered = _getFilteredSorted();
@@ -2245,7 +2729,7 @@ function exportCSV() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Staff Notes
+// 24. Staff notes
 // ─────────────────────────────────────────────────────────────
 function buildNotesSection(p) {
   const notes = (p.notes || []).slice().sort((a, b) => (b.date || '') > (a.date || '') ? 1 : -1);
@@ -2325,9 +2809,6 @@ function deleteNote(studentId, noteTimestamp) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
-// Risk Trend Arrow
-// ─────────────────────────────────────────────────────────────
 function riskTrendIcon(trend) {
   if (!trend) return '';
   if (trend === 'up')     return '<span class="trend-up"    title="Risk increasing">▲</span>';
@@ -2337,7 +2818,7 @@ function riskTrendIcon(trend) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Filter Presets
+// 25. Filter presets (custom)
 // ─────────────────────────────────────────────────────────────
 const BUILTIN_PRESETS = {
   '__high_risk':        { risk: 'HIGH', type: 'ALL',            search: '' },
@@ -2370,17 +2851,24 @@ function applyPreset(value) {
 
 let _staleOnlyActive = false;
 
-const _originalGetFilteredSorted = _getFilteredSorted;
-// Override to inject stale filtering
+// activeType checks:
+//   HS, HISET, GED    → based on examProgram (Name Mapping "examProgram"
+//                        column), NOT academic.type — academic.type only
+//                        ever holds 'HS' or null (see _buildAcademicFromCourseData_
+//                        in ProfilesVault.gs), so HISET/GED can only be
+//                        matched via examProgram.
+//   TRADES, INTERVENTION, TRADE_COMPLETE, HS_COMPLETE, UNMAPPED → unchanged.
 function _getFilteredSorted() {
   let results = allProfiles.filter(p => {
     if (activeRisk !== 'ALL' && p.risk.level !== activeRisk) return false;
     if (activeType !== 'ALL') {
       if (activeType === 'HS'             && (!p.academic || p.academic.type !== 'HS'))    return false;
-      if (activeType === 'HISET'          && (!p.academic || p.academic.type !== 'HISET')) return false;
+      if (activeType === 'HISET'          && p.examProgram !== 'HiSET')                    return false;
+      if (activeType === 'GED'            && p.examProgram !== 'GED')                      return false;
       if (activeType === 'TRADES'         && (p.hasAcademic || !p.hasTrades))              return false;
       if (activeType === 'INTERVENTION'   && !p.hasIntervention)                           return false;
       if (activeType === 'TRADE_COMPLETE' && !p.tradeComplete)                             return false;
+      if (activeType === 'HS_COMPLETE'    && !p.hsComplete) return false;
       if (activeType === 'UNMAPPED'       && !p.mappingMissing)                            return false;
     }
     const search = (document.getElementById('searchInput').value || '').toLowerCase().trim();
@@ -2404,7 +2892,7 @@ function _getFilteredSorted() {
      const studentId = p.academicId || p.id || '';
      if (_hsdAssignments[studentId] !== _activeHSDFilter) return false;
     }
-    
+
     return true;
   });
 
@@ -2477,7 +2965,7 @@ const _origSetTypeFilter = setTypeFilter;
 setTypeFilter = function(el) { _staleOnlyActive = false; _origSetTypeFilter(el); };
 
 // ─────────────────────────────────────────────────────────────
-// Bulk Selection
+// 26. Bulk selection + bulk actions
 // ─────────────────────────────────────────────────────────────
 function toggleRowSelect(checkbox) {
   const id = checkbox.dataset.id;
@@ -2517,9 +3005,6 @@ function updateBulkBar() {
   else                       { bar.classList.add('hidden'); }
 }
 
-// ─────────────────────────────────────────────────────────────
-// Collapsible extra columns
-// ─────────────────────────────────────────────────────────────
 let _colsExpanded = false;
 
 function toggleExtraCols() {
@@ -2530,9 +3015,6 @@ function toggleExtraCols() {
   try { localStorage.setItem('dashColsExpanded', _colsExpanded ? '1' : ''); } catch(e) {}
 }
 
-// ─────────────────────────────────────────────────────────────
-// Bulk Actions
-// ─────────────────────────────────────────────────────────────
 function closeBulkModal(e, id) { if (e && e.target !== document.getElementById(id)) return; document.getElementById(id).classList.add('hidden'); }
 
 function openBulkNote() {
@@ -2630,7 +3112,7 @@ async function confirmBulkStatus() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Risk Sparkline
+// 27. Risk sparkline
 // ─────────────────────────────────────────────────────────────
 function buildRiskSparkline(p) {
   const snaps = (p.progressSnapshots || []).filter(s => s.score !== null && s.score !== undefined && s.date).sort((a, b) => a.date < b.date ? -1 : 1);
@@ -2669,17 +3151,13 @@ function buildRiskSparkline(p) {
   </div>`;
 }
 
-// Print student detail
-
 // ============================================================
-// PRINT DOCUMENT BUILDERS
-// This REPLACES printOverview(), printTranscript(), and the
-// 'afterprint' listener entirely. Print output is now a fully
-// separate #printDoc element built from the same data already
-// in memory (currentModalProfile, _transcriptData) — not a
-// recolored copy of the on-screen modal.
+// 28. PRINT DOCUMENT BUILDERS
+// ------------------------------------------------------------
+// Print output is a fully separate #printDoc element built from
+// the same data already in memory (currentModalProfile,
+// _transcriptData) — not a recolored copy of the on-screen modal.
 // ============================================================
-
 function _escP(str) { return esc(str); } // alias for readability in this section
 
 function _docId(studentId, kind) {
@@ -2736,7 +3214,6 @@ function _dlRow(label, value) {
   return `<div class="dl-row"><span class="dl-label">${_escP(label)}</span><span class="dl-value">${_escP(value ?? '\u2014')}</span></div>`;
 }
 
-// ── Build the Overview print document ─────────────────────────
 function _buildPrintOverviewDoc(p) {
   let html = _printMasthead(p, 'Student Overview Record', 'OV');
 
@@ -2872,7 +3349,6 @@ function _buildPrintOverviewDoc(p) {
   return html;
 }
 
-// ── Build the Transcript print document ───────────────────────
 function _buildPrintTranscriptDoc(p, transcriptData) {
   let html = _printMasthead(p, 'Academic Transcript', 'TR');
 
@@ -2936,7 +3412,6 @@ function _buildPrintTranscriptDoc(p, transcriptData) {
   return html;
 }
 
-// ── Print orchestration ─────────────────────────────────────────
 function _ensurePrintDocEl() {
   let el = document.getElementById('printDoc');
   if (!el) {
@@ -2991,7 +3466,7 @@ window.addEventListener('afterprint', function() {
 });
 
 // ─────────────────────────────────────────────────────────────
-// Role-based presets
+// 29. Role-based presets
 // ─────────────────────────────────────────────────────────────
 const ROLE_PRESETS = {
   manager:   { risk: 'ALL',  type: 'ALL',          search: '', sort: 'risk',        label: 'Manager view' },
@@ -3016,7 +3491,7 @@ function applyRolePreset(role) {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Email Digest
+// 30. Email digest
 // ─────────────────────────────────────────────────────────────
 function triggerDigest() {
   const highCount   = allProfiles.filter(p => p.risk && p.risk.level === 'HIGH').length;
@@ -3065,7 +3540,7 @@ function confirmDigest() {
 }
 
 // ─────────────────────────────────────────────────────────────
-// Schedule section in staff modal
+// 31. Schedule section (student modal)
 // ─────────────────────────────────────────────────────────────
 function buildScheduleSection(p) {
   const studentId = p.academicId || p.id || '';
@@ -3226,13 +3701,16 @@ function buildScheduleSection(p) {
     </div>
   </div>`;
 }
-// ── buildTABESection ──────────────────────────────────────
+
+// ─────────────────────────────────────────────────────────────
+// 32. TABE section (student modal)
+// ─────────────────────────────────────────────────────────────
 function buildTABESection(p) {
   if (!p.tabe || (!p.tabe.math && !p.tabe.reading)) return '';
- 
+
   const t = p.tabe;
   const uid = 'tabe-' + (p.id || '').replace(/\W/g, '');
- 
+
   function scoreColor(scale) {
     if (!scale) return 'var(--text-muted)';
     if (scale >= 566) return 'var(--low)';       // High Intermediate+
@@ -3240,32 +3718,32 @@ function buildTABESection(p) {
     if (scale >= 461) return 'var(--medium)';     // Beginning Basic
     return 'var(--high)';                         // Beginning Literacy
   }
- 
+
   function gainHtml(gain) {
     if (gain === null || gain === undefined) return '<span style="color:var(--text-muted)">—</span>';
     const color = gain > 0 ? 'var(--low)' : gain < 0 ? 'var(--high)' : 'var(--text-muted)';
     const arrow = gain > 0 ? '▲' : gain < 0 ? '▼' : '→';
     return `<span style="font-weight:700;color:${color};">${arrow} ${gain > 0 ? '+' : ''}${gain}</span>`;
   }
- 
+
   function subtestBlock(label, sub) {
     if (!sub) return `
       <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:14px 16px;">
         <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:10px;">${label}</div>
         <div style="font-size:12px;color:var(--text-muted);font-style:italic;">No test record on file.</div>
       </div>`;
- 
+
     const curr = sub.current;
     const prev = sub.previous;
     const best = sub.best;
- 
+
     return `
       <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:14px 16px;">
         <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
           <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;">${label}</div>
           <div style="font-size:11px;color:var(--text-muted);">${sub.attempts} attempt${sub.attempts !== 1 ? 's' : ''}</div>
         </div>
- 
+
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:12px;">
           <div style="background:var(--bg3);border:1px solid var(--border);border-radius:5px;padding:10px;text-align:center;">
             <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:4px;">Previous</div>
@@ -3285,12 +3763,12 @@ function buildTABESection(p) {
             <div style="font-size:10px;color:var(--text-muted);margin-top:2px;">${best.date}</div>
           </div>
         </div>
- 
+
         <div style="display:flex;align-items:center;justify-content:space-between;padding:8px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;">
           <span style="font-size:12px;color:var(--text-muted);font-weight:600;">Gain / Loss</span>
           <span style="font-size:14px;">${gainHtml(sub.gain)}</span>
         </div>
- 
+
         ${curr.eflLevel ? `
         <div style="margin-top:8px;padding:7px 10px;background:var(--bg3);border:1px solid var(--border);border-radius:5px;display:flex;align-items:center;justify-content:space-between;">
           <span style="font-size:11px;color:var(--text-muted);font-weight:600;">Current EFL</span>
@@ -3298,7 +3776,7 @@ function buildTABESection(p) {
         </div>` : ''}
       </div>`;
   }
- 
+
   return `
     <div class="info-section">
       <h3 onclick="toggleSection('${uid}', this)" style="cursor:pointer;">
@@ -3313,24 +3791,15 @@ function buildTABESection(p) {
       </div>
     </div>`;
 }
- 
- 
 
-function _fmtLastUpdated(isoStr) {
-  if (!isoStr) return '';
-  try {
-    const d = new Date(isoStr);
-    if (isNaN(d.getTime())) return '';
-    return 'Updated ' + d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-  } catch(e) { return ''; }
-}
-
+// ============================================================
+// 33. MODAL TABS: Transcript / Testing / Trades / Time Log
+// ============================================================
 let _transcriptData     = null;   // last-loaded payload from getStudentTranscript
 let _transcriptStudentId = null;  // which student it belongs to, so we know to reload on switch
 let _transcriptSettings  = null;  // { weeklyHours, activeWeeks }
 let _transcriptEditingRow = null; // rowIndex currently expanded for edit, or 'new-1'/'new-2' for add-row
- 
-// ── Tab switching ──────────────────────────────────────────────
+
 function _resetTranscriptStateIfNewStudent(p) {
   if (_transcriptStudentId !== p.academicId) {
     _transcriptData      = null;
@@ -3342,53 +3811,65 @@ function _resetTranscriptStateIfNewStudent(p) {
   if (modalBox) modalBox.classList.remove('tr-wide');
 }
 
+// tabIds map is used (not string-guessed capitalization) precisely
+// because 'timelog' → 'modalTabTimeLog' has an internal capital L
+// that a naive charAt(0).toUpperCase() approach would miss.
 function switchModalTab(tab) {
   const overviewBtn    = document.getElementById('modalTabOverview');
   const transcriptBtn  = document.getElementById('modalTabTranscript');
+  const testingBtn     = document.getElementById('modalTabTesting');
+  const timeLogBtn     = document.getElementById('modalTabTimeLog');
+  const tradesBtn      = document.getElementById('modalTabTrades');
   const overviewView   = document.getElementById('modalOverviewView');
   const transcriptView = document.getElementById('modalTranscriptView');
-  if (!overviewBtn || !transcriptBtn || !overviewView || !transcriptView) return;
- 
-  overviewBtn.classList.toggle('active',   tab === 'overview');
-  transcriptBtn.classList.toggle('active', tab === 'transcript');
-  overviewView.classList.toggle('hidden',   tab !== 'overview');
-  transcriptView.classList.toggle('hidden', tab !== 'transcript');
- 
-  // Widen the modal box only for the data-dense Transcript tab —
-  // matches the .modal-wide treatment the Productivity modal uses.
+  const testingView    = document.getElementById('modalTestingView');
+  const timeLogView    = document.getElementById('modalTimeLogView');
+  const tradesView     = document.getElementById('modalTradesView');
+
+  const tabIds = {
+    overview: null, transcript: 'modalTabTranscript', testing: 'modalTabTesting',
+    timelog: 'modalTabTimeLog', trades: 'modalTabTrades',
+  };
+  if (tab !== 'overview' && !document.getElementById(tabIds[tab])) return; // tab not rendered for this role/student
+
+  [overviewBtn, transcriptBtn, testingBtn, timeLogBtn, tradesBtn].forEach(b => b && b.classList.remove('active'));
+  [overviewView, transcriptView, testingView, timeLogView, tradesView].forEach(v => v && v.classList.add('hidden'));
+
+  const btnMap  = { overview: overviewBtn, transcript: transcriptBtn, testing: testingBtn, timelog: timeLogBtn, trades: tradesBtn };
+  const viewMap = { overview: overviewView, transcript: transcriptView, testing: testingView, timelog: timeLogView, trades: tradesView };
+  if (btnMap[tab])  btnMap[tab].classList.add('active');
+  if (viewMap[tab]) viewMap[tab].classList.remove('hidden');
+
   const modalBox = document.querySelector('#detailModal .modal-box');
-  if (modalBox) modalBox.classList.toggle('tr-wide', tab === 'transcript');
- 
-  if (tab === 'transcript') {
-    _loadTranscriptTab();
-  }
+  if (modalBox) modalBox.classList.toggle('tr-wide', ['transcript','timelog','trades','testing'].includes(tab));
+
+  if (tab === 'transcript') _loadTranscriptTab();
+  if (tab === 'testing')    _loadTestingTab();
+  if (tab === 'timelog')    _loadTimeLogTab();
+  if (tab === 'trades')     _loadTradesTab();
 }
- 
-// REPLACEMENT for the final return of buildModalBody(p).
-// Everything above this in the real function (the `left += ...`
-// and `right += ...` accumulation) is unchanged — only the
-// return statement changes, from:
-//
-//   return `<div class="modal-columns">
-//     <div class="modal-col">${left}</div>
-//     <div class="modal-col">${right}</div>
-//   </div>`;
-//
-// to:
+
 function _buildModalBodyReturn(left, right) {
+  // Testing tab only renders for HiSET/GED students — examProgram
+  // comes from Name Mapping (see ProfilesVault.gs), NOT academic.type.
+  const showTesting = currentModalProfile && TESTING_SUBTESTS[currentModalProfile.examProgram];
+
   return `
     <div class="modal-tab-bar">
       <button id="modalTabOverview" class="modal-tab active" onclick="switchModalTab('overview')">Overview</button>
       <button id="modalTabTranscript" class="modal-tab" onclick="switchModalTab('transcript')">Academic Transcript</button>
+      ${showTesting ? `<button id="modalTabTesting" class="modal-tab" onclick="switchModalTab('testing')">Testing</button>` : ''}
+      <button id="modalTabTrades" class="modal-tab" onclick="switchModalTab('trades')">Trades</button>
+      <button id="modalTabTimeLog" class="modal-tab" onclick="switchModalTab('timelog')">Time Log</button>
     </div>
- 
+
     <div id="modalOverviewView">
       <div class="modal-columns">
         <div class="modal-col">${left}</div>
         <div class="modal-col">${right}</div>
       </div>
     </div>
- 
+
     <div id="modalTranscriptView" class="hidden">
       <div id="transcriptLoading" style="padding:20px;">
         <div style="display:flex;flex-direction:column;gap:12px;">
@@ -3404,9 +3885,182 @@ function _buildModalBodyReturn(left, right) {
       </div>
       <div id="transcriptContent" class="hidden" style="padding:20px;"></div>
     </div>
+
+    ${showTesting ? `
+    <div id="modalTestingView" class="hidden" style="padding:20px;">
+      <div class="prod-explainer">
+        <strong>What's this?</strong> Track ${esc(currentModalProfile.examProgram)} subtest attempts —
+        pass/fail status and full retake history per subtest.
+      </div>
+      <div id="testingTabContent">
+        <div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>
+      </div>
+    </div>` : ''}
+
+    <div id="modalTradesView" class="hidden" style="padding:20px;">
+      <div class="prod-explainer">
+        <strong>What's this?</strong> Every proficiency code on file for this student's trade(s), broken out from
+        their most recent ETAR upload — updates automatically the next time an ETAR is uploaded for them.
+      </div>
+      <div id="tradesTabContent">
+        <div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>
+      </div>
+    </div>
+
+    <div id="modalTimeLogView" class="hidden" style="padding:20px;">
+      <div class="prod-explainer">
+        <strong>What's this for?</strong> Paste this student's Edgenuity session log for one week here.
+        Total time and idle time are pulled straight out of the log automatically — assigned hours come
+        from their saved pacing settings, so there's nothing else to enter. Saving a week here is what
+        keeps "This Week" hours current on the main dashboard.
+      </div>
+
+      <div style="display:flex;gap:14px;align-items:flex-end;margin-bottom:12px;flex-wrap:wrap;">
+        <div>
+          <label style="display:block;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Week Of</label>
+          <input type="date" id="timeLogWeekInput" style="background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 9px;">
+        </div>
+      </div>
+
+      <label style="display:block;font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.4px;margin-bottom:6px;">Session Log</label>
+      <textarea id="timeLogPasteInput" placeholder="Paste the full Edgenuity session log here…" rows="8"
+        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:6px;color:var(--text);font-family:var(--font);font-size:12.5px;padding:10px 12px;resize:vertical;"></textarea>
+
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;">
+        <button class="btn-override" id="timeLogSaveBtn" onclick="_submitWeeklyTimeLog()">Save This Week</button>
+        <span id="timeLogStatus" style="font-size:12.5px;color:var(--text-muted);"></span>
+      </div>
+
+      <div style="margin-top:24px;">
+        <div style="font-size:13px;font-weight:700;color:var(--text);margin-bottom:10px;">Weekly History</div>
+        <table class="tr-table" style="width:100%;">
+          <thead>
+            <tr>
+              <th>Week</th>
+              <th>Total</th>
+              <th>Idle</th>
+              <th>Worked</th>
+              <th>Assigned</th>
+            </tr>
+          </thead>
+          <tbody id="timeLogHistoryBody">
+            <tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
   `;
 }
 
+// ── Testing tab (HiSET / GED) ─────────────────────────────────
+const TESTING_SUBTESTS = {
+  HiSET: ['Language Arts – Reading', 'Language Arts – Writing', 'Mathematics', 'Science', 'Social Studies'],
+  GED:   ['Reasoning Through Language Arts', 'Mathematical Reasoning', 'Science', 'Social Studies'],
+};
+let _testingData = null;
+let _testingStudentId = null;
+
+function _loadTestingTab() {
+  const p = currentModalProfile;
+  const studentId = p ? (p.academicId || p.id) : null;
+  const container = document.getElementById('testingTabContent');
+  if (!studentId || !container) return;
+
+  container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--high);">' +
+          esc((result && result.error) || 'Failed to load.') + '</div>';
+        return;
+      }
+      _testingData = result;
+      _testingStudentId = studentId;
+      _renderTestingTab();
+    })
+    .withFailureHandler(function(err) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--high);">' +
+        esc(err && err.message ? err.message : 'Failed to load.') + '</div>';
+    })
+    .getStudentTestingData(studentId); // SERVER function — lives in TestingAttempts.gs
+}
+
+function _renderTestingTab() {
+  const container = document.getElementById('testingTabContent');
+  const data = _testingData;
+  if (!container || !data) return;
+
+  const program = data.examProgram;
+  const subtestNames = TESTING_SUBTESTS[program] || [];
+  const subtestMap = {};
+  (data.subtests || []).forEach(s => { subtestMap[s.name] = s; });
+
+  container.innerHTML = subtestNames.map(name => {
+    const s = subtestMap[name] || { name, status: 'Not Taken', attempts: [] };
+    const statusColor = s.status === 'Pass' ? 'var(--low)' : s.status === 'Fail' ? 'var(--high)' : 'var(--text-muted)';
+    const uid = 'testing-' + name.replace(/\W/g, '');
+
+    return `<div class="info-section">
+      <h3 onclick="toggleSection('${uid}', this)" style="cursor:pointer;display:flex;align-items:center;gap:8px;">
+        ${esc(name)}
+        <span class="type-tag" style="background:${statusColor};color:#fff;margin:0;">${esc(s.status)}</span>
+        <span style="margin-left:auto;font-size:11px;color:var(--text-muted);">${s.attempts.length} attempt${s.attempts.length !== 1 ? 's' : ''} ▾</span>
+      </h3>
+      <div id="${uid}">
+        <table class="tr-table" style="width:100%;margin-bottom:10px;">
+          <thead><tr><th>Date</th><th>Score</th><th>Result</th></tr></thead>
+          <tbody>
+            ${s.attempts.length ? s.attempts.map(a => `
+              <tr>
+                <td>${esc(a.date || '—')}</td>
+                <td>${a.score ?? '—'}</td>
+                <td style="color:${a.result === 'Pass' ? 'var(--low)' : 'var(--high)'};font-weight:600;">${esc(a.result || '—')}</td>
+              </tr>`).join('') : `<tr><td colspan="3" style="text-align:center;color:var(--text-muted);font-style:italic;">No attempts logged yet.</td></tr>`}
+          </tbody>
+        </table>
+        ${_canEditTesting() ? `
+        <div style="display:flex;gap:8px;align-items:flex-end;flex-wrap:wrap;">
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;">Date</label>
+            <input type="date" id="${uid}-date" style="background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:6px 8px;font-size:12.5px;"></div>
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;">Score</label>
+            <input type="number" id="${uid}-score" style="width:70px;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:6px 8px;font-size:12.5px;"></div>
+          <div><label style="font-size:11px;color:var(--text-muted);display:block;">Result</label>
+            <select id="${uid}-result" style="background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);padding:6px 8px;font-size:12.5px;">
+              <option value="Pass">Pass</option>
+              <option value="Fail">Fail</option>
+            </select></div>
+          <button class="btn-override" onclick="_saveTestingAttempt('${esc(name)}', '${uid}')">Log Attempt</button>
+        </div>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+}
+
+function _canEditTesting() {
+  return _can('edit_transcript'); // reuses the same permission as transcript edits — adjust if you want a separate permission
+}
+
+function _saveTestingAttempt(subtestName, uid) {
+  const date   = document.getElementById(uid + '-date').value;
+  const score  = document.getElementById(uid + '-score').value;
+  const result = document.getElementById(uid + '-result').value;
+  if (!date || !result) { showToast('Pick a date and result first.', 'error'); return; }
+
+  google.script.run
+    .withSuccessHandler(function(res) {
+      if (!res || res.success === false) { showToast((res && res.error) || 'Save failed.', 'error'); return; }
+      showToast('Attempt logged.');
+      _testingData = null;
+      _loadTestingTab();
+    })
+    .withFailureHandler(function(err) {
+      showToast((err && err.message) || 'Save failed — please try again.', 'error');
+    })
+    .saveTestingAttempt(_testingStudentId, _testingData.examProgram, subtestName, date, score ? parseFloat(score) : null, result, _currentEmployeeId, _currentRole); // SERVER function — lives in TestingAttempts.gs
+}
+
+// ── Academic transcript tab ────────────────────────────────────
 const TRANSCRIPT_COURSE_CATEGORIES = ['English','Math','Science','Social Studies','Language','Fine Arts','Electives'];
 
 let _courseCatalogue = null; // cached across the session — course list rarely changes
@@ -3418,7 +4072,7 @@ function _getCourseIdCategoryMap() {
   });
   return map;
 }
-// ── Entry point: called by switchModalTab('transcript') ──────
+
 function _loadTranscriptTab() {
   const studentId = currentModalProfile ? currentModalProfile.academicId : null;
   if (!studentId) {
@@ -3480,7 +4134,6 @@ function _loadTranscriptTab() {
     .getStudentTranscript(studentId);
 }
 
-// ── Main render ────────────────────────────────────────────────
 function _renderTranscriptTab() {
   const data = _transcriptData;
   if (!data) return;
@@ -3531,6 +4184,17 @@ function _renderTranscriptTab() {
         Target dates recalculate live as you edit hours or start dates below.
       </span>
     </div>
+    <div style="display:flex;align-items:center;gap:10px;margin-bottom:4px;">
+      <button class="btn-override" onclick="_openTranscriptSettings()" style="font-size:12px;padding:6px 12px;">
+        ⚙ Pacing Settings (${_transcriptSettings.weeklyHours}h/wk)
+      </button>
+      <button class="btn-override" onclick="_autoPopulateTranscript()" style="font-size:12px;padding:6px 12px;">
+        Auto-Populate Transcript
+      </button>
+      <span style="font-size:11px;color:var(--text-muted);font-style:italic;">
+        Target dates recalculate live as you edit hours or start dates below.
+      </span>
+    </div>
   `;
 
   html += _renderTranscriptBlock(1, 'Year 1', courses.filter(c => c.block === 1));
@@ -3539,7 +4203,6 @@ function _renderTranscriptTab() {
   document.getElementById('transcriptContent').innerHTML = html;
 }
 
-// ── Render one block (Year 1 / Year 2) as a table ─────────────
 function _renderTranscriptBlock(blockNum, label, courses) {
   const uid = 'tr-block-' + blockNum;
 
@@ -3583,11 +4246,11 @@ function _renderTranscriptRow(c) {
     'no-date':   { cls: 'tr-status-nodate',   label: 'No Date' },
   };
   const s = statusMap[status] || statusMap['no-date'];
-  const rowKey = 'row-' + c.rowIndex;
-  const isEditing = _transcriptEditingRow === c.rowIndex;
+  const rowKey = 'row-' + c.rowId;
+  const isEditing = _transcriptEditingRow === c.rowId;
 
   const mainRow = `
-    <tr class="tr-row ${isEditing ? 'editing' : ''}" onclick="_toggleTranscriptEdit(${c.rowIndex})" id="${rowKey}">
+    <tr class="tr-row ${isEditing ? 'editing' : ''}" onclick="_toggleTranscriptEdit('${esc(String(c.rowId))}')" id="${rowKey}">
       <td>${esc(c.courseName || '—')}</td>
       <td>${esc(c.subject || '—')}</td>
       <td>${c.credit || 0}</td>
@@ -3598,7 +4261,7 @@ function _renderTranscriptRow(c) {
       <td style="text-align:right;color:var(--text-muted);font-size:11px;">${isEditing ? '▾' : '▸'} Edit</td>
     </tr>`;
 
-  const editPanelId = 'edit-' + c.rowIndex;
+  const editPanelId = 'edit-' + c.rowId;
   const editPanel = `
     <tr id="${editPanelId}-row" class="${isEditing ? '' : 'hidden'}">
       <td colspan="8" style="padding:0;border-bottom:1px solid var(--border);">
@@ -3609,13 +4272,13 @@ function _renderTranscriptRow(c) {
   return mainRow + editPanel;
 }
 
-function _toggleTranscriptEdit(rowIndex) {
-  const wasEditing = _transcriptEditingRow === rowIndex;
-  _transcriptEditingRow = wasEditing ? null : rowIndex;
+function _toggleTranscriptEdit(rowId) {
+  const wasEditing = String(_transcriptEditingRow) === String(rowId);
+  _transcriptEditingRow = wasEditing ? null : rowId;
   _renderTranscriptTab();
   if (!wasEditing) {
-    const course = (_transcriptData.courses || []).find(c => c.rowIndex === rowIndex);
-    if (course) _renderTranscriptEditForm('edit-' + rowIndex, course, false);
+    const course = (_transcriptData.courses || []).find(c => String(c.rowId) === String(rowId));
+    if (course) _renderTranscriptEditForm('edit-' + rowId, course, false);
   }
 }
 
@@ -3641,14 +4304,13 @@ function _openTranscriptAddRow(blockNum) {
   body.insertBefore(wrap, addRow);
 
   const blankCourse = {
-    rowIndex: null, block: blockNum, classNumber: '', courseId: '', courseName: '',
+    rowId: null, block: blockNum, classNumber: '', courseId: '', courseName: '',
     instance: '', transfer: false, subject: '', credit: 0, classHours: 0,
     startDate: null, adjStart: null, targetDate: null, completed: false,
   };
   _renderTranscriptEditForm('tr-new-panel', blankCourse, true);
 }
 
-// ── Build the edit form (shared by row-edit and add-row) ──────
 function _renderTranscriptEditForm(panelId, course, isNew) {
   const panel = document.getElementById(panelId);
   if (!panel) return;
@@ -3714,14 +4376,35 @@ function _renderTranscriptEditForm(panelId, course, isNew) {
     <div class="tr-target-preview" id="${panelId}-preview"></div>
 
     <div class="tr-edit-actions">
-      <button class="btn-override" onclick="_saveTranscriptRow('${panelId}', ${course.rowIndex ?? 'null'}, ${course.block}, ${isNew})">
+      <button class="btn-override tr-save-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-block="${course.block ?? ''}" data-is-new="${isNew ? '1' : '0'}">
         ${isNew ? 'Add Course' : 'Save Changes'}
       </button>
-      <button class="btn-override danger" onclick="${isNew ? `_cancelTranscriptAdd()` : `_toggleTranscriptEdit(${course.rowIndex})`}">Cancel</button>
-      ${!isNew ? `<span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>` : `<span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>`}
+      <button class="btn-override danger tr-cancel-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-is-new="${isNew ? '1' : '0'}">
+        Cancel
+      </button>
+      <span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>
     </div>
   `;
 
+  panel.querySelector('.tr-save-btn').addEventListener('click', function() {
+    const rowId = this.dataset.rowId || null;
+    const block = this.dataset.block ? Number(this.dataset.block) : null;
+    const isNewRow = this.dataset.isNew === '1';
+    _saveTranscriptRow(this.dataset.panelId, rowId, block, isNewRow);
+  });
+
+  panel.querySelector('.tr-cancel-btn').addEventListener('click', function() {
+    if (this.dataset.isNew === '1') {
+      _cancelTranscriptAdd();
+    } else {
+      _toggleTranscriptEdit(this.dataset.rowId);
+    }
+  });
+  if (!_canEdit('transcript')) {
+    panel.querySelectorAll('input, select, button.tr-save-btn').forEach(el => el.disabled = true);
+    const status = panel.querySelector(`#${panelId}-status`);
+    if (status) { status.textContent = 'View only — you do not have permission to edit transcripts.'; status.style.color = 'var(--text-muted)'; }
+  }
   _recalcTranscriptPreview(panelId);
 }
 
@@ -3736,7 +4419,6 @@ function _onTranscriptCourseSelect(panelId) {
   _recalcTranscriptPreview(panelId);
 }
 
-// ── Live target date preview using TargetDateEngine ───────────
 function _recalcTranscriptPreview(panelId) {
   const hoursEl     = document.getElementById(panelId + '-classHours');
   const startEl     = document.getElementById(panelId + '-startDate');
@@ -3771,11 +4453,10 @@ function _recalcTranscriptPreview(panelId) {
     <span style="color:var(--text-muted);font-size:11px;">(based on ${_transcriptSettings.weeklyHours}h/wk pacing settings)</span>`;
 }
 
-// ── Save (update existing or add new) ─────────────────────────
-function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
+function _saveTranscriptRow(panelId, rowId, block, isNew) {
   const studentId = _transcriptStudentId;
   const statusEl  = document.getElementById(panelId + '-status');
-  
+
   const subjectVal = document.getElementById(panelId + '-subject').value;
   if (!subjectVal) {
     if (statusEl) { statusEl.textContent = 'Please select a category.'; statusEl.style.color = 'var(--high)'; }
@@ -3796,7 +4477,7 @@ function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
   const targetDate = (completed || transfer) ? null : TargetDateEngine.calculate(hours, effectiveStart, _transcriptSettings, completed, transfer);
 
   const rowData = {
-    rowIndex,
+    rowId: rowId || null,
     block,
     courseId:   '',
     courseName: courseName.trim(),
@@ -3826,9 +4507,6 @@ function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
   function onSaved(result) {
     if (!result || result.success === false) { onFailed(result); return; }
     showToast(isNew ? 'Course added.' : 'Course updated.');
-    // Refetch the whole transcript so row indexes / target dates / block
-    // layout stay perfectly in sync with the sheet rather than patching
-    // local state and risking drift.
     _transcriptData = null;
     _transcriptEditingRow = null;
     _loadTranscriptTab();
@@ -3841,243 +4519,13 @@ function _saveTranscriptRow(panelId, rowIndex, block, isNew) {
   serverCall();
 }
 
-let _bulkPacingData     = null;  // full scan result from server
-let _bulkPacingSelected = new Set(); // studentIds currently checked
-let _bulkPacingOverrides = {};   // studentId -> { weeklyHours, activeWeeks } — manual edits to the suggestion
-
-// ── Open / Close ─────────────────────────────────────────────
-function openBulkPacingModal() {
-  document.getElementById('bulkPacingModal').classList.remove('hidden');
-  if (!_bulkPacingData) {
-    _loadBulkPacingScan();
-  } else {
-    document.getElementById('bulkPacingLoading').style.display = 'none';
-    document.getElementById('bulkPacingContent').classList.remove('hidden');
-    _renderBulkPacingTable();
-  }
-}
-
-function closeBulkPacingModal() {
-  document.getElementById('bulkPacingModal').classList.add('hidden');
-}
-
-function _loadBulkPacingScan() {
-  document.getElementById('bulkPacingLoading').style.display = 'block';
-  document.getElementById('bulkPacingContent').classList.add('hidden');
-
-  google.script.run
-    .withSuccessHandler(function(result) {
-      document.getElementById('bulkPacingLoading').style.display = 'none';
-      document.getElementById('bulkPacingContent').classList.remove('hidden');
-
-      if (!result || result.success === false) {
-        document.getElementById('bulkPacingContent').innerHTML =
-          '<div style="padding:24px;text-align:center;color:var(--high);">' +
-          esc(result && result.error ? result.error : 'Scan failed.') + '</div>';
-        return;
-      }
-
-      _bulkPacingData      = result;
-      _bulkPacingSelected  = new Set();
-      _bulkPacingOverrides = {};
-      _renderBulkPacingTable();
-    })
-    .withFailureHandler(function(err) {
-      document.getElementById('bulkPacingLoading').style.display = 'none';
-      document.getElementById('bulkPacingContent').classList.remove('hidden');
-      document.getElementById('bulkPacingContent').innerHTML =
-        '<div style="padding:24px;text-align:center;color:var(--high);">Failed to scan: ' +
-        esc(err && err.message ? err.message : 'unknown error') + '</div>';
-    })
-    .scanAllStudentPacing();
-}
-
-// ── Filtering ──────────────────────────────────────────────────
-function _getFilteredPacingStudents() {
-  if (!_bulkPacingData) return [];
-  const search = (document.getElementById('bulkPacingSearch').value || '').toLowerCase().trim();
-  const status = document.getElementById('bulkPacingStatusFilter').value;
-
-  return _bulkPacingData.students.filter(s => {
-    if (status !== 'ALL' && s.status !== status) return false;
-    if (search && !s.displayName.toLowerCase().includes(search)) return false;
-    return true;
-  });
-}
-
-// ── Render table ────────────────────────────────────────────────
-function _renderBulkPacingTable() {
-  const filtered = _getFilteredPacingStudents();
-  const body = document.getElementById('bulkPacingBody');
-
-  const statusLabels = {
-    new: 'New', changed: 'Changed', unchanged: 'Unchanged', no_schedule: 'No Schedule',
-  };
-
-  body.innerHTML = filtered.map(s => {
-    const override = _bulkPacingOverrides[s.studentId];
-    const hours = override ? override.weeklyHours : s.detectedHours;
-    const weeks = override ? override.activeWeeks  : s.detectedActiveWeeks;
-    const isChecked = _bulkPacingSelected.has(s.studentId);
-    const rowUid = 'bp-' + s.studentId.replace(/\W/g, '');
-
-    const weekDots = ['w1','w2','w3','w4'].map((w, i) =>
-      `<span class="pacing-week-dot ${weeks[w] ? 'active' : ''}">${i+1}</span>`
-    ).join('');
-
-    const savedText = s.hasExisting
-      ? `${s.existingHours}h/wk (${['w1','w2','w3','w4'].filter(w => s.existingActiveWeeks[w]).map((w,i)=>i+1).join(',') || 'none'})`
-      : '—';
-
-    return `<tr>
-      <td><input type="checkbox" class="bp-row-check" data-id="${esc(s.studentId)}" ${isChecked ? 'checked' : ''} onchange="_toggleBulkPacingRow('${esc(s.studentId)}', this.checked)"></td>
-      <td style="font-weight:600;color:var(--text);">${esc(s.displayName)}</td>
-      <td><span class="pacing-status-pill pacing-status-${s.status}">${statusLabels[s.status] || s.status}</span></td>
-      <td>
-        <input type="number" value="${hours}" min="0" step="1" style="width:56px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:3px 6px;"
-          onchange="_setPacingOverride('${esc(s.studentId)}', 'hours', this.value)" ${!s.hasSchedule ? 'disabled' : ''}>
-      </td>
-      <td>
-        <span class="pacing-week-mini" id="${rowUid}-weeks">${weekDots}</span>
-        <button onclick="_cyclePacingWeekPreset('${esc(s.studentId)}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;margin-left:4px;" title="Cycle: Weeks 1&3 / Weeks 2&4 / All / None">⟳</button>
-      </td>
-      <td style="color:var(--text-muted);font-size:11.5px;">${savedText}</td>
-      <td>${!s.hasSchedule ? `<span style="color:var(--text-muted);font-size:11px;font-style:italic;">no schedule</span>` : ''}</td>
-    </tr>`;
-  }).join('');
-
-  // Summary chip
-  const total    = _bulkPacingData ? _bulkPacingData.students.length : 0;
-  const shown    = filtered.length;
-  const selected = _bulkPacingSelected.size;
-  document.getElementById('bulkPacingSummary').innerHTML =
-    `<strong>${shown}</strong> of ${total} shown · <strong>${selected}</strong> selected`;
-}
-
-// ── Row selection ────────────────────────────────────────────────
-function _toggleBulkPacingRow(studentId, checked) {
-  if (checked) _bulkPacingSelected.add(studentId);
-  else         _bulkPacingSelected.delete(studentId);
-  _renderBulkPacingTable();
-}
-
-function _toggleAllPacingRows(checked) {
-  const filtered = _getFilteredPacingStudents();
-  filtered.forEach(s => {
-    if (!s.hasSchedule) return; // don't auto-select students with nothing to apply
-    if (checked) _bulkPacingSelected.add(s.studentId);
-    else         _bulkPacingSelected.delete(s.studentId);
-  });
-  _renderBulkPacingTable();
-}
-
-// ── Per-row manual overrides ─────────────────────────────────────
-function _setPacingOverride(studentId, field, value) {
-  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
-  if (!student) return;
-
-  const current = _bulkPacingOverrides[studentId] || {
-    weeklyHours: student.detectedHours,
-    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
-  };
-
-  if (field === 'hours') {
-    current.weeklyHours = parseFloat(value) || 0;
-  }
-  _bulkPacingOverrides[studentId] = current;
-}
-
-// Cycles a row's active-weeks pattern through the common presets,
-// so staff don't have to hand-edit checkboxes for the odd student
-// whose rotation doesn't match the biweekly guess.
-const PACING_WEEK_PRESETS = [
-  { w1: true,  w2: false, w3: true,  w4: false }, // weeks 1 & 3
-  { w1: false, w2: true,  w3: false, w4: true  }, // weeks 2 & 4
-  { w1: true,  w2: true,  w3: true,  w4: true  }, // all weeks (full time academics)
-  { w1: false, w2: false, w3: false, w4: false }, // none (full time trades)
-];
-
-function _cyclePacingWeekPreset(studentId) {
-  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
-  if (!student) return;
-
-  const current = _bulkPacingOverrides[studentId] || {
-    weeklyHours: student.detectedHours,
-    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
-  };
-
-  const currentIndex = PACING_WEEK_PRESETS.findIndex(p =>
-    p.w1 === current.activeWeeks.w1 && p.w2 === current.activeWeeks.w2 &&
-    p.w3 === current.activeWeeks.w3 && p.w4 === current.activeWeeks.w4
-  );
-  const nextPreset = PACING_WEEK_PRESETS[(currentIndex + 1) % PACING_WEEK_PRESETS.length];
-
-  current.activeWeeks = Object.assign({}, nextPreset);
-  _bulkPacingOverrides[studentId] = current;
-  _renderBulkPacingTable();
-}
-
-// ── Apply to selected ────────────────────────────────────────────
-function _applyBulkPacing() {
-  const ids = [..._bulkPacingSelected];
-  if (!ids.length) {
-    showToast('Select at least one student first.', 'error');
-    return;
-  }
-
-  const updates = ids.map(studentId => {
-    const student  = _bulkPacingData.students.find(s => s.studentId === studentId);
-    const override = _bulkPacingOverrides[studentId];
-    return {
-      studentId,
-      weeklyHours: override ? override.weeklyHours : student.detectedHours,
-      activeWeeks: override ? override.activeWeeks  : student.detectedActiveWeeks,
-    };
-  });
-
-  const btn    = document.getElementById('bulkPacingApplyBtn');
-  const status = document.getElementById('bulkPacingApplyStatus');
-  btn.disabled = true;
-  status.textContent = `Applying to ${updates.length} students…`;
-  status.style.color = 'var(--text-muted)';
-
-  google.script.run
-    .withSuccessHandler(function(result) {
-      btn.disabled = false;
-      if (!result || result.success === false) {
-        status.textContent = (result && result.error) || 'Apply failed.';
-        status.style.color = 'var(--high)';
-        return;
-      }
-      status.textContent = `✓ Applied to ${result.applied} students` +
-        (result.skippedCount ? ` — ${result.skippedCount} skipped (not found).` : '.');
-      status.style.color = 'var(--low)';
-      showToast(`Pacing settings applied to ${result.applied} students.`);
-
-      // Force a fresh scan next time the modal opens, so "Currently
-      // Saved" reflects what was just written.
-      _bulkPacingData = null;
-      _bulkPacingSelected = new Set();
-      _bulkPacingOverrides = {};
-    })
-    .withFailureHandler(function(err) {
-      btn.disabled = false;
-      status.textContent = (err && err.message) || 'Apply failed — please try again.';
-      status.style.color = 'var(--high)';
-    })
-    .batchApplyStudentPacing(updates);
-}
-
 function _cancelTranscriptAdd() {
   const wrap = document.getElementById('tr-new-row-wrap');
   if (wrap) wrap.remove();
 }
 
-// ── Pacing settings dialog (weekly hours + active weeks) ──────
 function _openTranscriptSettings() {
   _ensureThemedDialogEl(); // reuse the themed dialog shell's DOM element as a base
-  // Build a small custom panel instead of using themedPrompt (which is
-  // single-input) — swap in transcript-specific content, same overlay pattern.
   const el = document.getElementById('themedDialog');
   el.querySelector('.modal-box').innerHTML = `
     <div class="modal-header"><h2>Pacing Settings</h2></div>
@@ -4138,5 +4586,752 @@ function _saveTranscriptSettings() {
       if (box) { box.textContent = (err && err.message) || 'Save failed.'; box.classList.add('show'); }
     })
     .saveTranscriptSettings(_transcriptStudentId, newSettings);
+}
+
+function _autoPopulateTranscript() {
+  if (!_transcriptStudentId) return;
+  themedConfirm(
+    'This fills in the student\'s full expected course plan (from Master Schedule Hours) in one pass. It only runs if this student has no transcript rows yet — existing transcripts are never touched.',
+    { title: 'Auto-populate transcript?', okLabel: 'Populate' }
+  ).then(ok => {
+    if (!ok) return;
+    showToast('Populating transcript…');
+    google.script.run
+      .withSuccessHandler(function(result) {
+        if (!result || result.success === false) {
+          showToast((result && result.error) || 'Auto-populate failed.', 'error');
+          return;
+        }
+        if (result.skipped) {
+          showToast(result.message);
+          return;
+        }
+        showToast(`Added ${result.added} courses.`);
+        _transcriptData = null;
+        _loadTranscriptTab();
+      })
+      .withFailureHandler(function(err) {
+        showToast((err && err.message) || 'Auto-populate failed — please try again.', 'error');
+      })
+      .autoPopulateTranscript(_transcriptStudentId, _currentEmployeeId, _currentRole);
+  });
+}
+// ── Trades tab ────────────────────────────────────────────────
+let _tradesTabStudentId = null; // which student the loaded data belongs to
+
+function _loadTradesTab() {
+  const studentId = currentModalProfile ? (currentModalProfile.academicId || currentModalProfile.id) : null;
+  const container = document.getElementById('tradesTabContent');
+
+  if (!studentId) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No student ID on file.</div>';
+    return;
+  }
+
+  // Cheap to reload every time the tab is opened (small payload,
+  // and it should reflect the latest ETAR upload immediately) —
+  // no caching needed here unlike the transcript tab.
+  container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--high);">' +
+          esc((result && result.error) || 'Failed to load.') + '</div>';
+        return;
+      }
+      _tradesTabStudentId = studentId;
+      _renderTradesTab(result.trades || []);
+    })
+    .withFailureHandler(function(err) {
+      container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--high);">' +
+        esc(err && err.message ? err.message : 'Failed to load.') + '</div>';
+    })
+    .getStudentTradeProficiency(studentId);
+}
+
+function _renderTradesTab(trades) {
+  const container = document.getElementById('tradesTabContent');
+
+  if (!trades.length) {
+    container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No ETAR data on file yet for this student.</div>';
+    return;
+  }
+
+  container.innerHTML = trades.map(t => `
+    <div style="margin-bottom:22px;">
+      <div style="font-size:14px;font-weight:700;color:var(--accent);margin-bottom:10px;">${esc(t.trade)}</div>
+      <table class="tr-table" style="width:100%;">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Category</th>
+            <th># Proficiencies</th>
+            <th># Completed</th>
+            <th>% Completed</th>
+            <th># Missing</th>
+            <th>Avg Rating</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${t.codes.map(c => {
+            const pctColor = c.pctCompleted === null ? 'var(--text-muted)'
+              : c.pctCompleted >= 100 ? 'var(--low)'
+              : c.pctCompleted >= 50  ? 'var(--medium)'
+              : 'var(--high)';
+            return `<tr style="border-bottom:1px solid var(--border);">
+              <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(c.code)}</td>
+              <td style="padding:8px 10px;">${esc(c.category || '—')}</td>
+              <td style="padding:8px 10px;text-align:center;">${c.proficienciesCount}</td>
+              <td style="padding:8px 10px;text-align:center;">${c.completedCount}</td>
+              <td style="padding:8px 10px;text-align:center;font-weight:700;color:${pctColor};">${c.pctCompleted !== null ? c.pctCompleted + '%' : '—'}</td>
+              <td style="padding:8px 10px;text-align:center;">${c.missingCount}</td>
+              <td style="padding:8px 10px;text-align:center;">${c.avgRating !== null ? c.avgRating : '—'}</td>
+            </tr>`;
+          }).join('')}
+        </tbody>
+      </table>
+    </div>
+  `).join('');
+}
+
+// ── Time log tab ───────────────────────────────────────────────
+function _loadTimeLogTab() {
+  const studentId = currentModalProfile ? (currentModalProfile.academicId || currentModalProfile.id) : null;
+
+  const weekInput = document.getElementById('timeLogWeekInput');
+  if (weekInput && !weekInput.value) weekInput.value = _defaultTimeLogWeek_();
+
+  const statusEl = document.getElementById('timeLogStatus');
+  if (statusEl) { statusEl.textContent = ''; }
+
+  if (!studentId) {
+    document.getElementById('timeLogHistoryBody').innerHTML =
+      '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No student ID on file — can\'t save or load a time log.</td></tr>';
+    return;
+  }
+
+  _refreshTimeLogHistory(studentId);
+}
+
+function _refreshTimeLogHistory(studentId) {
+  const body = document.getElementById('timeLogHistoryBody');
+  body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) {
+        body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--high);">' +
+          esc((result && result.error) || 'Failed to load.') + '</td></tr>';
+        return;
+      }
+      if (!result.weeks.length) {
+        body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No weeks on file yet.</td></tr>';
+        return;
+      }
+      body.innerHTML = result.weeks.map(w => `
+        <tr style="border-bottom:1px solid var(--border);">
+          <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.weekLabel)}</td>
+          <td style="padding:8px 10px;text-align:center;">${w.completedWork.toFixed(2)} h</td>
+          <td style="padding:8px 10px;text-align:center;">${w.idleTime.toFixed(2)} h</td>
+          <td style="padding:8px 10px;text-align:center;font-weight:700;color:var(--text);">${w.actualWorkedTime.toFixed(2)} h</td>
+          <td style="padding:8px 10px;text-align:center;color:var(--text-muted);">${w.assignedHours.toFixed(1)} h</td>
+        </tr>`).join('');
+    })
+    .withFailureHandler(function(err) {
+      body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--high);">' +
+        esc(err && err.message ? err.message : 'Failed to load.') + '</td></tr>';
+    })
+    .getStudentTimeLog(studentId);
+}
+
+// Most recent Monday, formatted as yyyy-MM-dd for the date input.
+function _defaultTimeLogWeek_() {
+  const today = new Date();
+  const day = today.getDay(); // 0=Sun..6=Sat
+  const diffToMonday = (day === 0 ? 6 : day - 1);
+  const monday = new Date(today);
+  monday.setDate(today.getDate() - diffToMonday);
+  const y = monday.getFullYear();
+  const m = String(monday.getMonth() + 1).padStart(2, '0');
+  const d = String(monday.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function _submitWeeklyTimeLog() {
+  if (!_canEdit('timelog')) {
+    showToast('You do not have permission to edit time logs.', 'error');
+    return;
+  }
+  const studentId = currentModalProfile ? (currentModalProfile.academicId || currentModalProfile.id) : null;
+  const week   = document.getElementById('timeLogWeekInput').value;
+  const log    = document.getElementById('timeLogPasteInput').value;
+  const status = document.getElementById('timeLogStatus');
+  const btn    = document.getElementById('timeLogSaveBtn');
+
+  if (!studentId) { status.textContent = 'No student ID on file.';    status.style.color = 'var(--high)'; return; }
+  if (!week)      { status.textContent = 'Pick a week first.';        status.style.color = 'var(--high)'; return; }
+  if (!log.trim()) { status.textContent = 'Paste a session log first.'; status.style.color = 'var(--high)'; return; }
+
+  btn.disabled = true;
+  btn.textContent = 'Saving…';
+  status.textContent = 'Parsing log…';
+  status.style.color = 'var(--text-muted)';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      btn.textContent = 'Save This Week';
+      if (!result || result.success === false) {
+        status.textContent = (result && result.error) || 'Save failed.';
+        status.style.color = 'var(--high)';
+        return;
+      }
+      status.textContent = '✓ Week of ' + result.weekLabel + ': ' +
+        result.actualWorkedTime.toFixed(2) + 'h worked (of ' + result.assignedHours.toFixed(1) + 'h assigned), ' +
+        result.idleTime.toFixed(2) + 'h idle.';
+      status.style.color = 'var(--low)';
+      document.getElementById('timeLogPasteInput').value = '';
+      _refreshTimeLogHistory(studentId);
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled = false;
+      btn.textContent = 'Save This Week';
+      status.textContent = err && err.message ? err.message : 'Save failed — please try again.';
+      status.style.color = 'var(--high)';
+    })
+    .saveWeeklyTimeLog(studentId, week, log, _currentRole, _currentEmployeeId);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 34. Academic credits snapshot + Weekly Credit Report
+// ─────────────────────────────────────────────────────────────
+let _academicCreditsCadence = 'weekly';
+
+function openAcademicCreditsUpload() {
+  document.getElementById('academicCreditsUploadModal').classList.remove('hidden');
+  document.getElementById('academicCreditsUploadStatus').textContent = '';
+  document.getElementById('academicCreditsUploadStatus').className = 'schedule-status';
+  document.getElementById('academicCreditsUploadLog').textContent = '';
+  const dateInput = document.getElementById('academicCreditsDateInput');
+  if (!dateInput.value) {
+    const today = new Date();
+    dateInput.value = today.toISOString().slice(0, 10);
+  }
+  _setAcademicCreditsCadence('weekly');
+}
+
+function closeAcademicCreditsUpload() {
+  document.getElementById('academicCreditsUploadModal').classList.add('hidden');
+}
+
+function _setAcademicCreditsCadence(cadence) {
+  _academicCreditsCadence = cadence;
+  document.getElementById('acCadenceWeeklyBtn').style.opacity = cadence === 'weekly' ? '1' : '0.5';
+  document.getElementById('acCadenceMonthlyBtn').style.opacity = cadence === 'monthly' ? '1' : '0.5';
+}
+
+function confirmGenerateAcademicSnapshot() {
+  const dateVal = document.getElementById('academicCreditsDateInput').value;
+  const status = document.getElementById('academicCreditsUploadStatus');
+  const log = document.getElementById('academicCreditsUploadLog');
+  const btn = document.getElementById('academicCreditsUploadBtn');
+
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  status.textContent = 'Reading current credits and comparing…';
+  status.className = 'schedule-status';
+  log.textContent = '';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      btn.textContent = 'Generate Snapshot';
+
+      if (!result || result.success === false) {
+        status.textContent = '✕ ' + (result?.error || 'Generation failed.');
+        status.className = 'schedule-status err';
+        return;
+      }
+
+      status.textContent = `✓ Snapshot written for ${result.snapshotDate} (${result.cadence}) — ${result.written} students recorded.`;
+      status.className = 'schedule-status ok';
+
+      log.textContent =
+        `New baselines: ${result.newBaselines}\n` +
+        `Skipped (inactive): ${result.skippedInactive}\n` +
+        `Skipped (no course data): ${result.skippedNoData}\n` +
+        `Skipped (already run today): ${result.skippedAlreadyDone}`;
+
+      showToast(`Academic snapshot generated — ${result.written} students recorded.`);
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled = false;
+      btn.textContent = 'Generate Snapshot';
+      status.textContent = '✕ ' + (err?.message || 'Generation failed — please try again.');
+      status.className = 'schedule-status err';
+    })
+    .generateAcademicSnapshot(_academicCreditsCadence, dateVal, _currentEmployeeId);
+}
+
+let _creditReportData = null;
+
+function openCreditReportModal() {
+  document.getElementById('creditReportModal').classList.remove('hidden');
+  document.getElementById('creditReportBody').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">Loading…</div>';
+  _populateCreditReportSnapshotDropdown();
+  loadCreditReportPreset('lastWeek'); // default view — same as prior default behavior
+}
+
+function closeCreditReportModal(e) {
+  if (e && e.target !== document.getElementById('creditReportModal')) return;
+  document.getElementById('creditReportModal').classList.add('hidden');
+}
+
+// ── Friday helpers (Academic Snapshots are Friday-keyed) ────
+function _fridayOf(date) {
+  const d = new Date(date);
+  const day = d.getDay(); // 0=Sun..6=Sat
+  const diffToFriday = (day >= 5) ? (day - 5) : (day + 2);
+  d.setDate(d.getDate() - diffToFriday);
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return `${y}-${m}-${dd}`;
+}
+
+function loadCreditReportPreset(preset) {
+  const today = new Date();
+  let target = new Date(today);
+  if (preset === 'lastWeek')     target.setDate(today.getDate() - 7);
+  if (preset === 'twoWeeksAgo')  target.setDate(today.getDate() - 14);
+  // 'thisWeek' uses today as-is
+
+  const fridayLabel = _fridayOf(target);
+  _fetchCreditReport(fridayLabel);
+}
+
+function loadCreditReportCustomDate() {
+  const input = document.getElementById('creditReportDateInput');
+  if (!input.value) { showToast('Pick a date first.', 'error'); return; }
+  const fridayLabel = _fridayOf(input.value);
+  _fetchCreditReport(fridayLabel);
+}
+
+function _fetchCreditReport(weekLabel) {
+  document.getElementById('creditReportBody').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">Loading…</div>';
+  google.script.run
+    .withSuccessHandler(result => {
+      try {
+        _creditReportData = result;
+        _renderCreditReport(result);
+      } catch(e) {
+        document.getElementById('creditReportBody').innerHTML =
+          '<div style="padding:24px;color:var(--high);">Render error: ' + esc(e.message) + '</div>';
+      }
+    })
+    .withFailureHandler(err => {
+      document.getElementById('creditReportBody').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);">' + esc(err?.message || 'Failed to load.') + '</div>';
+    })
+    .getWeeklyCreditReport(weekLabel);
+}
+
+function _populateCreditReportSnapshotDropdown() {
+  const sel = document.getElementById('creditReportSnapshotSelect');
+  sel.innerHTML = '<option value="">— Saved Snapshots —</option>';
+  google.script.run
+    .withSuccessHandler(result => {
+      if (!result || !result.success) return;
+      result.snapshots.forEach(s => {
+        const opt = document.createElement('option');
+        opt.value = s.snapshotId;
+        const savedDate = s.savedDate ? new Date(s.savedDate).toLocaleDateString([], { month: 'short', day: 'numeric' }) : '';
+        opt.textContent = `${s.name} (week of ${s.weekLabel}, saved ${savedDate})`;
+        sel.appendChild(opt);
+      });
+    })
+    .getCreditReportSnapshots();
+}
+
+function loadSelectedCreditReportSnapshot() {
+  const id = document.getElementById('creditReportSnapshotSelect').value;
+  if (!id) { showToast('Pick a saved snapshot first.', 'error'); return; }
+  document.getElementById('creditReportBody').innerHTML = '<div style="padding:24px;text-align:center;color:var(--text-muted);">Loading…</div>';
+  google.script.run
+    .withSuccessHandler(result => {
+      _creditReportData = result;
+      _renderCreditReport(result);
+    })
+    .withFailureHandler(err => {
+      document.getElementById('creditReportBody').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);">' + esc(err?.message || 'Failed to load.') + '</div>';
+    })
+    .getCreditReportSnapshot(id);
+}
+
+function saveCurrentCreditReportAsSnapshot() {
+  if (!_creditReportData || !_creditReportData.success) { showToast('No report loaded yet.', 'error'); return; }
+  themedPrompt('Give this snapshot a name so you can find it later (e.g. "Week of 6/2 — before intervention push").', '', { title: 'Save Snapshot' })
+    .then(name => {
+      if (!name) return;
+      google.script.run
+        .withSuccessHandler(result => {
+          if (!result || !result.success) { showToast(result?.error || 'Save failed.', 'error'); return; }
+          showToast('Snapshot saved.');
+          _populateCreditReportSnapshotDropdown();
+        })
+        .withFailureHandler(err => showToast(err?.message || 'Save failed — please try again.', 'error'))
+        .saveCreditReportSnapshot(_creditReportData.weekLabel, name, _creditReportData, _currentEmployeeId);
+    });
+}
+
+function _renderCreditReport(result) {
+  const body = document.getElementById('creditReportBody');
+  if (!result || result.success === false) {
+    body.innerHTML = '<div style="padding:24px;text-align:center;color:var(--high);">' + esc(result?.error || 'Failed to load.') + '</div>';
+    return;
+  }
+
+  if (!result.isSnapshot && result.hasSnapshot === false) {
+    body.innerHTML = `<div style="padding:32px;text-align:center;color:var(--text-muted);">
+      <div style="font-size:14px;font-weight:600;margin-bottom:6px;">No snapshot exists for the week of ${esc(result.weekLabel)}.</div>
+      <div style="font-size:12.5px;">Academic Snapshots are taken weekly on Fridays — pick a Friday that's already been captured, or check back after this week's snapshot runs.</div>
+    </div>`;
+    return;
+  }
+
+  const s = result.summary;
+  let html = '';
+
+  if (result.isSnapshot) {
+    const savedDate = result.snapshotSavedDate ? formatTimestamp(result.snapshotSavedDate) : '';
+    html += `<div style="background:var(--accent-glow);border:1px solid var(--border-bright);border-radius:6px;padding:8px 12px;margin-bottom:14px;font-size:12px;color:var(--accent-mid);">
+      📌 Viewing saved snapshot <strong>"${esc(result.snapshotName)}"</strong> — saved ${esc(savedDate)} by ${esc(result.snapshotSavedBy || 'staff')}. This is a frozen historical record, not live data.
+    </div>`;
+  }
+
+  html += `
+    <div style="font-size:13px;color:var(--text-muted);margin-bottom:16px;">
+      Week of <strong style="color:var(--text);">${esc(result.weekLabel)}</strong> (Mon–Fri)
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:20px;">
+      ${[
+        { label: 'Students Tracked', value: s.totalStudents },
+        { label: 'Total Credits Earned', value: s.totalCreditsGained, color: 'var(--low)' },
+        { label: 'Students Who Earned Credits', value: s.gainerCount, color: 'var(--low)' },
+        { label: 'No Change / Lost', value: s.zeroCount + s.lostCount, color: s.lostCount ? 'var(--high)' : 'var(--medium)' },
+      ].map(c => `
+        <div style="background:var(--bg4);border:1px solid var(--border);border-radius:8px;padding:10px;text-align:center;">
+          <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:4px;">${c.label}</div>
+          <div style="font-size:20px;font-weight:800;${c.color ? 'color:'+c.color+';' : ''}">${c.value}</div>
+        </div>`).join('')}
+    </div>
+  `;
+
+  result.groups.forEach(g => {
+    html += `
+      <div style="margin-bottom:22px;">
+        <div style="font-size:14px;font-weight:700;color:var(--accent-mid);margin-bottom:8px;">${esc(g.hsdClass)} <span style="font-weight:400;color:var(--text-muted);font-size:12px;">(${g.students.length})</span></div>
+        <table style="width:100%;border-collapse:collapse;font-size:12.5px;">
+          <thead>
+            <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
+              <th style="padding:6px 10px;text-align:left;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Student</th>
+              <th style="padding:6px 10px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Credits Earned This Week</th>
+              <th style="padding:6px 10px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Credits Remaining</th>
+              <th style="padding:6px 10px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Hours Worked</th>
+              <th style="padding:6px 10px;text-align:center;color:var(--text-muted);font-size:10px;font-weight:700;text-transform:uppercase;">Hours Assigned</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${g.students.map(st => {
+              const gainColor = st.creditsGained > 0 ? 'var(--low)' : st.creditsGained < 0 ? 'var(--high)' : 'var(--text-muted)';
+              const gainStr = st.creditsGained == null ? '—'
+                : st.creditsGained > 0 ? `Earned +${st.creditsGained} credit${st.creditsGained === 1 ? '' : 's'}`
+                : st.creditsGained < 0 ? `Lost ${Math.abs(st.creditsGained)} credit${Math.abs(st.creditsGained) === 1 ? '' : 's'}`
+                : 'No change';
+              return `<tr style="border-bottom:1px solid var(--border);">
+                <td style="padding:6px 10px;font-weight:600;color:var(--text);">${esc(st.name)}</td>
+                <td style="padding:6px 10px;text-align:center;font-weight:700;color:${gainColor};">${gainStr}</td>
+                <td style="padding:6px 10px;text-align:center;">${st.creditsRemaining ?? '—'}</td>
+                <td style="padding:6px 10px;text-align:center;">${st.hoursWorked != null ? st.hoursWorked.toFixed(1) + 'h' : '—'}</td>
+                <td style="padding:6px 10px;text-align:center;color:var(--text-muted);">${st.hoursAssigned != null ? st.hoursAssigned.toFixed(1) + 'h' : '—'}</td>
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>`;
+  });
+
+  body.innerHTML = html;
+}
+
+function copyCreditReport() {
+  if (!_creditReportData || !_creditReportData.success) { showToast('No report loaded yet.', 'error'); return; }
+
+  let text = `Weekly Credit Report — Week of ${_creditReportData.weekLabel}`;
+  if (_creditReportData.isSnapshot) text += ` (Snapshot: ${_creditReportData.snapshotName})`;
+  text += '\n\n';
+  _creditReportData.groups.forEach(g => {
+    text += `${g.hsdClass}\n`;
+    text += `Student\tCredits Earned This Week\tCredits Remaining\tHours Worked\tHours Assigned\n`;
+    g.students.forEach(st => {
+      const gainStr = st.creditsGained == null ? '—'
+        : st.creditsGained > 0 ? `Earned +${st.creditsGained} credit${st.creditsGained === 1 ? '' : 's'}`
+        : st.creditsGained < 0 ? `Lost ${Math.abs(st.creditsGained)} credit${Math.abs(st.creditsGained) === 1 ? '' : 's'}`
+        : 'No change';
+      text += `${st.name}\t${gainStr}\t${st.creditsRemaining ?? '—'}\t${st.hoursWorked != null ? st.hoursWorked.toFixed(1) : '—'}\t${st.hoursAssigned != null ? st.hoursAssigned.toFixed(1) : '—'}\n`;
+    });
+    text += '\n';
+  });
+
+  navigator.clipboard.writeText(text).then(() => {
+    showToast('Report copied — paste into email or a doc.');
+  }).catch(() => {
+    showToast('Copy failed — clipboard access may be blocked.', 'error');
+  });
+}
+
+// ─────────────────────────────────────────────────────────────
+// 35. Bulk pacing tool
+// ─────────────────────────────────────────────────────────────
+let _bulkPacingData     = null;  // full scan result from server
+let _bulkPacingSelected = new Set(); // studentIds currently checked
+let _bulkPacingOverrides = {};   // studentId -> { weeklyHours, activeWeeks } — manual edits to the suggestion
+
+function openBulkPacingModal() {
+  document.getElementById('bulkPacingModal').classList.remove('hidden');
+  if (!_bulkPacingData) {
+    _loadBulkPacingScan();
+  } else {
+    document.getElementById('bulkPacingLoading').style.display = 'none';
+    document.getElementById('bulkPacingContent').classList.remove('hidden');
+    _renderBulkPacingTable();
+  }
+}
+
+function closeBulkPacingModal() {
+  document.getElementById('bulkPacingModal').classList.add('hidden');
+}
+
+function _loadBulkPacingScan() {
+  document.getElementById('bulkPacingLoading').style.display = 'block';
+  document.getElementById('bulkPacingContent').classList.add('hidden');
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      document.getElementById('bulkPacingLoading').style.display = 'none';
+      document.getElementById('bulkPacingContent').classList.remove('hidden');
+
+      if (!result || result.success === false) {
+        document.getElementById('bulkPacingContent').innerHTML =
+          '<div style="padding:24px;text-align:center;color:var(--high);">' +
+          esc(result && result.error ? result.error : 'Scan failed.') + '</div>';
+        return;
+      }
+
+      _bulkPacingData      = result;
+      _bulkPacingSelected  = new Set();
+      _bulkPacingOverrides = {};
+      _renderBulkPacingTable();
+    })
+    .withFailureHandler(function(err) {
+      document.getElementById('bulkPacingLoading').style.display = 'none';
+      document.getElementById('bulkPacingContent').classList.remove('hidden');
+      document.getElementById('bulkPacingContent').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);">Failed to scan: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
+    })
+    .scanAllStudentPacing();
+}
+
+function _getFilteredPacingStudents() {
+  if (!_bulkPacingData) return [];
+  const search = (document.getElementById('bulkPacingSearch').value || '').toLowerCase().trim();
+  const status = document.getElementById('bulkPacingStatusFilter').value;
+
+  return _bulkPacingData.students.filter(s => {
+    if (status !== 'ALL' && s.status !== status) return false;
+    if (search && !s.displayName.toLowerCase().includes(search)) return false;
+    return true;
+  });
+}
+
+function _renderBulkPacingTable() {
+  const filtered = _getFilteredPacingStudents();
+  const body = document.getElementById('bulkPacingBody');
+
+  const statusLabels = {
+    new: 'New', changed: 'Changed', unchanged: 'Unchanged', no_schedule: 'No Schedule',
+  };
+
+  body.innerHTML = filtered.map(s => {
+    const override = _bulkPacingOverrides[s.studentId];
+    const hours = override ? override.weeklyHours : s.detectedHours;
+    const weeks = override ? override.activeWeeks  : s.detectedActiveWeeks;
+    const isChecked = _bulkPacingSelected.has(s.studentId);
+    const rowUid = 'bp-' + s.studentId.replace(/\W/g, '');
+
+    const weekDots = ['w1','w2','w3','w4'].map((w, i) =>
+      `<span class="pacing-week-dot ${weeks[w] ? 'active' : ''}">${i+1}</span>`
+    ).join('');
+
+    const savedText = s.hasExisting
+      ? `${s.existingHours}h/wk (${['w1','w2','w3','w4'].filter(w => s.existingActiveWeeks[w]).map((w,i)=>i+1).join(',') || 'none'})`
+      : '—';
+
+    return `<tr>
+      <td><input type="checkbox" class="bp-row-check" data-id="${esc(s.studentId)}" ${isChecked ? 'checked' : ''} onchange="_toggleBulkPacingRow('${esc(s.studentId)}', this.checked)"></td>
+      <td style="font-weight:600;color:var(--text);">${esc(s.displayName)}</td>
+      <td><span class="pacing-status-pill pacing-status-${s.status}">${statusLabels[s.status] || s.status}</span></td>
+      <td>
+        <input type="number" value="${hours}" min="0" step="1" style="width:56px;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:3px 6px;"
+          onchange="_setPacingOverride('${esc(s.studentId)}', 'hours', this.value)" ${!s.hasSchedule ? 'disabled' : ''}>
+      </td>
+      <td>
+        <span class="pacing-week-mini" id="${rowUid}-weeks">${weekDots}</span>
+        <button onclick="_cyclePacingWeekPreset('${esc(s.studentId)}')" style="background:none;border:none;cursor:pointer;color:var(--text-muted);font-size:11px;margin-left:4px;" title="Cycle: Weeks 1&3 / Weeks 2&4 / All / None">⟳</button>
+      </td>
+      <td style="color:var(--text-muted);font-size:11.5px;">${savedText}</td>
+      <td>${!s.hasSchedule ? `<span style="color:var(--text-muted);font-size:11px;font-style:italic;">no schedule</span>` : ''}</td>
+    </tr>`;
+  }).join('');
+
+  // Summary chip
+  const total    = _bulkPacingData ? _bulkPacingData.students.length : 0;
+  const shown    = filtered.length;
+  const selected = _bulkPacingSelected.size;
+  document.getElementById('bulkPacingSummary').innerHTML =
+    `<strong>${shown}</strong> of ${total} shown · <strong>${selected}</strong> selected`;
+}
+
+function _toggleBulkPacingRow(studentId, checked) {
+  if (checked) _bulkPacingSelected.add(studentId);
+  else         _bulkPacingSelected.delete(studentId);
+  _renderBulkPacingTable();
+}
+
+function _toggleAllPacingRows(checked) {
+  const filtered = _getFilteredPacingStudents();
+  filtered.forEach(s => {
+    if (!s.hasSchedule) return; // don't auto-select students with nothing to apply
+    if (checked) _bulkPacingSelected.add(s.studentId);
+    else         _bulkPacingSelected.delete(s.studentId);
+  });
+  _renderBulkPacingTable();
+}
+
+function _setPacingOverride(studentId, field, value) {
+  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
+  if (!student) return;
+
+  const current = _bulkPacingOverrides[studentId] || {
+    weeklyHours: student.detectedHours,
+    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
+  };
+
+  if (field === 'hours') {
+    current.weeklyHours = parseFloat(value) || 0;
+  }
+  _bulkPacingOverrides[studentId] = current;
+}
+
+// Cycles a row's active-weeks pattern through the common presets,
+// so staff don't have to hand-edit checkboxes for the odd student
+// whose rotation doesn't match the biweekly guess.
+const PACING_WEEK_PRESETS = [
+  { w1: true,  w2: false, w3: true,  w4: false }, // weeks 1 & 3
+  { w1: false, w2: true,  w3: false, w4: true  }, // weeks 2 & 4
+  { w1: true,  w2: true,  w3: true,  w4: true  }, // all weeks (full time academics)
+  { w1: false, w2: false, w3: false, w4: false }, // none (full time trades)
+];
+
+function _cyclePacingWeekPreset(studentId) {
+  const student = _bulkPacingData.students.find(s => s.studentId === studentId);
+  if (!student) return;
+
+  const current = _bulkPacingOverrides[studentId] || {
+    weeklyHours: student.detectedHours,
+    activeWeeks: Object.assign({}, student.detectedActiveWeeks),
+  };
+
+  const currentIndex = PACING_WEEK_PRESETS.findIndex(p =>
+    p.w1 === current.activeWeeks.w1 && p.w2 === current.activeWeeks.w2 &&
+    p.w3 === current.activeWeeks.w3 && p.w4 === current.activeWeeks.w4
+  );
+  const nextPreset = PACING_WEEK_PRESETS[(currentIndex + 1) % PACING_WEEK_PRESETS.length];
+
+  current.activeWeeks = Object.assign({}, nextPreset);
+  _bulkPacingOverrides[studentId] = current;
+  _renderBulkPacingTable();
+}
+
+function _applyBulkPacing() {
+  const ids = [..._bulkPacingSelected];
+  if (!ids.length) {
+    showToast('Select at least one student first.', 'error');
+    return;
+  }
+
+  const updates = ids.map(studentId => {
+    const student  = _bulkPacingData.students.find(s => s.studentId === studentId);
+    const override = _bulkPacingOverrides[studentId];
+    return {
+      studentId,
+      weeklyHours: override ? override.weeklyHours : student.detectedHours,
+      activeWeeks: override ? override.activeWeeks  : student.detectedActiveWeeks,
+    };
+  });
+
+  const btn    = document.getElementById('bulkPacingApplyBtn');
+  const status = document.getElementById('bulkPacingApplyStatus');
+  btn.disabled = true;
+  status.textContent = `Applying to ${updates.length} students…`;
+  status.style.color = 'var(--text-muted)';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      if (!result || result.success === false) {
+        status.textContent = (result && result.error) || 'Apply failed.';
+        status.style.color = 'var(--high)';
+        return;
+      }
+      status.textContent = `✓ Applied to ${result.applied} students` +
+        (result.skippedCount ? ` — ${result.skippedCount} skipped (not found).` : '.');
+      status.style.color = 'var(--low)';
+      showToast(`Pacing settings applied to ${result.applied} students.`);
+
+      // Force a fresh scan next time the modal opens, so "Currently
+      // Saved" reflects what was just written.
+      _bulkPacingData = null;
+      _bulkPacingSelected = new Set();
+      _bulkPacingOverrides = {};
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled = false;
+      status.textContent = (err && err.message) || 'Apply failed — please try again.';
+      status.style.color = 'var(--high)';
+    })
+    .batchApplyStudentPacing(updates);
+}
+
+function runClearAllCaches() {
+  showToast('Clearing caches…');
+  google.script.run
+    .withSuccessHandler(result => {
+      if (!result || result.success === false) {
+        showToast('Failed to clear caches.', 'error');
+        return;
+      }
+      const cleared = (result.results || []).filter(r => r.cleared);
+      const summary = cleared.length
+        ? cleared.map(r => r.count ? `${r.label} (${r.count})` : r.label).join(', ')
+        : 'Nothing was cached — already clean.';
+      showToast('✓ Cleared: ' + summary, null, 6000);
+      refreshData(); // re-fetches + re-renders in place — no page reload needed
+    })
+    .withFailureHandler(err => showToast(err?.message || 'Failed to clear caches.', 'error'))
+    .clearAllCaches();
 }
 </script>
