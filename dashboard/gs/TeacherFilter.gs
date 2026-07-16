@@ -1,12 +1,14 @@
 // ============================================================
 // TeacherFilter.gs — "Filter by Teacher" (HS class) support
-// ------------------------------------------------------------
+
 
 const TEACHER_HSD_CLASSES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
 
 function getStudentHSDAssignments() {
+  if (USE_VAULT_SCHEDULE) return getStudentHSDAssignmentsFromVault_();
+
   try {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
+    const hubSS = SpreadsheetApp.openById(SS_VAULT);
     const schedSheet = hubSS.getSheetByName(SHEET_SCHEDULE);
     if (!schedSheet || schedSheet.getLastRow() < 2) {
       return { success: true, assignments: {} };
@@ -35,6 +37,40 @@ function getStudentHSDAssignments() {
 
   } catch (err) {
     Logger.log('getStudentHSDAssignments error: ' + err.message);
+    return { success: false, error: err.message, assignments: {} };
+  }
+}
+
+// ── VAULT PATH ────────────────────────────────────────────────
+// Only 'current' rows matter here — a stale 'last' schedule
+// shouldn't influence today's teacher-filter assignment. Column
+// order matches VAULT_SCHEDULE_HEADERS in VaultConfig.gs:
+//   studentId, weekLabel, slot, scheduleJson, lastUpdated
+function getStudentHSDAssignmentsFromVault_() {
+  try {
+    const rows = readVaultSheetAsObjects_(VAULT_SHEET_WEEKLY_SCHEDULE, VAULT_SCHEDULE_HEADERS);
+    const assignments = {};
+
+    rows.forEach(row => {
+      if (String(row.slot || '').trim().toLowerCase() !== 'current') return;
+      const studentId = String(row.studentId || '').trim();
+      if (!studentId) return;
+
+      let schedule;
+      try {
+        schedule = JSON.parse(String(row.scheduleJson || '{}'));
+      } catch (e) {
+        return; // malformed schedule JSON — skip this student
+      }
+
+      const matchedClass = _findHSDClassInSchedule_(schedule);
+      if (matchedClass) assignments[studentId] = matchedClass;
+    });
+
+    return { success: true, assignments };
+
+  } catch (err) {
+    Logger.log('getStudentHSDAssignmentsFromVault_ error: ' + err.message);
     return { success: false, error: err.message, assignments: {} };
   }
 }
