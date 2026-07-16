@@ -12,11 +12,6 @@
  *                          Never wiped/regenerated. Holds
  *                          the human layer (case owner,
  *                          status, notes, follow-up).
- *
- * Student ID is the ONLY join key used anywhere in this
- * file. No name matching, ever — that was the core bug
- * in the old system (case data preserved across weekly
- * sheet regeneration by matching student NAME).
  ****************************************************/
 
 // ── CONFIG — adjust once SS_VAULT exists ───────────
@@ -106,42 +101,29 @@ function _wirEnsureCaseSheet_() {
 /****************************************************
  * WIR REPORTS — READ
  ****************************************************/
-
-// Every row for one student, most recent first. Used for
-// streak/trajectory calculation (replaces old WIR Log reads).
 function getWIRHistoryForStudent(studentId, limit) {
   const sheet = _wirEnsureReportsSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-
   const data = sheet.getRange(2, 1, lastRow - 1, WIR_R_HEADERS.length).getValues();
   const id = String(studentId).trim();
-
   const rows = data
     .filter(row => String(row[WIR_R_COL.STUDENT_ID - 1]).trim() === id)
     .map(_wirRowToObject_)
     .sort((a, b) => (a.weekLabel < b.weekLabel ? 1 : -1)); // most recent first
-
   return limit ? rows.slice(0, limit) : rows;
 }
 
-// Just the latest week's row for one student (what the dashboard
-// Intervention tab shows by default).
 function getLatestWIRReport(studentId) {
   const history = getWIRHistoryForStudent(studentId, 1);
   return history.length ? history[0] : null;
 }
 
-// Every student's latest row — for the Case Manager list view.
-// One row per student (their most recent week only), not the
-// full history.
 function getAllLatestWIRReports() {
   const sheet = _wirEnsureReportsSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return [];
-
   const data = sheet.getRange(2, 1, lastRow - 1, WIR_R_HEADERS.length).getValues();
-
   const latestByStudent = {};
   data.forEach(row => {
     const obj = _wirRowToObject_(row);
@@ -150,15 +132,12 @@ function getAllLatestWIRReports() {
       latestByStudent[obj.studentId] = obj;
     }
   });
-
   return Object.values(latestByStudent);
 }
 
 function _wirRowToObject_(row) {
   const obj = {};
   WIR_R_HEADERS.forEach((key, i) => { obj[key] = row[i]; });
-  // Defensive normalization — in case a row was written before the
-  // text-format fix and got auto-converted to a Date by Sheets.
   obj.studentId = _wirNormalizeKeyPart_(obj.studentId);
   obj.weekLabel = _wirNormalizeKeyPart_(obj.weekLabel);
   return obj;
@@ -167,34 +146,14 @@ function _wirRowToObject_(row) {
 
 /****************************************************
  * WIR REPORTS — WRITE
- * Append-only. A row, once written, is never edited.
- * Re-running the engine for a week that already has rows
- * should APPEND new rows only for students not yet covered
- * that week, or produce a fresh set for a new week — it
- * should never rewrite/delete existing rows.
  ****************************************************/
-
-// Bulk write — used by the engine after computing a full
-// week's worth of rows. Skips students who already have a
-// row for that exact studentId + weekLabel (idempotent re-run
-// protection), rather than duplicating them.
 function appendWIRReportRows(rowObjects) {
   if (!rowObjects || !rowObjects.length) return { written: 0, skipped: 0 };
-
   const sheet = _wirEnsureReportsSheet_();
   const lastRow = sheet.getLastRow();
-
-  // Force studentId and weekLabel columns to plain text BEFORE writing —
-  // otherwise Sheets auto-detects "2026-07-06"-style strings as dates and
-  // silently converts them, which breaks the dedupe key comparison below
-  // (a Date object read back never string-equals the original text).
   sheet.getRange(1, WIR_R_COL.STUDENT_ID, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
   sheet.getRange(1, WIR_R_COL.WEEK_LABEL, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
-
-  // Force percent column to plain decimal number (e.g. 42.5, not "42.5%")
-  // so it can never be auto-formatted as a percent-string by Sheets.
   sheet.getRange(1, WIR_R_COL.PERCENT, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('0.00');
-
   const existingKeys = new Set();
   if (lastRow >= 2) {
     const existing = sheet.getRange(2, 1, lastRow - 1, 2).getValues(); // studentId, weekLabel
@@ -209,22 +168,15 @@ function appendWIRReportRows(rowObjects) {
   rowObjects.forEach(obj => {
     const key = _wirNormalizeKeyPart_(obj.studentId) + '::' + _wirNormalizeKeyPart_(obj.weekLabel);
     if (existingKeys.has(key)) { skipped++; return; }
-
     toWrite.push(WIR_R_HEADERS.map(h => obj[h] !== undefined ? obj[h] : ''));
   });
-
   if (toWrite.length) {
     sheet.getRange(sheet.getLastRow() + 1, 1, toWrite.length, WIR_R_HEADERS.length)
       .setValues(toWrite);
   }
-
   return { written: toWrite.length, skipped };
 }
 
-// Normalizes a value for key-comparison purposes. Handles the case where
-// Sheets has silently turned a date-looking string into an actual Date
-// object — converts it back to a plain yyyy-MM-dd string so comparisons
-// against freshly-passed-in strings still match correctly.
 function _wirNormalizeKeyPart_(val) {
   if (val instanceof Date) {
     return Utilities.formatDate(val, Session.getScriptTimeZone(), 'yyyy-MM-dd');
@@ -241,7 +193,6 @@ function getCaseManagement(studentId) {
   const sheet = _wirEnsureCaseSheet_();
   const lastRow = sheet.getLastRow();
   if (lastRow < 2) return null;
-
   const id = String(studentId).trim();
   const data = sheet.getRange(2, 1, lastRow - 1, WIR_C_HEADERS.length).getValues();
 
@@ -269,48 +220,36 @@ function getAllCaseManagement() {
     WIR_C_HEADERS.forEach((key, i) => { obj[key] = row[i]; });
     byStudent[obj.studentId] = obj;
   });
-
   return byStudent;
 }
 
-
 /****************************************************
  * WIR CASE MANAGEMENT — WRITE
- * One row per student, created on first save, updated
- * in place after that. Never deleted by a regeneration —
- * this table is completely independent of WIR Reports.
  ****************************************************/
 
 function saveCaseManagement(studentId, fields) {
   studentId = String(studentId || '').trim();
   if (!studentId) throw new Error('Student ID is required.');
-
   return _withWirLock_(() => {
     const sheet = _wirEnsureCaseSheet_();
     const existing = getCaseManagement(studentId);
-
     const rowValues = WIR_C_HEADERS.map(key => {
       if (key === 'studentId') return studentId;
       if (key === 'lastUpdated') return new Date();
       return fields[key] !== undefined ? fields[key]
         : (existing ? existing[key] : '');
     });
-
     if (existing) {
       sheet.getRange(existing._rowNum, 1, 1, WIR_C_HEADERS.length).setValues([rowValues]);
     } else {
       sheet.appendRow(rowValues);
     }
-
     return { success: true, studentId };
   });
 }
 
-
 /****************************************************
- * COMBINED READ — what the dashboard's Intervention
- * tab actually wants: latest computed report + the
- * persistent case data, joined by Student ID.
+ * COMBINED READ
  ****************************************************/
 function getStudentIntervention(studentId) {
   return {
@@ -319,11 +258,9 @@ function getStudentIntervention(studentId) {
   };
 }
 
-// Combined list version, for the Case Manager overview screen.
 function getAllStudentInterventions() {
   const reports = getAllLatestWIRReports();
   const caseByStudent = getAllCaseManagement();
-
   return reports.map(report => ({
     report,
     caseData: caseByStudent[report.studentId] || null
@@ -333,8 +270,6 @@ function getAllStudentInterventions() {
 
 /****************************************************
  * LOCK HELPER
- * Prevents concurrent writes from clobbering each other —
- * same pattern as the main dashboard's _withLock.
  ****************************************************/
 function _withWirLock_(fn) {
   const lock = LockService.getScriptLock();
@@ -349,28 +284,10 @@ function _withWirLock_(fn) {
 
 /****************************************************
  * STUDENT INFO
- * ------------------------------------------------
- * Small table for static, one-time-set facts about a
- * student — right now just startDate. One row per
- * student, no duplication.
- *
- * IMPORTANT: the engine reads startDate from HERE, never
- * from Updated Grid directly. Updated Grid is only touched
- * by the manual sync function below, run occasionally —
- * never as part of a live engine run. This means a problem
- * with that external file (permissions, structure changes,
- * the other teacher reorganizing it) can never break the
- * engine mid-run.
  ****************************************************/
 
 const WIR_STUDENT_INFO_SHEET = 'Student Info';
 const WIR_SI_HEADERS = ['studentId', 'startDate', 'lastSynced'];
-
-// Read-only source — NOT owned by this system. Belongs to
-// another teacher / corporate tracking process.
-// We ONLY pull Student ID + start date from this file — every
-// other column (completion %, projected date, etc.) is computed
-// from our own data instead, never sourced from here.
 const UPDATED_GRID_ID = '1P_EodXdM5fE200hR503S_zfRvwvPP0-a1Y0mYy4Rqew';
 const UPDATED_GRID_STUDENT_ID_COL = 1; // A
 const UPDATED_GRID_START_DATE_COL = 5; // E — "Edgenuity/HSE Enrollment Date"
@@ -401,10 +318,6 @@ function getStudentStartDate(studentId) {
   }
   return null;
 }
-
-// Manual sync — run this occasionally (e.g. monthly, or whenever
-// you're aware new students have been added to Updated Grid).
-// NEVER called automatically by the engine itself.
 const UPDATED_GRID_SHEET_NAME = 'Need HSD';
 
 function syncStartDatesFromUpdatedGrid() {
@@ -422,27 +335,18 @@ function syncStartDatesFromUpdatedGrid() {
 
   Logger.log('syncStartDatesFromUpdatedGrid: sheet reports lastRow = ' + lastRow);
 
-  // Safety cap — if lastRow is wildly larger than expected (a common
-  // Sheets quirk where old formatting on now-empty rows inflates this
-  // number), reading the full "range" could be slow or hang. Cap it and
-  // log a warning rather than blindly reading thousands of empty rows.
   const SANITY_CAP = 1000;
   const effectiveLastRow = Math.min(lastRow, SANITY_CAP);
   if (lastRow > SANITY_CAP) {
     Logger.log('WARNING: lastRow (' + lastRow + ') looks unusually large — capping read at row ' + SANITY_CAP + '. This may mean old formatting on empty rows is inflating the sheet\'s reported size.');
   }
-
   const numRows = effectiveLastRow - UPDATED_GRID_DATA_START_ROW + 1;
   const gridData = gridSheet.getRange(
     UPDATED_GRID_DATA_START_ROW, 1, numRows,
     Math.max(UPDATED_GRID_STUDENT_ID_COL, UPDATED_GRID_START_DATE_COL)
   ).getValues();
-
   const infoSheet = _wirEnsureStudentInfoSheet_();
   const infoLastRow = infoSheet.getLastRow();
-
-  // Build existing studentId -> rowNum map so this is an upsert, not
-  // a blind append (re-running the sync shouldn't duplicate rows).
   const existingRowByStudent = {};
   if (infoLastRow >= 2) {
     const existing = infoSheet.getRange(2, 1, infoLastRow - 1, 1).getValues();
@@ -458,13 +362,10 @@ function syncStartDatesFromUpdatedGrid() {
   gridData.forEach(row => {
     const studentId = _wirNormalizeKeyPart_(row[UPDATED_GRID_STUDENT_ID_COL - 1]);
     const startDateRaw = row[UPDATED_GRID_START_DATE_COL - 1];
-
     if (!studentId || !startDateRaw) { skipped++; return; }
-
     const startDate = startDateRaw instanceof Date
       ? Utilities.formatDate(startDateRaw, Session.getScriptTimeZone(), 'yyyy-MM-dd')
       : String(startDateRaw).trim();
-
     const existingRow = existingRowByStudent[studentId];
     if (existingRow) {
       infoSheet.getRange(existingRow, 1, 1, 3).setValues([[studentId, startDate, now]]);
@@ -473,9 +374,6 @@ function syncStartDatesFromUpdatedGrid() {
     }
     synced++;
   });
-
-  // Force text formatting so studentId/startDate can't get
-  // auto-converted the way weekLabel did in WIR Reports.
   infoSheet.getRange(1, 1, Math.max(infoSheet.getMaxRows(), 2), 2).setNumberFormat('@');
 
   Logger.log('syncStartDatesFromUpdatedGrid: ' + synced + ' synced, ' + skipped + ' skipped (missing ID or date)');
@@ -485,10 +383,6 @@ function syncStartDatesFromUpdatedGrid() {
 
 /****************************************************
  * TEST — run this once to confirm the round-trip works
- * before building anything on top of this file.
- * Writes fake data, reads it back, alerts with results.
- * Safe to run repeatedly (idempotent WIR Reports write,
- * upsert-style Case Management write).
  ****************************************************/
 
 function testWIRDataLayer() {
