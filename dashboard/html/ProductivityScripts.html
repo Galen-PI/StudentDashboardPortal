@@ -171,10 +171,7 @@ function _renderProductivityModal() {
 }
 
 // ── Classify a productivity % ─────────────────────────────────
-// These return CSS var() strings — fine here since they're only ever
-// used inside DOM style="" attributes, which resolve var() through the
-// normal CSS cascade. Chart.js (canvas) needs concrete colors instead;
-// see _prodBgColor / _prodBorderColor below.
+
 function _prodColor(pct) {
   if (pct === null) return 'var(--text-muted)';
   if (pct > PROD_ERROR_THRESHOLD) return 'var(--warn)';
@@ -183,10 +180,6 @@ function _prodColor(pct) {
   return 'var(--high)';
 }
 
-// Used for Chart.js bar fills — needs a resolved color, not a var()
-// string, since canvas can't look up custom properties itself. Pass a
-// palette from _chartPalette() when calling from inside a chart-build
-// function that already has one; otherwise it resolves its own.
 function _prodBgColor(pct, palette) {
   const p = palette || _chartPalette();
   if (pct === null)               return _hexToRgba(p.textMuted, 0.2);
@@ -619,133 +612,236 @@ function _renderProgressView() {
 }
 
 function _renderHSProgressView() {
+  const tableBody = document.getElementById('hsProgressTableBody');
+  const chips     = document.getElementById('prodHSChips');
+
   if (!_hsMonthlyCohort || !_hsMonthlyCohort.length) {
-    document.getElementById('hsProgressTableBody').innerHTML =
+    tableBody.innerHTML =
       '<tr><td colspan="4" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No HS monthly data available.</td></tr>';
-    document.getElementById('prodHSChips').innerHTML = '';
+    chips.innerHTML = '';
     return;
   }
 
-  // Helper: true only if this is a real usable number
   const isNum = v => typeof v === 'number' && !isNaN(v);
-
-  const labels    = _hsMonthlyCohort.map(m => m.month);
+  const labels = _hsMonthlyCohort.map(m => m.month);
   const avgGained = _hsMonthlyCohort.map(m => isNum(m.avgGained) ? m.avgGained : null);
-
-  const validGains = avgGained.filter(v => v !== null);
-  const overallAvg = validGains.length
-    ? (validGains.reduce((s, v) => s + v, 0) / validGains.length).toFixed(1)
-    : '—';
-
-  const bestMonth = _hsMonthlyCohort
-    .filter(m => isNum(m.avgGained))
-    .reduce((best, m) => (!best || m.avgGained > best.avgGained) ? m : best, null);
-
-  // ── Previous Month Avg + Last-6-Month Avg ──────────────────
   const completedMonths = _hsMonthlyCohort.filter(m => isNum(m.avgGained));
-  const prevMonth = completedMonths.length ? completedMonths[completedMonths.length - 1] : null;
-  const prevMonthAvg = prevMonth ? prevMonth.avgGained.toFixed(1) : '—';
-
-  const last6 = completedMonths.slice(-6);
-  const last6Avg = last6.length
-    ? (last6.reduce((s, m) => s + m.avgGained, 0) / last6.length).toFixed(1)
+  const stats = {
+    previousMonth: completedMonths.length
+      ? completedMonths[completedMonths.length - 1]
+      : null,
+    last6: completedMonths.slice(-6),
+    bestMonth: completedMonths.reduce(
+      (best, m) => (!best || m.avgGained > best.avgGained) ? m : best,
+      null
+    ),
+    latestMonth: _hsMonthlyCohort[_hsMonthlyCohort.length - 1]
+  };
+  stats.previousAvg = stats.previousMonth
+    ? stats.previousMonth.avgGained.toFixed(1)
+    : '—';
+  stats.last6Avg = stats.last6.length
+    ? (
+        stats.last6.reduce((s, m) => s + m.avgGained, 0) /
+        stats.last6.length
+      ).toFixed(1)
+    : '—';
+  stats.latestTotal = (
+    stats.latestMonth &&
+    isNum(stats.latestMonth.totalGained)
+  )
+    ? stats.latestMonth.totalGained
     : '—';
 
-  const lastMonth        = _hsMonthlyCohort[_hsMonthlyCohort.length - 1];
-  const latestMonthTotal = lastMonth && isNum(lastMonth.totalGained) ? lastMonth.totalGained : '—';
-  const latestMonthName  = lastMonth ? lastMonth.month : '';
+  stats.latestName = stats.latestMonth
+    ? stats.latestMonth.month
+    : '';
 
-  document.getElementById('prodHSChips').innerHTML = [
-    { label: 'Previous Month Avg',       value: prevMonthAvg,
-      tip: `Average credits reduced per student in ${prevMonth ? prevMonth.month : 'the most recent completed month'}.` },
-    { label: `${last6.length}-Mo. Avg`,  value: last6Avg,
-      tip: `Average credits reduced per student per month, across the last ${last6.length} completed month${last6.length !== 1 ? 's' : ''} on file (up to 6).` },
-    { label: 'Best Month',               value: bestMonth ? bestMonth.month : '—',
-      tip: 'The month where students reduced the most credits on average.' },
-    { label: 'Best Month Avg',           value: bestMonth ? bestMonth.avgGained.toFixed(1) : '—',
-      tip: 'The average credits reduced during the best month.' },
-    { label: 'HS Students',              value: _hsMonthlyCohort[0]?.studentCount ?? '—',
-      tip: 'Number of HS students tracked in this analysis.' },
-    { label: latestMonthName + ' Total', value: latestMonthTotal,
-      tip: 'Total credits reduced across all HS students in ' + latestMonthName + '.' },
+  chips.innerHTML = [
+    {
+      label: 'Previous Month Avg',
+      value: stats.previousAvg,
+      tip: `Average credits reduced per student in ${
+        stats.previousMonth
+          ? stats.previousMonth.month
+          : 'the most recent completed month'
+      }.`
+    },
+    {
+      label: `${stats.last6.length}-Mo. Avg`,
+      value: stats.last6Avg,
+      tip: `Average credits reduced per student per month across the last ${stats.last6.length} completed month${stats.last6.length !== 1 ? 's' : ''} on file (up to 6).`
+    },
+    {
+      label: 'Best Month',
+      value: stats.bestMonth ? stats.bestMonth.month : '—',
+      tip: 'The month where students reduced the most credits on average.'
+    },
+    {
+      label: 'Best Month Avg',
+      value: stats.bestMonth ? stats.bestMonth.avgGained.toFixed(1) : '—',
+      tip: 'The average credits reduced during the best month.'
+    },
+    {
+      label: 'HS Students',
+      value: _hsMonthlyCohort[0]?.studentCount ?? '—',
+      tip: 'Number of HS students tracked in this analysis.'
+    },
+    {
+      label: stats.latestName
+        ? `${stats.latestName} Total`
+        : 'Latest Total',
+      value: stats.latestTotal,
+      tip: `Total credits reduced across all HS students${
+        stats.latestName ? ` in ${stats.latestName}` : ''
+      }.`
+    }
   ].map(c => `
     <div class="prod-chip" title="${esc(c.tip)}" style="cursor:help;">
       <div class="prod-chip-label">${c.label}</div>
       <div class="prod-chip-value">${c.value}</div>
-    </div>`).join('');
+    </div>
+  `).join('');
 
-  // Chart
-  if (_hsProgressChartInst) { _hsProgressChartInst.destroy(); _hsProgressChartInst = null; }
-  const cc  = _chartColors();
+  if (_hsProgressChartInst) {
+    _hsProgressChartInst.destroy();
+    _hsProgressChartInst = null;
+  }
+
+  const cc = _chartColors();
+
+  const avgColors = avgGained.map(v => ({
+    background:
+      v === null
+        ? _hexToRgba(cc.p.textMuted, 0.2)
+        : v > 0
+          ? _hexToRgba(cc.p.low, 0.6)
+          : _hexToRgba(cc.p.high, 0.6),
+
+    border:
+      v === null
+        ? _hexToRgba(cc.p.textMuted, 0.4)
+        : v > 0
+          ? _hexToRgba(cc.p.low, 0.9)
+          : _hexToRgba(cc.p.high, 0.9)
+  }));
+
   const ctx = document.getElementById('hsProgressChart').getContext('2d');
+
   _hsProgressChartInst = new Chart(ctx, {
     type: 'bar',
     data: {
       labels,
       datasets: [
         {
-          label:           'Avg Credits Reduced',
-          data:            avgGained,
-          backgroundColor: avgGained.map(v => v === null ? _hexToRgba(cc.p.textMuted, 0.2) : v > 0 ? _hexToRgba(cc.p.low, 0.6) : _hexToRgba(cc.p.high, 0.6)),
-          borderColor:     avgGained.map(v => v === null ? _hexToRgba(cc.p.textMuted, 0.4) : v > 0 ? _hexToRgba(cc.p.low, 0.9) : _hexToRgba(cc.p.high, 0.9)),
-          borderWidth:     1,
+          label: 'Avg Credits Reduced',
+          data: avgGained,
+          backgroundColor: avgColors.map(c => c.background),
+          borderColor: avgColors.map(c => c.border),
+          borderWidth: 1
         },
         {
-          label:           'Total Credits Reduced',
-          data:            _hsMonthlyCohort.map(m => isNum(m.totalGained) ? m.totalGained : null),
-          type:            'line',
-          borderColor:     _hexToRgba(cc.p.accent, 0.8),
+          label: 'Total Credits Reduced',
+          data: _hsMonthlyCohort.map(m =>
+            isNum(m.totalGained) ? m.totalGained : null
+          ),
+          type: 'line',
+          borderColor: _hexToRgba(cc.p.accent, 0.8),
           backgroundColor: 'transparent',
-          tension:         0.3,
-          pointRadius:     4,
-          yAxisID:         'yTotal',
-        },
+          tension: 0.3,
+          pointRadius: 4,
+          yAxisID: 'yTotal'
+        }
       ]
     },
     options: {
-      responsive:          true,
+      responsive: true,
       maintainAspectRatio: false,
-      interaction:         { mode: 'index', intersect: false },
+      interaction: {
+        mode: 'index',
+        intersect: false
+      },
       plugins: {
-        legend: { labels: { color: cc.legend, font: { size: 11 } } },
+        legend: {
+          labels: {
+            color: cc.legend,
+            font: { size: 11 }
+          }
+        }
       },
       scales: {
         x: {
-          ticks: { color: cc.axis, font: { size: 11 } },
-          grid:  { color: cc.grid },
+          ticks: {
+            color: cc.axis,
+            font: { size: 11 }
+          },
+          grid: {
+            color: cc.grid
+          }
         },
         y: {
-          type:     'linear',
+          type: 'linear',
           position: 'left',
-          ticks:    { color: _hexToRgba(cc.p.low, 0.85), font: { size: 10 } },
-          grid:     { color: cc.grid },
-          title:    { display: true, text: 'Avg Credits Reduced', color: _hexToRgba(cc.p.low, 0.75), font: { size: 10 } },
+          ticks: {
+            color: _hexToRgba(cc.p.low, 0.85),
+            font: { size: 10 }
+          },
+          grid: {
+            color: cc.grid
+          },
+          title: {
+            display: true,
+            text: 'Avg Credits Reduced',
+            color: _hexToRgba(cc.p.low, 0.75),
+            font: { size: 10 }
+          }
         },
         yTotal: {
-          type:     'linear',
+          type: 'linear',
           position: 'right',
-          ticks:    { color: _hexToRgba(cc.p.accent, 0.85), font: { size: 10 } },
-          grid:     { drawOnChartArea: false },
-          title:    { display: true, text: 'Total Credits', color: _hexToRgba(cc.p.accent, 0.75), font: { size: 10 } },
-        },
+          ticks: {
+            color: _hexToRgba(cc.p.accent, 0.85),
+            font: { size: 10 }
+          },
+          grid: {
+            drawOnChartArea: false
+          },
+          title: {
+            display: true,
+            text: 'Total Credits',
+            color: _hexToRgba(cc.p.accent, 0.75),
+            font: { size: 10 }
+          }
+        }
       }
     }
   });
 
-  // Table — simplified to just the essentials
-  document.getElementById('hsProgressTableBody').innerHTML = _hsMonthlyCohort.map(m => {
-    const avg   = isNum(m.avgGained) ? m.avgGained : null;
-    const color = avg === null ? 'var(--text-muted)'
-                : avg > 0     ? 'var(--low)'
-                : avg === 0   ? 'var(--medium)'
-                : 'var(--high)';
+  tableBody.innerHTML = _hsMonthlyCohort.map(m => {
+    const avg = isNum(m.avgGained) ? m.avgGained : null;
     const total = isNum(m.totalGained) ? m.totalGained : null;
-    return `<tr style="border-bottom:1px solid var(--border);">
-      <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
-      <td style="padding:8px 10px;text-align:center;">${m.completedCount ?? m.studentCount}</td>
-      <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">${avg !== null ? avg.toFixed(1) : '—'}</td>
-      <td style="padding:8px 10px;text-align:center;font-weight:700;color:var(--low);">${total !== null ? total : '—'}</td>
-    </tr>`;
+
+    const color =
+      avg === null
+        ? 'var(--text-muted)'
+        : avg > 0
+          ? 'var(--low)'
+          : avg === 0
+            ? 'var(--medium)'
+            : 'var(--high)';
+
+    return `
+      <tr style="border-bottom:1px solid var(--border);">
+        <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
+        <td style="padding:8px 10px;text-align:center;">${m.completedCount ?? m.studentCount}</td>
+        <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">
+          ${avg !== null ? avg.toFixed(1) : '—'}
+        </td>
+        <td style="padding:8px 10px;text-align:center;font-weight:700;color:var(--low);">
+          ${total !== null ? total : '—'}
+        </td>
+      </tr>
+    `;
   }).join('');
 }
 
