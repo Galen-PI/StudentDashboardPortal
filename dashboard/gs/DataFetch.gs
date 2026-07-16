@@ -1,7 +1,6 @@
-// ============================================================
+// ==============
 // DataFetch.gs — Runtime spreadsheet I/O
-// Reads and writes live data: WIR, overrides, notes, bulk ops, progress snapshots, schedule upload, and email digest. All pure logic lives in Helpers.gs, Parsers.gs, Profiles.gs.
-// ============================================================
+
 
 // ── Authentication ────────────────────────────────────────────
 function getRoleByEmployeeId(employeeId) {
@@ -85,143 +84,148 @@ function getCounselorList() {
   }
 }
 
-// ── WIR Data ──────────────────────────────────────────────────
-// Reads the most recent Weekly Intervention Report sheet from SS_ACADEMIC
+// ============================================================
+// ── WIR Data ─────────────────────────────────────────────────
+// ============================================================
 function getWIRData() {
+  return getWIRDataFromVault_();
+}
+
+function getWIRDataFromVault_() {
   try {
-    const ss       = SpreadsheetApp.openById(SS_ACADEMIC);
-    const wirSheet = ss.getSheets().find(s => s.getName().startsWith('Weekly Intervention Reports'));
-    if (!wirSheet) { Logger.log('getWIRData: no WIR sheet found'); return null; }
+    const combined = getAllStudentInterventions(); // [{ report, caseData }]
+    if (!combined.length) return { weekLabel: null, sheetName: null, fetchedAt: _todayStr(), rows: [] };
 
-    const sheetName = wirSheet.getName();
-    const weekLabel = sheetName.includes(':') ? sheetName.split(':')[1].trim() : sheetName;
-    const lastRow   = wirSheet.getLastRow();
-    if (lastRow < 2) return { weekLabel, sheetName, fetchedAt: _todayStr(), rows: [] };
-
-    const rows = [];
-    wirSheet.getRange(2, 1, lastRow - 1, 27).getDisplayValues().forEach(row => {
-      const student = String(row[0] || '').trim();
-      if (!student || student.toLowerCase() === 'student') return;
-      rows.push({
-        student,
-        status:            String(row[1]  || '').trim(),
-        priority:          String(row[2]  || '').trim(),
-        percent:           String(row[3]  || '').trim(),
-        weeklyTarget:      String(row[4]  || '').trim(),
-        thisWeekHours:     row[5] instanceof Date
-          ? Utilities.formatDate(row[5], Session.getScriptTimeZone(), 'HH:mm:ss')
-          : String(row[5] || '').trim(),
-        lastActiveHours:   String(row[6]  || '').trim(),
-        lastActiveLabel:   String(row[7]  || '').trim(),
-        credits:           String(row[8]  || '').trim(),
-        courseDaysLeft:    row[9] !== '' ? row[9] : null,
-        issueTags:         String(row[10] || '').trim(),
-        detectedPatterns:  String(row[11] || '').trim(),
-        adminPriority:     String(row[12] || '').trim(),
-        urgency:           String(row[13] || '').trim(),
-        instructorAction:  String(row[14] || '').trim(),
-        coordinatorAction: String(row[15] || '').trim(),
-        reason:            String(row[16] || '').trim(),
-        streak:            String(row[17] || '').trim(),
-        trajectory:        String(row[18] || '').trim(),
-        gradGap:           String(row[19] || '').trim(),
-        comments:          String(row[20] || '').trim(),
-        caseOwner:         String(row[21] || '').trim(),
-        caseStatus:        String(row[22] || '').trim(),
-        focus:             String(row[23] || '').trim(),
-        followUp:          row[24] instanceof Date ? _toDateStr(row[24]) : String(row[24] || '').trim(),
-        caseNotes:         String(row[25] || '').trim(),
-        lastUpdated:       row[26] instanceof Date ? _toDateStr(row[26]) : String(row[26] || '').trim(),
+    let weekLabel = '';
+    const rows = combined
+      .filter(c => c.report)
+      .map(({ report, caseData }) => {
+        if (String(report.weekLabel || '') > weekLabel) weekLabel = String(report.weekLabel || '');
+        return {
+          student:           report.studentId,
+          status:            String(report.status || '').trim(),
+          priority:          String(report.priority || '').trim(),
+          percent:           report.percent !== undefined && report.percent !== '' ? String(report.percent).trim() : '',
+          weeklyTarget:      String(report.weeklyTarget || '').trim(),
+          thisWeekHours:     String(report.thisWeekHours || '').trim(),
+          lastActiveHours:   String(report.lastActiveHours || '').trim(),
+          lastActiveLabel:   String(report.lastActiveLabel || '').trim(),
+          credits:           String(report.creditsThisWeek || '').trim(),
+          courseDaysLeft:    report.courseDaysLeft !== undefined && report.courseDaysLeft !== '' ? report.courseDaysLeft : null,
+          issueTags:         String(report.issueTags || '').trim(),
+          detectedPatterns:  String(report.detectedPatterns || '').trim(),
+          adminPriority:     String(report.adminPriority || '').trim(),
+          urgency:           String(report.urgency || '').trim(),
+          instructorAction:  String(report.instructorAction || '').trim(),
+          coordinatorAction: String(report.coordinatorAction || '').trim(),
+          reason:            String(report.reason || '').trim(),
+          streak:            String(report.streak || '').trim(),
+          trajectory:        String(report.trajectory || '').trim(),
+          gradGap:           String(report.gradGap || '').trim(),
+          comments:          caseData ? String(caseData.comments || '').trim() : '',
+          caseOwner:         caseData ? String(caseData.caseOwner || '').trim() : '',
+          caseStatus:        caseData ? String(caseData.caseStatus || '').trim() : '',
+          focus:             caseData ? String(caseData.focus || '').trim() : '',
+          followUp:          caseData ? (_toDateStr(caseData.followUpDate) || '') : '',
+          caseNotes:         caseData ? String(caseData.caseNotes || '').trim() : '',
+          lastUpdated:       caseData ? (_toDateStr(caseData.lastUpdated) || '') : '',
+        };
       });
-    });
-    Logger.log('WIR: ' + rows.length + ' rows from "' + sheetName + '"');
-    return { weekLabel, sheetName, fetchedAt: _todayStr(), rows };
+
+    Logger.log('WIR (vault): ' + rows.length + ' rows, week ' + weekLabel);
+    return { weekLabel, sheetName: null, fetchedAt: _todayStr(), rows };
   } catch(e) {
-    Logger.log('getWIRData error: ' + e.message);
+    Logger.log('getWIRDataFromVault_ error: ' + e.message);
     return null;
   }
 }
 
-// Appends current WIR rows to the WIR Log sheet, replacing any existing rows for the same week
+// appendToWIRLog is a no-op under Vault — WIR Reports IS the log
+// (append-only, idempotent, written directly by runWeeklyWIRGeneration
+// in WIR Engine.gs via appendWIRReportRows). Kept as a no-op rather
+// than removed so call sites don't each need their own flag check.
 function appendToWIRLog(wirData, hubSS) {
-  if (!wirData || !wirData.rows || !wirData.rows.length) return;
-  let logSheet = hubSS.getSheetByName(SHEET_WIR_LOG);
-  if (!logSheet) {
-    logSheet = hubSS.insertSheet(SHEET_WIR_LOG);
-    logSheet.appendRow([
-      'Week Label','Fetched Date','Student','Status','Priority','Progress %',
-      'Weekly Target','This Week Hours','Last Active Hours','Last Active Label',
-      'Credits This Week','Course Days Left','Issue Tags','Detected Patterns',
-      'Admin Priority','Urgency','Instructor Action','Coordinator Action','Reason',
-      'Comments','Case Owner','Case Status','Focus','Follow Up','Case Notes','Last Updated',
-    ]);
-    logSheet.setFrozenRows(1);
-    logSheet.getRange(1, 1, 1, 26).setFontWeight('bold').setBackground('#1f2937').setFontColor('#ffffff');
-  }
-
-  const weekLabel = wirData.weekLabel;
-  const fetchedAt = wirData.fetchedAt || _todayStr();
-  const lastRow   = logSheet.getLastRow();
-
-  // Remove existing rows for this week before appending fresh data
-  if (lastRow > 1) {
-    const labels    = logSheet.getRange(2, 1, lastRow - 1, 1).getValues();
-    const matchRows = labels.map((r, i) => String(r[0]).trim() === weekLabel ? i + 2 : null).filter(Boolean);
-    matchRows.sort((a, b) => b - a);
-    if (matchRows.length) {
-      let i = 0;
-      while (i < matchRows.length) {
-        let j = i;
-        while (j + 1 < matchRows.length && matchRows[j] - matchRows[j + 1] === 1) j++;
-        logSheet.deleteRows(matchRows[j], j - i + 1);
-        i = j + 1;
-      }
-    }
-  }
-
-  const newRows = wirData.rows.map(r => [
-    weekLabel, fetchedAt, r.student, r.status, r.priority, r.percent,
-    r.weeklyTarget, r.thisWeekHours, r.lastActiveHours, r.lastActiveLabel,
-    r.credits, r.courseDaysLeft !== null ? r.courseDaysLeft : '',
-    r.issueTags, r.detectedPatterns, r.adminPriority, r.urgency,
-    r.instructorAction, r.coordinatorAction, r.reason,
-    r.comments, r.caseOwner, r.caseStatus, r.focus,
-    r.followUp, r.caseNotes, r.lastUpdated,
-  ]);
-  if (newRows.length) {
-    logSheet.getRange(logSheet.getLastRow() + 1, 1, newRows.length, newRows[0].length).setValues(newRows);
-  }
-  Logger.log('WIR Log: wrote ' + newRows.length + ' rows for "' + weekLabel + '"');
+  return;
 }
 
-// ── Overrides ─────────────────────────────────────────────────
+// ============================================================
+// ── Overrides ────────────────────────────────────────────────
+// ============================================================
 function setOverride(studentId, type, value, note, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
+  return setOverrideVault_(studentId, type, value, note, setBy);
+}
+
+function revertChange(studentId, type, rowIndex, role) {
+  _requirePermission(role || ROLES.ADMIN, 'revert_changes');
+  return revertChangeVault_(studentId, type, rowIndex);
+}
+
+function getRecentChanges() {
+  return getRecentChangesVault_();
+}
+
+// ── Overrides — VAULT PATH ──────────────────────────────────────
+// Same six-column shape and row-per-change model as the legacy
+// Hub Overrides sheet — Overrides And Notes is a direct port, not
+// a redesign. There's no rowId column here (unlike Transcript
+// Rows), so row position is still how a specific row gets located
+// for revert/delete, same rowIndex contract as before, just against
+// VAULT_SHEET_OVERRIDES_NOTES instead of the Hub sheet.
+
+function _ensureVaultOverridesSheet_() {
+  const ss = getVaultSpreadsheet_();
+  let sheet = ss.getSheetByName(VAULT_SHEET_OVERRIDES_NOTES);
+  if (!sheet) {
+    sheet = ss.insertSheet(VAULT_SHEET_OVERRIDES_NOTES);
+    sheet.appendRow(VAULT_OVERRIDES_NOTES_HEADERS);
+    sheet.setFrozenRows(1);
+  }
+  return sheet;
+}
+
+function _deleteMatchingVaultRows_(sheet, studentId, type) {
+  const lastRow = sheet.getLastRow();
+  if (lastRow < VAULT_DATA_START_ROW) return;
+  const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues();
+  const toDelete = data
+    .map((row, i) => (String(row[0]).trim() === String(studentId).trim() && String(row[1]).trim() === type) ? i + VAULT_DATA_START_ROW : null)
+    .filter(Boolean);
+  toDelete.sort((a, b) => b - a).forEach(rowIdx => sheet.deleteRow(rowIdx));
+}
+
+function _touchLastModifiedVault_(studentId, setBy) {
+  const sheet = _ensureVaultOverridesSheet_();
+  _deleteMatchingVaultRows_(sheet, studentId, 'last_modified');
+  sheet.appendRow([studentId, 'last_modified', new Date().toISOString(), '', setBy || '', new Date()]);
+}
+
+function _setOverrideRawVault_(studentId, type, value, note, setBy) {
+  const sheet = _ensureVaultOverridesSheet_();
+  _deleteMatchingVaultRows_(sheet, studentId, type);
+  if (value !== '' && value !== null && value !== undefined) {
+    sheet.appendRow([studentId, type, value, note || '', setBy || '', new Date()]);
+  }
+}
+
+function setOverrideVault_(studentId, type, value, note, setBy) {
   return _withLock(() => {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = _ensureOverridesSheet(hubSS);
-    _deleteMatchingRows(sheet, studentId, type);
-    if (value !== '' && value !== null && value !== undefined) {
-      sheet.appendRow([studentId, type, value, note || '', setBy || '', new Date()]);
-    }
-    if (type !== 'last_modified') _touchLastModified(hubSS, sheet, studentId, setBy);
+    _setOverrideRawVault_(studentId, type, value, note, setBy);
+    if (type !== 'last_modified') _touchLastModifiedVault_(studentId, setBy);
     _clearDashboardCache();
     return { success: true };
   });
 }
 
-function revertChange(studentId, type, rowIndex, role) {
-  _requirePermission(role || ROLES.ADMIN, 'revert_changes');
+function revertChangeVault_(studentId, type, rowIndex) {
   return _withLock(() => {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-    if (!sheet) throw new Error('Overrides sheet not found.');
+    const sheet = _ensureVaultOverridesSheet_();
     const lastRow = sheet.getLastRow();
-    if (rowIndex < OVERRIDES_START_ROW || rowIndex > lastRow) {
+    if (rowIndex < VAULT_DATA_START_ROW || rowIndex > lastRow) {
       throw new Error('Row no longer exists — it may have already been reverted.');
     }
     const check = sheet.getRange(rowIndex, 1, 1, 2).getValues()[0];
-    if (String(check[0]).trim() !== studentId || String(check[1]).trim() !== type) {
+    if (String(check[0]).trim() !== String(studentId).trim() || String(check[1]).trim() !== type) {
       throw new Error('Row has changed since the history was loaded — please refresh.');
     }
     sheet.deleteRow(rowIndex);
@@ -230,16 +234,14 @@ function revertChange(studentId, type, rowIndex, role) {
   });
 }
 
-function getRecentChanges() {
+function getRecentChangesVault_() {
   try {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-    if (!sheet) return [];
+    const sheet = _ensureVaultOverridesSheet_();
     const lastRow = sheet.getLastRow();
-    if (lastRow < OVERRIDES_START_ROW) return [];
+    if (lastRow < VAULT_DATA_START_ROW) return [];
 
     const SKIP_TYPES = new Set(['progress_snapshot', 'last_modified', 'merged_into']);
-    const values  = sheet.getRange(OVERRIDES_START_ROW, 1, lastRow - OVERRIDES_START_ROW + 1, 6).getValues();
+    const values  = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 6).getValues();
     const changes = [];
 
     for (let i = values.length - 1; i >= 0; i--) {
@@ -255,28 +257,99 @@ function getRecentChanges() {
         note:     String(row[3] || '').trim(),
         setBy:    String(row[4] || '').trim(),
         date:     date instanceof Date ? date.toISOString() : String(date),
-        rowIndex: i + OVERRIDES_START_ROW,
+        rowIndex: i + VAULT_DATA_START_ROW,
       });
       if (changes.length >= 10) break;
     }
     return changes;
   } catch(e) {
-    Logger.log('getRecentChanges error: ' + e.message);
+    Logger.log('getRecentChangesVault_ error: ' + e.message);
     return [];
   }
 }
+// ============================================================
+// ── Archive / Restore ─────────────────────────────────────────
+// ============================================================
+// Active must be a direct Name Mapping edit — buildStudentProfilesFromVault
+// filters inactive students out before overrides are ever applied, so an
+// override here would be invisible. This writes straight to the sheet,
+// then logs an audit entry in Overrides And Notes so it shows in history
+// (the log entry is just a record — Name Mapping's active column is the
+// actual source of truth; reverting the log entry does NOT restore the
+// student — use restoreStudent() / setStudentActive(id, true, ...) for that).
+function setStudentActive(studentId, isActive, employeeId, role) {
+  _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
+  studentId = String(studentId || '').trim();
+  if (!studentId) throw new Error('Student ID is required.');
 
-// ── Notes ─────────────────────────────────────────────────────
+  return _withLock(() => {
+    const ss    = getVaultSpreadsheet_();
+    const sheet = ss.getSheetByName(VAULT_SHEET_NAME_MAPPING);
+    const headers = VAULT_NAME_MAPPING_HEADERS;
+    const idCol     = headers.indexOf('studentId');
+    const activeCol = headers.indexOf('active');
+
+    const lastRow = sheet.getLastRow();
+    if (lastRow < VAULT_DATA_START_ROW) throw new Error('Name Mapping is empty.');
+    const ids = sheet.getRange(VAULT_DATA_START_ROW, idCol + 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
+
+    let rowIndex = -1;
+    for (let i = 0; i < ids.length; i++) {
+      if (String(ids[i][0]).trim() === studentId) { rowIndex = i + VAULT_DATA_START_ROW; break; }
+    }
+    if (rowIndex === -1) throw new Error('Student not found in Name Mapping: ' + studentId);
+
+    sheet.getRange(rowIndex, activeCol + 1).setValue(isActive);
+
+    const notesSheet = _ensureVaultOverridesSheet_();
+    notesSheet.appendRow([studentId, isActive ? 'restored' : 'archived', '', '', employeeId || 'staff', new Date()]);
+
+    _clearDashboardCache();
+    return { success: true, studentId, active: isActive };
+  });
+}
+function _setRosterLastUpdated_(isoString) {
+  PropertiesService.getScriptProperties().setProperty('RosterLastUpdated', isoString);
+}
+function _getRosterLastUpdated_() {
+  return PropertiesService.getScriptProperties().getProperty('RosterLastUpdated') || null;
+}
+// Restore list — reads Name Mapping directly since inactive students
+// never make it into buildStudentProfilesFromVault's output.
+function getArchivedStudents() {
+  const ss    = getVaultSpreadsheet_();
+  const sheet = ss.getSheetByName(VAULT_SHEET_NAME_MAPPING);
+  const headers = VAULT_NAME_MAPPING_HEADERS;
+  const idCol     = headers.indexOf('studentId');
+  const nameCol   = headers.indexOf('masterName');
+  const activeCol = headers.indexOf('active');
+
+  const lastRow = sheet.getLastRow();
+  if (lastRow < VAULT_DATA_START_ROW) return { success: true, archived: [] };
+
+  const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, headers.length).getValues();
+  const archived = [];
+  data.forEach(row => {
+    const isActive = row[activeCol] === true || String(row[activeCol]).trim().toUpperCase() === 'TRUE';
+    if (!isActive) {
+      archived.push({ studentId: String(row[idCol]).trim(), displayName: String(row[nameCol]).trim() || String(row[idCol]).trim() });
+    }
+  });
+  return { success: true, archived };
+}
+// ============================================================
+// ── Notes ────────────────────────────────────────────────────
+// ============================================================
 function addStudentNote(studentId, noteText, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'add_note');
   studentId = String(studentId || '').trim();
   noteText  = String(noteText  || '').trim();
   if (!studentId || !noteText) throw new Error('Student ID and note text are required.');
+
   return _withLock(() => {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = _ensureOverridesSheet(hubSS);
+    const sheet = _ensureVaultOverridesSheet_();
     sheet.appendRow([studentId, 'note', noteText, '', setBy || 'staff', new Date()]);
-    _touchLastModified(hubSS, sheet, studentId, setBy);
+    _touchLastModifiedVault_(studentId, setBy);
     _clearDashboardCache();
     return { success: true };
   });
@@ -287,17 +360,16 @@ function deleteStudentNote(studentId, noteTimestamp, role) {
   studentId     = String(studentId     || '').trim();
   noteTimestamp = String(noteTimestamp || '').trim();
   if (!studentId || !noteTimestamp) throw new Error('Student ID and note timestamp are required.');
+
   return _withLock(() => {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-    if (!sheet) return { success: true };
+    const sheet = _ensureVaultOverridesSheet_();
     const lastRow = sheet.getLastRow();
-    if (lastRow < OVERRIDES_START_ROW) return { success: true };
-    const data = sheet.getRange(OVERRIDES_START_ROW, 1, lastRow - OVERRIDES_START_ROW + 1, 6).getValues();
+    if (lastRow < VAULT_DATA_START_ROW) return { success: true };
+    const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 6).getValues();
     for (let i = data.length - 1; i >= 0; i--) {
       if (String(data[i][0] || '').trim() === studentId && String(data[i][1] || '').trim() === 'note') {
         const rowDate = data[i][5] instanceof Date ? data[i][5].toISOString() : String(data[i][5]);
-        if (rowDate === noteTimestamp) { sheet.deleteRow(i + OVERRIDES_START_ROW); break; }
+        if (rowDate === noteTimestamp) { sheet.deleteRow(i + VAULT_DATA_START_ROW); break; }
       }
     }
     _clearDashboardCache();
@@ -305,15 +377,17 @@ function deleteStudentNote(studentId, noteTimestamp, role) {
   });
 }
 
-// ── Bulk operations ───────────────────────────────────────────
+// ============================================================
+// ── Bulk operations ──────────────────────────────────────────
+// ============================================================
 function bulkAddNote(studentIds, noteText, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'add_note');
   studentIds = (studentIds || []).map(id => String(id).trim()).filter(Boolean);
   noteText   = String(noteText || '').trim();
   if (!studentIds.length || !noteText) throw new Error('Student IDs and note text are required.');
+
   return _withLock(() => {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = _ensureOverridesSheet(hubSS);
+    const sheet = _ensureVaultOverridesSheet_();
     const now   = new Date();
     const noteRows  = studentIds.map(id => [id, 'note',          noteText,             '', setBy || 'staff', now]);
     const stampRows = studentIds.map(id => [id, 'last_modified', now.toISOString(), '', setBy || '',       now]);
@@ -331,28 +405,26 @@ function bulkSetStatus(studentIds, academicStatus, tradeStatus, setBy, role) {
   studentIds = (studentIds || []).map(id => String(id).trim()).filter(Boolean);
   if (!studentIds.length) throw new Error('No student IDs provided.');
   if (!academicStatus && !tradeStatus) throw new Error('At least one status must be provided.');
+
   return _withLock(() => {
-    const hubSS   = SpreadsheetApp.openById(SS_HUB);
-    const sheet   = _ensureOverridesSheet(hubSS);
+    const sheet   = _ensureVaultOverridesSheet_();
     const now     = new Date();
     const idSet   = new Set(studentIds);
     const lastRow = sheet.getLastRow();
 
-    // Remove existing status rows for these students
-    const existing = lastRow >= OVERRIDES_START_ROW
-      ? sheet.getRange(OVERRIDES_START_ROW, 1, lastRow - OVERRIDES_START_ROW + 1, 2).getValues()
+    const existing = lastRow >= VAULT_DATA_START_ROW
+      ? sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues()
       : [];
     const toDelete = [];
     existing.forEach((row, i) => {
       const rowId   = String(row[0] || '').trim();
       const rowType = String(row[1] || '').trim();
       if (!idSet.has(rowId)) return;
-      if (academicStatus && rowType === 'academic_status') toDelete.push(i + OVERRIDES_START_ROW);
-      if (tradeStatus    && rowType === 'trade_status')    toDelete.push(i + OVERRIDES_START_ROW);
+      if (academicStatus && rowType === 'academic_status') toDelete.push(i + VAULT_DATA_START_ROW);
+      if (tradeStatus    && rowType === 'trade_status')    toDelete.push(i + VAULT_DATA_START_ROW);
     });
     toDelete.sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
 
-    // Write new status rows + last_modified stamps
     const newRows   = [];
     const stampRows = studentIds.map(id => [id, 'last_modified', now.toISOString(), '', setBy || '', now]);
     studentIds.forEach(id => {
@@ -368,7 +440,9 @@ function bulkSetStatus(studentIds, academicStatus, tradeStatus, setBy, role) {
   });
 }
 
-// ── Merge students ────────────────────────────────────────────
+// ============================================================
+// ── Merge students ───────────────────────────────────────────
+// ============================================================
 function mergeStudents(sourceId, targetId, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'merge');
   sourceId = String(sourceId || '').trim();
@@ -377,68 +451,69 @@ function mergeStudents(sourceId, targetId, setBy, role) {
   if (sourceId === targetId) throw new Error('Cannot merge a student into themselves.');
 
   return _withLock(() => {
-    const hubSS    = SpreadsheetApp.openById(SS_HUB);
-    const mapSheet = hubSS.getSheetByName(SHEET_MAPPING);
-    if (!mapSheet) throw new Error('Sheet not found: ' + SHEET_MAPPING);
+    const mapSheet = getVaultSheet_(VAULT_SHEET_NAME_MAPPING);
 
     // Re-point all mapping rows from source to target
     const lastRow  = mapSheet.getLastRow();
     let repointed  = 0;
-    if (lastRow >= 2) {
-      const ids = mapSheet.getRange(2, 1, lastRow - 1, 1).getValues();
+    if (lastRow >= VAULT_DATA_START_ROW) {
+      const ids = mapSheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
       for (let i = 0; i < ids.length; i++) {
         if (String(ids[i][0] || '').trim() === sourceId) {
-          mapSheet.getRange(i + 2, 1).setValue(targetId);
+          mapSheet.getRange(i + VAULT_DATA_START_ROW, 1).setValue(targetId);
           repointed++;
         }
       }
     }
 
     // Carry non-duplicate overrides from source to target
-    const ovSheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-    let carried   = 0;
-    if (ovSheet) {
-      const ovLastRow = ovSheet.getLastRow();
-      if (ovLastRow >= OVERRIDES_START_ROW) {
-        const ovData       = ovSheet.getRange(OVERRIDES_START_ROW, 1, ovLastRow - OVERRIDES_START_ROW + 1, 6).getValues();
-        const targetTypes  = new Set(ovData.filter(r => String(r[0]).trim() === targetId).map(r => String(r[1]).trim()));
-        const toAppend     = [];
-        const toDeleteRows = [];
-        ovData.forEach((row, i) => {
-          const rowId   = String(row[0] || '').trim();
-          const rowType = String(row[1] || '').trim();
-          if (rowId !== sourceId) return;
-          if (rowType === 'merged_into') { toDeleteRows.push(i + OVERRIDES_START_ROW); return; }
-          if (!targetTypes.has(rowType)) { toAppend.push([targetId, rowType, row[2], row[3], row[4], row[5]]); carried++; }
-          toDeleteRows.push(i + OVERRIDES_START_ROW);
-        });
-        toDeleteRows.sort((a, b) => b - a).forEach(r => ovSheet.deleteRow(r));
-        if (toAppend.length) {
-          ovSheet.getRange(ovSheet.getLastRow() + 1, 1, toAppend.length, 6).setValues(toAppend);
-        }
+    const ovSheet   = _ensureVaultOverridesSheet_();
+    const ovLastRow = ovSheet.getLastRow();
+    let carried     = 0;
+
+    if (ovLastRow >= VAULT_DATA_START_ROW) {
+      const ovData       = ovSheet.getRange(VAULT_DATA_START_ROW, 1, ovLastRow - VAULT_DATA_START_ROW + 1, 6).getValues();
+      const targetTypes  = new Set(ovData.filter(r => String(r[0]).trim() === targetId).map(r => String(r[1]).trim()));
+      const toAppend     = [];
+      const toDeleteRows = [];
+      ovData.forEach((row, i) => {
+        const rowId   = String(row[0] || '').trim();
+        const rowType = String(row[1] || '').trim();
+        if (rowId !== sourceId) return;
+        if (rowType === 'merged_into') { toDeleteRows.push(i + VAULT_DATA_START_ROW); return; }
+        if (!targetTypes.has(rowType)) { toAppend.push([targetId, rowType, row[2], row[3], row[4], row[5]]); carried++; }
+        toDeleteRows.push(i + VAULT_DATA_START_ROW);
+      });
+      toDeleteRows.sort((a, b) => b - a).forEach(r => ovSheet.deleteRow(r));
+      if (toAppend.length) {
+        ovSheet.getRange(ovSheet.getLastRow() + 1, 1, toAppend.length, 6).setValues(toAppend);
       }
     }
 
-    _setOverrideRaw(hubSS, sourceId, 'merged_into', targetId, 'Merged via dashboard', setBy || 'staff');
-    const ovSheetForStamp = hubSS.getSheetByName(SHEET_OVERRIDES);
-    if (ovSheetForStamp) _touchLastModified(hubSS, ovSheetForStamp, targetId, setBy || 'staff');
+    _setOverrideRawVault_(sourceId, 'merged_into', targetId, 'Merged via dashboard', setBy || 'staff');
+    _touchLastModifiedVault_(targetId, setBy || 'staff');
     _clearDashboardCache();
     return { success: true, repointedMappingRows: repointed, carriedOverrides: carried };
   });
 }
 
-// ── Progress snapshots ────────────────────────────────────────
+// ============================================================
+// ── Progress snapshots ───────────────────────────────────────
+// ============================================================
 // Writes weekly risk/progress snapshots used for stale detection and trend arrows
 function writeProgressSnapshots(profiles, hubSS) {
+  return writeProgressSnapshotsVault_(profiles);
+}
+
+function writeProgressSnapshotsVault_(profiles) {
   if (!profiles || !profiles.length) return;
-  const sheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-  if (!sheet) return;
+  const sheet = _ensureVaultOverridesSheet_();
 
   const todayStr = _todayStr();
   const lastRow  = sheet.getLastRow();
-  if (lastRow < OVERRIDES_START_ROW) return;
+  if (lastRow < VAULT_DATA_START_ROW) return;
 
-  const data    = sheet.getRange(OVERRIDES_START_ROW, 1, lastRow - OVERRIDES_START_ROW + 1, 6).getValues();
+  const data    = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 6).getValues();
   const cutoff  = new Date();
   cutoff.setDate(cutoff.getDate() - SNAPSHOT_PRUNE_DAYS);
 
@@ -450,15 +525,14 @@ function writeProgressSnapshots(profiles, hubSS) {
     const studentId = String(row[0]).trim();
     const d         = row[5] instanceof Date ? row[5] : new Date(row[5]);
     if (isNaN(d.getTime()) || d < cutoff) {
-      rowsToDelete.push(i + OVERRIDES_START_ROW);
+      rowsToDelete.push(i + VAULT_DATA_START_ROW);
     } else {
       if (!retainedSnaps[studentId] || d > retainedSnaps[studentId].date) {
-        retainedSnaps[studentId] = { rowIndex: i + OVERRIDES_START_ROW, date: d };
+        retainedSnaps[studentId] = { rowIndex: i + VAULT_DATA_START_ROW, date: d };
       }
     }
   });
 
-  // Batch delete stale rows bottom-up
   if (rowsToDelete.length) {
     const sorted = rowsToDelete.sort((a, b) => b - a);
     let i = 0;
@@ -470,7 +544,6 @@ function writeProgressSnapshots(profiles, hubSS) {
     }
   }
 
-  // Write snapshots only for students that need a fresh one
   const newRows = [];
   profiles.forEach(p => {
     const acPct    = p.academic ? p.academic.percent : null;
@@ -485,15 +558,70 @@ function writeProgressSnapshots(profiles, hubSS) {
   });
 
   if (!newRows.length) {
-    Logger.log('Snapshots: nothing to write — all up to date');
+    Logger.log('Snapshots (vault): nothing to write — all up to date');
     return;
   }
   sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
-  Logger.log('Snapshots: wrote ' + newRows.length + ' new rows');
+  Logger.log('Snapshots (vault): wrote ' + newRows.length + ' new rows');
 }
 
-// ── Schedule ──────────────────────────────────────────────────
+// ============================================================
+// ── Schedule ─────────────────────────────────────────────────
+// ============================================================
+
+// Shared derivation logic so today/expected-hours calculations
+// can never drift — same rationale as shared helpers in BulkPacing.gs.
+function _computeScheduleDerived_(weekLabel, schedule) {
+  const VALID_PERIODS  = SCHEDULE_VALID_PERIODS;
+  const DAY_LABELS     = { M:'Monday', T:'Tuesday', W:'Wednesday', TH:'Thursday', F:'Friday' };
+  const JS_DAY_MAP     = { 1:'M', 2:'T', 3:'W', 4:'TH', 5:'F' };
+  const ACADEMIC_NAMES = SCHEDULE_ACADEMIC_NAMES;
+  const jsDay    = new Date().getDay();
+  const todayKey = JS_DAY_MAP[jsDay] || null;
+  const isWeekend = !todayKey;
+
+  let expectedWeekHours = 0;
+  Object.entries(VALID_PERIODS).forEach(([day, validPeriods]) => {
+    validPeriods.forEach(periodNum => {
+      const entry = (schedule['Period ' + periodNum] || {})[day];
+      if (!entry) return;
+      if (ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
+        expectedWeekHours++;
+      }
+    });
+  });
+
+  let todaySchedule      = null;
+  let expectedTodayHours = null;
+  if (!isWeekend && todayKey) {
+    todaySchedule      = {};
+    expectedTodayHours = 0;
+    (VALID_PERIODS[todayKey] || []).forEach(periodNum => {
+      const entry = (schedule['Period ' + periodNum] || {})[todayKey];
+      if (!entry || !entry.class) return;
+      todaySchedule['Period ' + periodNum] = entry;
+      if (ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
+        expectedTodayHours++;
+      }
+    });
+  }
+
+  return {
+    weekLabel, schedule, todaySchedule,
+    todayLabel: todayKey ? DAY_LABELS[todayKey] : null,
+    expectedWeekHours, expectedTodayHours, isWeekend,
+  };
+}
+
 function getStudentSchedule(studentId) {
+  return getStudentScheduleFromVault_(studentId);
+}
+
+// ── Schedule read — VAULT PATH ──────────────────────────────────
+// Only the 'current' slot is relevant for a live read — 'last'
+// exists purely as a rollback/comparison copy, same as BulkPacing's
+// _pacingLoadScheduleFromVault_.
+function getStudentScheduleFromVault_(studentId) {
   try {
     studentId = String(studentId || '').trim();
     if (!studentId) return { error: 'No student ID.' };
@@ -505,69 +633,25 @@ function getStudentSchedule(studentId) {
       try { return JSON.parse(cached); } catch(e) {}
     }
 
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = hubSS.getSheetByName(SHEET_SCHEDULE);
-    if (!sheet) return { weekLabel: null, schedule: null };
+    const rows = readVaultRowsForStudent_(VAULT_SHEET_WEEKLY_SCHEDULE, VAULT_SCHEDULE_HEADERS, studentId);
+    const currentRow = rows.find(r => String(r.slot || '').trim().toLowerCase() === 'current');
 
-    const values    = sheet.getDataRange().getValues();
-    if (values.length < 2) return { weekLabel: null, schedule: null };
-
-    const weekLabel = String(values[1][0] || '').trim();
-    const row       = values.slice(1).find(r => String(r[2] || '').trim() === studentId);
-
-    if (!row) {
-      const result = { weekLabel, schedule: null };
+    if (!currentRow) {
+      const result = { weekLabel: null, schedule: null };
       cache.put(cacheKey, JSON.stringify(result), CACHE_TTL);
       return result;
     }
 
+    const weekLabel = String(currentRow.weekLabel || '').trim();
     let schedule = {};
-    try { schedule = JSON.parse(String(row[3] || '{}')); } catch(e) { return { weekLabel, schedule: null }; }
+    try { schedule = JSON.parse(String(currentRow.scheduleJson || '{}')); }
+    catch(e) { return { weekLabel, schedule: null }; }
 
-    const VALID_PERIODS  = { M:[1,2,3,5,6], T:[1,2,3,5,6,7], W:[1,2,3,5,6], TH:[1,2,3,5,6,7], F:[1,2,3,5,6,7] };
-    const DAY_LABELS     = { M:'Monday', T:'Tuesday', W:'Wednesday', TH:'Thursday', F:'Friday' };
-    const JS_DAY_MAP     = { 1:'M', 2:'T', 3:'W', 4:'TH', 5:'F' };
-    const ACADEMIC_NAMES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
-
-    const jsDay    = new Date().getDay();
-    const todayKey = JS_DAY_MAP[jsDay] || null;
-    const isWeekend = !todayKey;
-
-    let expectedWeekHours = 0;
-    Object.entries(VALID_PERIODS).forEach(([day, validPeriods]) => {
-      validPeriods.forEach(periodNum => {
-        const entry = (schedule['Period ' + periodNum] || {})[day];
-        if (!entry) return;
-        if (ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
-          expectedWeekHours++;
-        }
-      });
-    });
-
-    let todaySchedule      = null;
-    let expectedTodayHours = null;
-    if (!isWeekend && todayKey) {
-      todaySchedule      = {};
-      expectedTodayHours = 0;
-      (VALID_PERIODS[todayKey] || []).forEach(periodNum => {
-        const entry = (schedule['Period ' + periodNum] || {})[todayKey];
-        if (!entry || !entry.class) return;
-        todaySchedule['Period ' + periodNum] = entry;
-        if (ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
-          expectedTodayHours++;
-        }
-      });
-    }
-
-    const result = {
-      weekLabel, schedule, todaySchedule,
-      todayLabel: todayKey ? DAY_LABELS[todayKey] : null,
-      expectedWeekHours, expectedTodayHours, isWeekend,
-    };
-    try { cache.put(cacheKey, JSON.stringify(result), isWeekend ? CACHE_TTL : 300); } catch(e) {}
+    const result = _computeScheduleDerived_(weekLabel, schedule);
+    try { cache.put(cacheKey, JSON.stringify(result), result.isWeekend ? CACHE_TTL : 300); } catch(e) {}
     return result;
   } catch(e) {
-    Logger.log('getStudentSchedule error: ' + e.message);
+    Logger.log('getStudentScheduleFromVault_ error: ' + e.message);
     return { error: 'Could not load schedule.' };
   }
 }
@@ -593,7 +677,7 @@ function saveWeeklySchedule(base64Data, role) {
 
     const allSheets = schedSS.getSheets();
     const isMaster  = allSheets.length > 5;
-    const VALID_PERIODS = { M:[1,2,3,5,6], T:[1,2,3,5,6,7], W:[1,2,3,5,6], TH:[1,2,3,5,6,7], F:[1,2,3,5,6,7] };
+    const VALID_PERIODS = SCHEDULE_VALID_PERIODS;
 
     let weekLabel = 'This Week';
     let students  = [];
@@ -693,15 +777,108 @@ function saveWeeklySchedule(base64Data, role) {
     try { DriveApp.getFileById(convertedId).setTrashed(true); } catch(e2) {}
     if (!students.length) return { error: 'No students found in the file.' };
 
-    const hubSS    = SpreadsheetApp.openById(SS_HUB);
-    let schedSheet = hubSS.getSheetByName(SHEET_SCHEDULE);
-    if (!schedSheet) schedSheet = hubSS.insertSheet(SHEET_SCHEDULE);
-    schedSheet.clearContents();
+    return _writeWeeklyScheduleToVault_(students, weekLabel, skipped);
+  } catch(e) {
+    Logger.log('saveWeeklySchedule error: ' + e.message);
+    return { error: 'Failed to save schedule: ' + e.message };
+  }
+}
 
-    const rows = [['Week', 'Student Name', 'Student ID', 'Schedule JSON']];
-    students.forEach(s => rows.push([weekLabel, s.name, s.id, JSON.stringify(s.schedule)]));
-    schedSheet.getRange(1, 1, rows.length, 4).setValues(rows);
-    schedSheet.getRange(1, 1, 1, 4).setFontWeight('bold');
+// ── Weekly Schedule write — VAULT PATH ──────────────────────────
+// Auto-registers any student appearing in a schedule upload who
+// isn't already in Name Mapping — previously only Roster Upload
+// could add a new student; a student who shows up on a schedule
+// before ever appearing on a roster export would otherwise be
+// silently dropped (their Weekly Schedule row would get written,
+// but nothing else in the app would recognize them, since Name
+// Mapping is the join key for almost everything). New rows are
+// added with active:true and blank tradeComplete/academicComplete/
+// examProgram — the same "unknown yet, fill in later" state
+// Roster Upload uses for a brand-new student. This never touches
+// or overwrites an existing Name Mapping row for a student who's
+// already there.
+function _registerNewStudentsFromSchedule_(students) {
+  const sheet = getVaultSheet_(VAULT_SHEET_NAME_MAPPING);
+  const rows  = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
+  const knownIds = new Set(rows.map(r => String(r.studentId || '').trim()));
+
+  const newRows = [];
+  const seenThisBatch = new Set();
+  students.forEach(s => {
+    const sid = String(s.id).trim();
+    if (!sid || knownIds.has(sid) || seenThisBatch.has(sid)) return;
+    seenThisBatch.add(sid);
+    newRows.push([sid, s.name || '', '', '', true, '']);
+  });
+
+  if (newRows.length) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, newRows.length, VAULT_NAME_MAPPING_HEADERS.length).setValues(newRows);
+    sheet.getRange(startRow, 1, newRows.length, 1).setNumberFormat('@');
+    Logger.log('_registerNewStudentsFromSchedule_: added ' + newRows.length + ' new student(s) to Name Mapping.');
+  }
+}
+
+function _writeWeeklyScheduleToVault_(students, weekLabel, skipped) {
+  return _withLock(() => {
+    _registerNewStudentsFromSchedule_(students);
+
+    const sheet   = getVaultSheet_(VAULT_SHEET_WEEKLY_SCHEDULE);
+    const lastRow = sheet.getLastRow();
+    const numCols = VAULT_SCHEDULE_HEADERS.length;
+
+    const existing = lastRow >= VAULT_DATA_START_ROW
+      ? sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, numCols).getValues()
+      : [];
+
+    // Index existing rows by studentId -> { current: {rowNum, values}, last: {rowNum, values} }
+    const byStudent = {};
+    existing.forEach((row, i) => {
+      const sid  = String(row[0] || '').trim();
+      const slot = String(row[2] || '').trim().toLowerCase();
+      if (!sid || (slot !== 'current' && slot !== 'last')) return;
+      if (!byStudent[sid]) byStudent[sid] = {};
+      byStudent[sid][slot] = { rowNum: VAULT_DATA_START_ROW + i, values: row };
+    });
+
+    const now = new Date().toISOString();
+    const rowsToRewrite = []; // old 'current' rows demoted to 'last', in place
+    const rowsToDelete  = []; // old 'last' rows being displaced
+    const rowsToAppend  = []; // brand-new 'current' rows for this upload
+
+    students.forEach(s => {
+      const sid   = String(s.id).trim();
+      const entry = byStudent[sid];
+      const prevCurrent = entry && entry.current;
+      const prevLast    = entry && entry.last;
+
+      if (prevLast) rowsToDelete.push(prevLast.rowNum);
+
+      if (prevCurrent) {
+        const demoted = prevCurrent.values.slice();
+        demoted[2] = 'last'; // slot column
+        rowsToRewrite.push({ rowNum: prevCurrent.rowNum, values: demoted });
+      }
+
+      rowsToAppend.push([sid, weekLabel, 'current', JSON.stringify(s.schedule), now]);
+    });
+
+    // 1. Rewrite demoted rows in place — no row-count change.
+    rowsToRewrite.forEach(({ rowNum, values }) => {
+      sheet.getRange(rowNum, 1, 1, numCols).setValues([values]);
+    });
+
+    // 2. Delete displaced 'last' rows bottom-up.
+    rowsToDelete.sort((a, b) => b - a).forEach(rowNum => sheet.deleteRow(rowNum));
+
+    // 3. Append new 'current' rows.
+    if (rowsToAppend.length) {
+      const startRow = sheet.getLastRow() + 1;
+      sheet.getRange(startRow, 1, rowsToAppend.length, numCols).setValues(rowsToAppend);
+      // Guard against Sheets auto-converting studentId/weekLabel-looking
+      // strings to numbers/dates — same fix already applied in WIR Reports.
+      sheet.getRange(startRow, 1, rowsToAppend.length, 2).setNumberFormat('@');
+    }
 
     const schedCache = CacheService.getScriptCache();
     _cacheRemoveChunked(schedCache, 'dashboardData');
@@ -709,13 +886,12 @@ function saveWeeklySchedule(base64Data, role) {
     for (let i = 0; i < cacheKeys.length; i += 100) schedCache.removeAll(cacheKeys.slice(i, i + 100));
 
     return { success: true, weekLabel, studentCount: students.length, skipped, skippedCount: skipped.length };
-  } catch(e) {
-    Logger.log('saveWeeklySchedule error: ' + e.message);
-    return { error: 'Failed to save schedule: ' + e.message };
-  }
+  });
 }
 
-// ── Email digest ──────────────────────────────────────────────
+// ============================================================
+// ── Email digest ─────────────────────────────────────────────
+// ============================================================
 function sendDigest(recipientList, role) {
   _requirePermission(role || ROLES.ADMIN, 'send_digest');
   const data = getDashboardData();
@@ -816,7 +992,7 @@ function scheduledWeeklyDigest() {
 
 function _getDigestRecipients() {
   try {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
+    const hubSS = SpreadsheetApp.openById(SS_VAULT);
     const named = hubSS.getRangeByName('DigestRecipients');
     if (named) {
       const vals = named.getValues().flat().map(v => String(v || '').trim()).filter(v => v.includes('@'));
@@ -835,38 +1011,4 @@ function removeDigestTrigger() {
   ScriptApp.getProjectTriggers().forEach(t => {
     if (t.getHandlerFunction() === 'scheduledWeeklyDigest') ScriptApp.deleteTrigger(t);
   });
-}
-
-// ── Override sheet helpers ────────────────────────────────────
-function _ensureOverridesSheet(hubSS) {
-  let sheet = hubSS.getSheetByName(SHEET_OVERRIDES);
-  if (!sheet) {
-    sheet = hubSS.insertSheet(SHEET_OVERRIDES);
-    sheet.appendRow(['Student ID', 'Override Type', 'Value', 'Note', 'Set By', 'Date']);
-    sheet.setFrozenRows(1);
-    sheet.getRange(1, 1, 1, 6).setFontWeight('bold').setBackground('#1f2937').setFontColor('#ffffff');
-  }
-  return sheet;
-}
-
-// Deletes all rows matching studentId + type, from bottom up
-function _deleteMatchingRows(sheet, studentId, type) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < OVERRIDES_START_ROW) return;
-  const data     = sheet.getRange(OVERRIDES_START_ROW, 1, lastRow - OVERRIDES_START_ROW + 1, 2).getValues();
-  const toDelete = data.map((row, i) => (row[0] === studentId && row[1] === type) ? i + OVERRIDES_START_ROW : null).filter(Boolean);
-  toDelete.sort((a, b) => b - a).forEach(rowIdx => sheet.deleteRow(rowIdx));
-}
-
-function _touchLastModified(hubSS, sheet, studentId, setBy) {
-  _deleteMatchingRows(sheet, studentId, 'last_modified');
-  sheet.appendRow([studentId, 'last_modified', new Date().toISOString(), '', setBy || '', new Date()]);
-}
-
-function _setOverrideRaw(hubSS, studentId, type, value, note, setBy) {
-  const sheet = _ensureOverridesSheet(hubSS);
-  _deleteMatchingRows(sheet, studentId, type);
-  if (value !== '' && value !== null && value !== undefined) {
-    sheet.appendRow([studentId, type, value, note || '', setBy || '', new Date()]);
-  }
 }
