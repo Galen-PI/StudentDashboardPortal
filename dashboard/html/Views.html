@@ -6,10 +6,11 @@
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Student Progress — Tulsa Job Corps</title>
   <script>
-    // Errors are logged to the console for debugging rather than surfaced
-    // in the UI — this keeps failures from disrupting what staff see.
     window.onerror = function(msg, url, line, col, error) {
       console.error('[Dashboard error]', msg, 'at line', line, error);
+      if (typeof showToast === 'function') {
+        showToast('Something went wrong — try refreshing. (' + msg + ')', 'error');
+      }
       return false;
     };
     const SERVER_ROLE        = <?!= JSON.stringify(userRole); ?>;
@@ -35,7 +36,8 @@
       <div class="sv-login-title">Student Dashboard</div>
       <div class="sv-login-subtitle">Enter your Employee ID to continue.</div>
     </div>
-
+    <div id="loginAnnouncements" class="sv-login-message"> Loading announcements...</div>
+      
     <div class="sv-login-divider"></div>
 
     <label class="sv-login-label" for="employeeIdInput">Employee ID</label>
@@ -65,125 +67,319 @@
 <!-- ── SIDEBAR OVERLAY ──────────────────────────────────── -->
 <div id="sidebarOverlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
 
-<!-- ── TOOLS SIDEBAR ────────────────────────────────────── -->
+<!-- --- Tools Sidebar --------------------------------- -->
 <aside id="toolsSidebar" class="sidebar">
+
   <div class="sidebar-header">
     <h2>Tools</h2>
     <button class="modal-close" onclick="closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+        <path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/>
+      </svg>
     </button>
   </div>
   <div class="sidebar-body">
 
-    <div class="sidebar-section-label">Data</div>
 
-    <button class="sidebar-btn" onclick="exportCSV(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Export CSV</span>
-        <span class="sb-desc">Download the current filtered view</span>
-      </div>
-    </button>
+    <!-- ================================
+         STUDENT RECORDS
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-student_records', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Student records <span class="sidebar-chevron">▾</span>
+    </div>
 
-    <button id="btnSendDigest" class="sidebar-btn" onclick="triggerDigest(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15a2.25 2.25 0 01-2.25-2.25V6.75m19.5 0A2.25 2.25 0 0019.5 4.5h-15a2.25 2.25 0 00-2.25 2.25m19.5 0v.243a2.25 2.25 0 01-1.07 1.916l-7.5 4.615a2.25 2.25 0 01-2.36 0L3.32 8.91a2.25 2.25 0 01-1.07-1.916V6.75"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Email Summary</span>
-        <span class="sb-desc">Send high-risk digest to staff</span>
-      </div>
-    </button>
-    <button class="sidebar-btn" onclick="openScheduleUpload(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25m-18 0A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75m-18 0v-7.5A2.25 2.25 0 015.25 9h13.5A2.25 2.25 0 0121 11.25v7.5"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Upload Schedule</span>
-        <span class="sb-desc">Import this week's class schedule</span>
-      </div>
-    </button>
+    <div id="sec-student_records" class="sidebar-section-body">
+
+      <button class="sidebar-btn" onclick="openRosterUpload(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Import Student Roster</span>
+          <span class="sb-desc">Cross-check trade/academic completion from CIS</span>
+        </div>
+      </button>
+
+
+      <button class="sidebar-btn" onclick="openTABEUpload(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Upload TABE Scores</span>
+          <span class="sb-desc">Import CIS test report (.xls)</span>
+        </div>
+      </button>
+
+      <button class="sidebar-btn" onclick="openTradeUploadModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Upload Trade ETAR</span>
+          <span class="sb-desc">Update trade progress from an ETAR export</span>
+        </div>
+      </button>
+
+      <button class="sidebar-btn" onclick="openAcademicCreditsUpload(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319c.063.475.276.934.641 1.299"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Upload Academic Credits</span>
+          <span class="sb-desc">Paste weekly or monthly comparison report</span>
+        </div>
+      </button>
+
+      <button id="btnMergeProfiles"
+              class="sidebar-btn"
+              onclick="openMergeModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Merge Profiles</span>
+          <span class="sb-desc">Combine duplicate student records</span>
+        </div>
+      </button>
+    </div>
+    <!-- ================================
+         ACADEMIC PLANNING
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-academic_planning', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Academic Planning <span class="sidebar-chevron">▾</span>
+    </div>
+    <div id="sec-academic_planning" class="sidebar-section-body">
+      <button class="sidebar-btn" onclick="openScheduleUpload(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Upload Schedule</span>
+          <span class="sb-desc">Import this week's class schedule</span>
+        </div>
+      </button>
+
+      <button id="btnBulkPacing"
+              class="sidebar-btn"
+              onclick="openBulkPacingModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Assign Student Hours</span>
+          <span class="sb-desc">Bulk-set weekly pacing from detected schedules</span>
+        </div>
+      </button>
+    </div>
+
+
+
+    <!-- ================================
+         STUDENT SUCCESS
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-student_success', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Student Success <span class="sidebar-chevron">▾</span>
+    </div>
+    <div id="sec-student_success" class="sidebar-section-body">
+      <button id="btnGenerateWIR"
+              class="sidebar-btn"
+              onclick="openWIRGenerateModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M9 12h3.75M9 15h3.75M9 18h3.75"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Generate Weekly WIR</span>
+          <span class="sb-desc">Score and log this week's intervention reports</span>
+        </div>
+      </button>
+
+      <button id="btnSendDigest"
+              class="sidebar-btn"
+              onclick="triggerDigest(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Email Intervention Summary</span>
+          <span class="sb-desc">Send high-risk digest to staff</span>
+        </div>
+
+      </button>
+
+      <button class="sidebar-btn"
+              onclick="openTradeSummaryModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Trade % Summary</span>
+          <span class="sb-desc">Compare staff/student/overall % side by side</span>
+        </div>
+      </button>
+    </div>
+        <!-- ================================
+         REPORTS & ANALYTICS
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-reports', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Reports & Analytics <span class="sidebar-chevron">▾</span>
+    </div>
+    <div id="sec-reports" class="sidebar-section-body">
+      <button id="btnProductivity"
+              class="sidebar-btn"
+              onclick="openProductivityModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Productivity Report</span>
+          <span class="sb-desc">Monthly cohort progress, TABE gains, graduation forecasts</span>
+        </div>
+      </button>
+
+
+
+      <button class="sidebar-btn"
+              onclick="exportCSV(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Export CSV</span>
+          <span class="sb-desc">Download the current filtered view</span>
+        </div>
+
+      </button>
+
+      <button id="btnCreditReport"
+              class="sidebar-btn"
+              onclick="openCreditReportModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Weekly Credit Report</span>
+          <span class="sb-desc">HS credit gains & hours by class, last Mon–Fri</span>
+        </div>
+      </button>
+    </div>
     <div class="sidebar-divider"></div>
-    <div class="sidebar-section-label">Profiles</div>
-    <button class="sidebar-btn" onclick="openTABEUpload(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08m-5.801 0c-.065.21-.1.433-.1.664 0 .414.336.75.75.75h4.5a.75.75 0 00.75-.75 2.25 2.25 0 00-.1-.664m-5.8 0A2.251 2.251 0 0113.5 2.25H15c1.012 0 1.867.668 2.15 1.586m-5.8 0c-.376.023-.75.05-1.124.08C9.095 4.01 8.25 4.973 8.25 6.108V8.25m0 0H4.875c-.621 0-1.125.504-1.125 1.125v11.25c0 .621.504 1.125 1.125 1.125h9.75c.621 0 1.125-.504 1.125-1.125V9.375c0-.621-.504-1.125-1.125-1.125H8.25zM6.75 12h.008v.008H6.75V12zm0 3h.008v.008H6.75V15zm0 3h.008v.008H6.75V18z"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Upload TABE Scores</span>
-        <span class="sb-desc">Import CIS test report (.xls)</span>
-      </div>
-    </button>
+
+
+
+    <!-- ================================
+         DASHBOARD
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-dashboard', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Dashboard <span class="sidebar-chevron">▸</span>
+    </div>
+
+    <div id="sec-dashboard" class="sidebar-section-body">
+      <button class="sidebar-btn"
+              onclick="openHistoryPanel(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+        </svg>
+
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Change History</span>
+          <span class="sb-desc">View and undo recent edits</span>
+        </div>
+
+      </button>
+
+      <button id="lockModeBtn"
+              class="sidebar-btn"
+              onclick="toggleLockMode(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Lock Mode</span>
+          <span class="sb-desc">Toggle view-only mode to prevent accidental edits</span>
+        </div>
+
+      </button>
+
+      <button class="sidebar-btn"
+              onclick="runClearAllCaches(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round"
+          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Clear Caches</span>
+          <span class="sb-desc">Force-refresh all cached data buckets</span>
+        </div>
+      </button>
+    </div>
     <div class="sidebar-divider"></div>
-    <button id="btnMergeProfiles" class="sidebar-btn" onclick="openMergeModal(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Merge Profiles</span>
-        <span class="sb-desc">Combine duplicate student records</span>
-      </div>
-    </button>
 
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-section-label">View</div>
+    <!-- ================================
+         HELP
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-help', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Help <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-help" class="sidebar-section-body" style="display:none;">
+      <button class="sidebar-btn"
+              onclick="showRiskExplainer(); closeSidebar()">
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">How scoring works</span>
+          <span class="sb-desc">Understand risk scores and flags</span>
+        </div>
+      </button>
+      <button class="sidebar-btn"
+              onclick="startWalkthrough(); closeSidebar()">
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Restart Tour</span>
+          <span class="sb-desc">Walk through the dashboard again</span>
+        </div>
+      </button>
+    </div>
 
-    <button class="sidebar-btn" onclick="openHistoryPanel(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
-      </svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Change History</span>
-        <span class="sb-desc">View and undo recent edits</span>
-      </div>
-    </button>
-
+    <!-- ================================
+         ROLE SELECTOR
+    ================================= -->
     <div class="sidebar-role-wrap">
+
       <label>Role preset</label>
-      <select id="roleSelect" class="sidebar-role-select" onchange="applyRolePreset(this.value)">
+      <select id="roleSelect"
+              class="sidebar-role-select"
+              onchange="applyRolePreset(this.value)">
         <option value="">— Select my role —</option>
         <option value="manager">Manager</option>
         <option value="counselor">Counselor</option>
         <option value="teacher">Teacher</option>
       </select>
     </div>
-
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-section-label">Help</div>
-
-    <button class="sidebar-btn" onclick="showRiskExplainer(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M9.879 7.519c1.171-1.025 3.071-1.025 4.242 0 1.172 1.025 1.172 2.687 0 3.712-.203.179-.43.326-.67.442-.745.361-1.45.999-1.45 1.827v.75M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9 5.25h.008v.008H12v-.008z"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">How scoring works</span>
-        <span class="sb-desc">Understand risk scores and flags</span>
-      </div>
-    </button>
-
-    <button class="sidebar-btn" onclick="startWalkthrough(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-        <path stroke-linecap="round" stroke-linejoin="round" d="M5.25 5.653c0-.856.917-1.398 1.667-.986l11.54 6.348a1.125 1.125 0 010 1.971l-11.54 6.347a1.125 1.125 0 01-1.667-.985V5.653z"/>
-      </svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Restart Tour</span>
-        <span class="sb-desc">Walk through the dashboard again</span>
-      </div>
-    </button>
-    <div class="sidebar-divider"></div>
-    <div class="sidebar-section-label">Productivity</div>
-    
-    <button onclick="openProductivityModal();" id="btnProductivity">Productivity</button>
-    
-    <div class="sidebar-divider"></div>
-    
-    <button class="sidebar-btn" onclick="runClearAllCaches(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Clear Caches</span>
-        <span class="sb-desc">Force fresh data from every sheet</span>
-      </div>
-    </button>
-
-    <div class="sidebar-divider"></div>
-
-    <button class="sidebar-btn" onclick="openBulkPacingModal(); closeSidebar()">
-      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/></svg>
-      <div class="sidebar-btn-inner">
-        <span class="sb-label">Assign Student Hours</span>
-        <span class="sb-desc">Bulk-detect academic pacing from schedules</span>
-      </div>
-    </button>
   </div>
 </aside>
 
@@ -203,9 +399,9 @@
     <span id="wirWeekLabel" class="wir-week-nav"></span>
     <span id="lastUpdated" class="last-updated"></span>
 
-    <button class="btn btn-nav" onclick="refreshData()">
+    <button class="btn btn-nav" id="refreshBtn" onclick="refreshData()">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992m0 0h4.992m-4.993 0l3.181 3.183a8.25 8.25 0 0013.803-3.7M4.031 9.865a8.25 8.25 0 0113.803-3.7l3.181 3.182m0-4.991v4.99"/></svg>
-      Refresh
+      <span id="refreshBtnLabel">Refresh</span>
     </button>
 
     <div style="position:relative;">
@@ -254,226 +450,207 @@
 
   <div id="dashContent" class="hidden">
 
-    <!-- ── DATA FRESHNESS BANNER ──────────────────────────── -->
-    <div id="freshnessBanner" class="freshness-banner hidden">
-      <div class="freshness-sources" id="freshnessSources"></div>
-      <button class="freshness-dismiss" onclick="dismissFreshness()">✕</button>
+  <!-- Freshness banner -->
+  <div id="freshnessBanner" class="freshness-banner hidden">
+    <div class="freshness-sources" id="freshnessSources"></div>
+    <button class="freshness-dismiss" onclick="dismissFreshness()">✕</button>
+  </div>
+
+  <!-- At-a-glance metrics -->
+  <section class="summary-cards" id="summaryCards"></section>
+
+  <!-- Search, filters, sort, view toggle -->
+  <section class="filter-bar">
+
+    <div class="search-wrap">
+      <span class="search-icon">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+        </svg>
+      </span>
+      <input type="text" id="searchInput" class="search-input" placeholder="Search student…" oninput="applyFilters()">
     </div>
 
-    <!-- ── SUMMARY CARDS ──────────────────────────────────── -->
-    <section class="summary-cards" id="summaryCards"></section>
+    <div class="filter-chips">
+      <button class="chip active"       data-risk="ALL"     onclick="setRiskFilter(this)">All</button>
+      <button class="chip chip-high"    data-risk="HIGH"    onclick="setRiskFilter(this)">Needs Attention</button>
+      <button class="chip chip-medium"  data-risk="MEDIUM"  onclick="setRiskFilter(this)">Watch Closely</button>
+      <button class="chip chip-low"     data-risk="LOW"     onclick="setRiskFilter(this)">On Track</button>
+      <button class="chip chip-unknown" data-risk="UNKNOWN" onclick="setRiskFilter(this)">No Data Yet</button>
+    </div>
 
-    <!-- ── FILTERS ────────────────────────────────────────── -->
-    <section class="filter-bar">
+    <div class="filter-chips">
+      <button class="chip active"            data-type="ALL"            onclick="setTypeFilter(this)">All Types</button>
+      <button class="chip"                   data-type="HS"             onclick="setTypeFilter(this)">High School</button>
+      <button class="chip"                   data-type="HISET"          onclick="setTypeFilter(this)">HiSET / GED</button>
+      <button class="chip"                   data-type="TRADES"         onclick="setTypeFilter(this)">Trades Only</button>
+      <button class="chip chip-complete"     data-type="TRADE_COMPLETE" onclick="setTypeFilter(this)">Trade Complete</button>
+      <button class="chip chip-intervention" data-type="INTERVENTION"   onclick="setTypeFilter(this)">WIR</button>
+      <button class="chip chip-unmapped"     data-type="UNMAPPED"       onclick="setTypeFilter(this)">Not Set Up</button>
+    </div>
 
-      <!-- SEARCH -->
-      <div class="search-wrap">
-        <span class="search-icon">
+    <div class="filter-footer">
+
+      <div class="presets-wrap">
+        <select id="presetSelect" class="sort-select" onchange="applyPreset(this.value)" title="Filter presets">
+          <option value="">Presets…</option>
+          <optgroup label="Built-in">
+            <option value="__high_risk">Needs Attention</option>
+            <option value="__unmapped">Not Set Up</option>
+            <option value="__has_wir">Weekly Intervention Report</option>
+            <option value="__trade_complete">Trade Complete</option>
+            <option value="__high_risk_trades">Needs Attention + Trades</option>
+            <option value="__stale">No Recent Updates</option>
+          </optgroup>
+          <optgroup label="Saved" id="customPresetsGroup"></optgroup>
+        </select>
+        <button class="btn-preset-save" onclick="savePreset()">+ Save</button>
+      </div>
+
+      <div class="sort-wrap">
+        <select id="sortSelect" class="sort-select" onchange="applyFilters()">
+          <option value="name">Name A–Z</option>
+          <option value="risk">Risk (highest first)</option>
+          <option value="academicPct">Academic %</option>
+          <option value="tradesPct">Trades %</option>
+          <option value="tradeName">Trade Name A–Z</option>
+          <option value="daysLeft">Est. Graduation</option>
+        </select>
+      </div>
+
+      <div class="view-toggle-wrap">
+        <button class="btn-view-toggle active" id="btnTableView" onclick="setView('table')" title="Table view">
           <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-            <path stroke-linecap="round" stroke-linejoin="round" d="M21 21l-5.197-5.197m0 0A7.5 7.5 0 105.196 5.196a7.5 7.5 0 0010.607 10.607z"/>
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/>
           </svg>
-        </span>
-        <input type="text" id="searchInput" class="search-input"
-          placeholder="Search student…" oninput="applyFilters()">
+          Table
+        </button>
+        <button class="btn-view-toggle" id="btnCardView" onclick="setView('cards')" title="Card view">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/>
+          </svg>
+          Cards
+        </button>
+        <button class="btn-view-toggle" id="btnActionView" onclick="setView('action')" title="Action needed view">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
+          </svg>
+          Action
+        </button>
       </div>
-
-      <!-- RISK CHIPS -->
-      <div class="filter-chips">
-        <button class="chip active"          data-risk="ALL"     onclick="setRiskFilter(this)">All</button>
-        <button class="chip chip-high"       data-risk="HIGH"    onclick="setRiskFilter(this)">Needs Attention</button>
-        <button class="chip chip-medium"     data-risk="MEDIUM"  onclick="setRiskFilter(this)">Watch Closely</button>
-        <button class="chip chip-low"        data-risk="LOW"     onclick="setRiskFilter(this)">On Track</button>
-        <button class="chip chip-unknown"    data-risk="UNKNOWN" onclick="setRiskFilter(this)">No Data Yet</button>
-      </div>
-
-      <!-- TYPE CHIPS -->
-      <div class="filter-chips">
-        <button class="chip active"              data-type="ALL"            onclick="setTypeFilter(this)">All Types</button>
-        <button class="chip"                     data-type="HS"             onclick="setTypeFilter(this)">High School</button>
-        <button class="chip"                     data-type="HISET"          onclick="setTypeFilter(this)">HiSET / GED</button>
-        <button class="chip"                     data-type="TRADES"         onclick="setTypeFilter(this)">Trades Only</button>
-        <button class="chip chip-complete"       data-type="TRADE_COMPLETE" onclick="setTypeFilter(this)">Trade Complete</button>
-        <button class="chip chip-intervention"   data-type="INTERVENTION"   onclick="setTypeFilter(this)">WIR</button>
-        <button class="chip chip-unmapped"       data-type="UNMAPPED"       onclick="setTypeFilter(this)">Not Set Up</button>
-      </div>
-
-      <!-- FILTER FOOTER: presets + sort + view toggle -->
-      <div class="filter-footer">
-
-        <div class="presets-wrap">
-          <select id="presetSelect" class="sort-select" onchange="applyPreset(this.value)" title="Filter presets">
-            <option value="">Presets…</option>
-            <optgroup label="Built-in">
-              <option value="__high_risk">Needs Attention</option>
-              <option value="__unmapped">Not Set Up</option>
-              <option value="__has_wir">Weekly Intervention Report</option>
-              <option value="__trade_complete">Trade Complete</option>
-              <option value="__high_risk_trades">Needs Attention + Trades</option>
-              <option value="__stale">No Recent Updates</option>
-            </optgroup>
-            <optgroup label="Saved" id="customPresetsGroup"></optgroup>
+        <div id="counselorFilterBar" class="roster-filter-row">
+          <span class="roster-filter-label">Filter by Counselor:</span>
+          <select id="counselorSelect" onchange="applyCounselorFilter()">
+            <option value="">— All Students —</option>
           </select>
-          <button class="btn-preset-save" onclick="savePreset()">+ Save</button>
+          <button id="counselorClearBtn" class="roster-filter-clear" onclick="clearCounselorFilter()">✕ Clear Filter</button>
+          <span id="counselorFilterLabel" class="roster-filter-active"></span>
         </div>
 
-        <div class="sort-wrap">
-          <select id="sortSelect" class="sort-select" onchange="applyFilters()">
-            <option value="name">Name A–Z</option>
-            <option value="risk">Risk (highest first)</option>
-            <option value="academicPct">Academic %</option>
-            <option value="tradesPct">Trades %</option>
-            <option value="tradeName">Trade Name A–Z</option>
-            <option value="daysLeft">Est. Graduation</option>
+        <div id="teacherFilterBar" class="roster-filter-row">
+          <span class="roster-filter-label">Filter by Teacher:</span>
+          <select id="teacherSelect" onchange="applyTeacherFilter()">
+            <option value="">— All Students —</option>
+            <option value="HSD 2">HSD 2</option>
+            <option value="HSD3">HSD3</option>
+            <option value="HSE/HSD1">HSE/HSD1</option>
           </select>
+          <button id="teacherClearBtn" class="roster-filter-clear" onclick="clearTeacherFilter()">✕ Clear Filter</button>
+          <span id="teacherFilterLabel" class="roster-filter-active"></span>
         </div>
-
-        <div class="view-toggle-wrap">
-          <button class="btn-view-toggle active" id="btnTableView" onclick="setView('table')" title="Table view">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/>
-            </svg>
-            Table
-          </button>
-          <button class="btn-view-toggle" id="btnCardView" onclick="setView('cards')" title="Card view">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6A2.25 2.25 0 016 3.75h2.25A2.25 2.25 0 0110.5 6v2.25a2.25 2.25 0 01-2.25 2.25H6a2.25 2.25 0 01-2.25-2.25V6zM3.75 15.75A2.25 2.25 0 016 13.5h2.25a2.25 2.25 0 012.25 2.25V18a2.25 2.25 0 01-2.25 2.25H6A2.25 2.25 0 013.75 18v-2.25zM13.5 6a2.25 2.25 0 012.25-2.25H18A2.25 2.25 0 0120.25 6v2.25A2.25 2.25 0 0118 10.5h-2.25a2.25 2.25 0 01-2.25-2.25V6zM13.5 15.75a2.25 2.25 0 012.25-2.25H18a2.25 2.25 0 012.25 2.25V18A2.25 2.25 0 0118 20.25h-2.25A2.25 2.25 0 0113.5 18v-2.25z"/>
-            </svg>
-            Cards
-          </button>
-          <button class="btn-view-toggle" id="btnActionView" onclick="setView('action')" title="Action needed view">
-            <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
-              <path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/>
-            </svg>
-            Action
-          </button>
-        </div>
-      </div>
-
-      <!-- CARDS GRID -->
-      <div id="cardsGrid" class="cards-grid hidden"></div>
-
-      <!-- ACTION NEEDED VIEW -->
-      <div id="actionView" class="hidden">
-        <div class="action-view-header">
-          <div>
-            <div class="action-view-title">Action Needed</div>
-            <div class="action-view-sub">Most urgent students first — intervention, deadlines, missing hours</div>
-          </div>
-          <span class="action-refresh-note" id="actionViewDate"></span>
-        </div>
-        <div class="action-view" id="actionGroups"></div>
-      </div>
-      
-      <!-- ── COUNSELOR FILTER BAR ─────────────────────────────── -->
-      <div id="counselorFilterBar" style="
-        display:flex;align-items:center;gap:10px;
-        padding:10px 16px;
-        background:var(--bg2);
-        border-bottom:1px solid var(--border);
-        flex-wrap:wrap;
-      ">
-        <span style="font-size:12px;font-weight:600;color:var(--text-muted);white-space:nowrap;">
-          Filter by Counselor:
-        </span>
-        <select id="counselorSelect" onchange="applyCounselorFilter()" style="
-          font-size:13px;padding:5px 10px;
-          background:var(--bg3);color:var(--text);
-          border:1px solid var(--border);border-radius:6px;
-          cursor:pointer;min-width:180px;
-        ">
-          <option value="">— All Students —</option>
-        </select>
-        <button id="counselorClearBtn" onclick="clearCounselorFilter()" style="
-          display:none;
-          font-size:12px;padding:5px 12px;
-          background:var(--accent-mid);color:var(--bg-nav);
-          border:none;border-radius:6px;cursor:pointer;font-weight:600;
-        ">✕ Clear Filter</button>
-        <span id="counselorFilterLabel" style="
-          font-size:12px;color:var(--text-muted);font-style:italic;
-        "></span>
-      </div>
-    </section>
-    <!-- ── TEACHER FILTER BAR ───────────────────────────────── -->
-      <div id="teacherFilterBar" style="
-        display:flex;align-items:center;gap:10px;
-        padding:10px 16px;
-        background:var(--bg2);
-        border-bottom:1px solid var(--border);
-        flex-wrap:wrap;
-      ">
-        <span style="font-size:12px;font-weight:600;color:var(--text-muted);white-space:nowrap;">
-          Filter by Teacher:
-        </span>
-        <select id="teacherSelect" onchange="applyTeacherFilter()" style="
-          font-size:13px;padding:5px 10px;
-          background:var(--bg3);color:var(--text);
-          border:1px solid var(--border);border-radius:6px;
-          cursor:pointer;min-width:180px;
-        ">
-          <option value="">— All Students —</option>
-          <option value="HSD 2">HSD 2</option>
-          <option value="HSD3">HSD3</option>
-          <option value="HSE/HSD1">HSE/HSD1</option>
-        </select>
-        <button id="teacherClearBtn" onclick="clearTeacherFilter()" style="
-          display:none;
-          font-size:12px;padding:5px 12px;
-          background:var(--accent-mid);color:var(--bg-nav);
-          border:none;border-radius:6px;cursor:pointer;font-weight:600;
-        ">✕ Clear Filter</button>
-        <span id="teacherFilterLabel" style="
-          font-size:12px;color:var(--text-muted);font-style:italic;
-        "></span>
-      </div>
-    <!-- RESULT COUNT -->
-    <div class="result-bar">
-      <span id="resultCount" class="result-count"></span>
     </div>
+  </section>
 
-    <!-- ── TABLE ──────────────────────────────────────────── -->
-    <section class="table-wrap">
-      <table class="students-table" id="studentsTable">
-        <thead>
-          <tr>
-            <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all"></th>
-            <th>Student</th>
-            <th>Risk</th>
-            <th>Status</th>
-            <th class="col-academic-pct col-expandable hidden-col">Academic %</th>
-            <th>Trade</th>
-            <th class="col-trade-pct col-expandable hidden-col">Trade %</th>
-            <th>This Week</th>
-            <th class="col-etar col-expandable hidden-col">ETAR</th>
-            <th>WIR</th>
-            <th>
-              <button class="btn-expand-cols" onclick="toggleExtraCols()" id="expandColsBtn" title="Show more columns">＋</button>
-            </th>
-          </tr>
-        </thead>
-        <tbody id="studentsBody"></tbody>
-      </table>
-      <div id="noResults" class="no-results hidden">No students match your filters.</div>
-    </section>
+  <!-- Roster filters — narrow further by counselor caseload or teacher class -->
+  <style>
+    .roster-filter-row {
+      display: flex; align-items: center; gap: 8px; flex-wrap: nowrap;
+      padding: 10px 16px;
+      background: var(--bg2);
+      border-bottom: 1px solid var(--border);
+    }
+    .roster-filter-row .roster-filter-label {
+      font-size: 12px; font-weight: 600; color: var(--text-muted); white-space: nowrap;
+    }
+    .roster-filter-row select {
+      font-size: 13px; padding: 5px 10px; min-width: 180px;
+      background: var(--bg3); color: var(--text);
+      border: 1px solid var(--border); border-radius: 6px;
+      cursor: pointer;
+    }
+    .roster-filter-row .roster-filter-clear {
+      display: none;
+      font-size: 12px; padding: 5px 12px;
+      background: var(--accent-mid); color: var(--bg-nav);
+      border: none; border-radius: 6px; cursor: pointer; font-weight: 600;
+    }
+    .roster-filter-row .roster-filter-active {
+      font-size: 12px; color: var(--text-muted); font-style: italic;
+    }
+  </style>
 
-    <!-- ── BULK ACTION BAR ────────────────────────────────── -->
-    <div id="bulkBar" class="bulk-bar hidden">
-      <span id="bulkCount" class="bulk-count"></span>
-      <button id="bulkNoteBtn" class="btn-bulk" onclick="openBulkNote()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
-        Add Note to All
-      </button>
-      <button id="bulkStatusBtn" class="btn-bulk" onclick="openBulkStatus()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
-        Edit Status
-      </button>
-      <button class="btn-bulk danger" onclick="clearSelection()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
-        Clear
-      </button>
+  <!-- Card view -->
+  <div id="cardsGrid" class="cards-grid hidden"></div>
+
+  <!-- Action-needed view -->
+  <div id="actionView" class="hidden">
+    <div class="action-view-header">
+      <div>
+        <div class="action-view-title">Action Needed</div>
+        <div class="action-view-sub">Most urgent students first — intervention, deadlines, missing hours</div>
+      </div>
+      <span class="action-refresh-note" id="actionViewDate"></span>
     </div>
+    <div class="action-view" id="actionGroups"></div>
+  </div>
 
-  </div><!-- end dashContent -->
+  <div class="result-bar">
+    <span id="resultCount" class="result-count"></span>
+  </div>
+
+  <!-- Table view -->
+  <section class="table-wrap">
+    <table class="students-table" id="studentsTable">
+      <thead>
+        <tr>
+          <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all"></th>
+          <th>Student</th>
+          <th>Risk</th>
+          <th>Status</th>
+          <th class="col-academic-pct col-expandable hidden-col">Academic %</th>
+          <th>Trade</th>
+          <th class="col-trade-pct col-expandable hidden-col">Trade %</th>
+          <th>This Week</th>
+          <th class="col-etar col-expandable hidden-col">ETAR</th>
+          <th>WIR</th>
+          <th>
+            <button class="btn-expand-cols" onclick="toggleExtraCols()" id="expandColsBtn" title="Show more columns">＋</button>
+          </th>
+        </tr>
+      </thead>
+      <tbody id="studentsBody"></tbody>
+    </table>
+    <div id="noResults" class="no-results hidden">No students match your filters.</div>
+  </section>
+
+  <!-- Bulk action bar -->
+  <div id="bulkBar" class="bulk-bar hidden">
+    <span id="bulkCount" class="bulk-count"></span>
+    <button id="bulkNoteBtn" class="btn-bulk" onclick="openBulkNote()">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M7.5 8.25h9m-9 3H12m-9.75 1.51c0 1.6 1.123 2.994 2.707 3.227 1.129.166 2.27.293 3.423.379.35.026.67.21.865.501L12 21l2.755-4.133a1.14 1.14 0 01.865-.501 48.172 48.172 0 003.423-.379c1.584-.233 2.707-1.626 2.707-3.228V6.741c0-1.602-1.123-2.995-2.707-3.228A48.394 48.394 0 0012 3c-2.392 0-4.744.175-7.043.513C3.373 3.746 2.25 5.14 2.25 6.741v6.018z"/></svg>
+      Add Note to All
+    </button>
+    <button id="bulkStatusBtn" class="btn-bulk" onclick="openBulkStatus()">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.862 4.487l1.687-1.688a1.875 1.875 0 112.652 2.652L6.832 19.82a4.5 4.5 0 01-1.897 1.13l-2.685.8.8-2.685a4.5 4.5 0 011.13-1.897L16.863 4.487zm0 0L19.5 7.125"/></svg>
+      Edit Status
+    </button>
+    <button class="btn-bulk danger" onclick="clearSelection()">
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      Clear
+    </button>
+  </div>
+
+</div><!-- end dashContent -->
 </main>
 
 <!-- ── DETAIL MODAL ──────────────────────────────────────── -->
@@ -680,7 +857,8 @@
       <select id="qeAcademicStatus" class="qe-select">
         <option value="">— No change —</option>
         <option value="HS">High School (HS)</option>
-        <option value="HISET">HiSET / GED</option>
+        <option value="HISET">HiSET</option>
+        <option value="GED">GED</option>
         <option value="HS_COMPLETE">Finished High School</option>
         <option value="NOT_STARTED">Not Started Yet</option>
       </select>
@@ -723,6 +901,7 @@
     </div>
 
   </div>
+  <button class="btn-override danger" onclick="archiveFromQuickEdit()" style="margin-top:8px;">Archive Student</button>
   <div class="qe-footer">
     <button class="qe-save" id="qeSaveBtn" onclick="saveQuickEdit()">Save Changes</button>
     <div id="qeStatus" class="qe-status"></div>
@@ -754,7 +933,18 @@
     </div>
   </div>
 </div>
-
+<!--- Archive Modal--->
+<div id="archivedModal" class="modal-overlay hidden" onclick="closeArchivedModal(event)">
+  <div class="modal-box" style="max-width:480px;">
+    <div class="modal-header">
+      <h2>Archived Students</h2>
+      <button class="modal-close" onclick="document.getElementById('archivedModal').classList.add('hidden')">×</button>
+    </div>
+    <div class="modal-body" style="padding:16px 20px;">
+      <div id="archivedListBody"></div>
+    </div>
+  </div>
+</div>
 <!-- ── WALKTHROUGH ───────────────────────────────────────── -->
 <div id="wtBackdrop" class="wt-backdrop"></div>
 <div id="wtSpotlight" class="wt-spotlight" style="display:none"></div>
@@ -827,7 +1017,6 @@ function toggleThemeDropdown() {
     return;
   }
 
-  // Build dropdown items
   const current = document.documentElement.getAttribute('data-theme') || 'dark';
   dropdown.innerHTML = `
     <div style="padding:6px 10px;font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid var(--border);">
@@ -868,7 +1057,6 @@ function applyTheme(key) {
   try { localStorage.setItem('dashTheme', key); } catch(e) {}
 }
 
-// Close dropdown when clicking outside
 document.addEventListener('click', function(e) {
   const dropdown = document.getElementById('themeDropdown');
   const toggle   = document.getElementById('themeToggle');
@@ -877,7 +1065,6 @@ document.addEventListener('click', function(e) {
   }
 });
 
-// Restore saved theme on load
 (function() {
   try {
     const saved = localStorage.getItem('dashTheme');
@@ -925,6 +1112,7 @@ function closeSidebar() {
   });
 })();
 </script>
+
 <div id="scheduleUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeScheduleUpload()">
   <div class="modal-box" style="max-width:480px;">
     <div class="modal-header">
@@ -934,11 +1122,11 @@ function closeSidebar() {
       </button>
     </div>
     <div class="modal-body" style="padding:22px;">
- 
+
       <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
         Select the weekly <strong style="color:var(--text);">.xlsx</strong> schedule file. If you have the .xls version, open it in Excel or Google Sheets and save as .xlsx first.
       </p>
- 
+
       <div class="override-row" style="margin-bottom:14px;">
         <label>Schedule file (.xls)</label>
         <input
@@ -949,22 +1137,23 @@ function closeSidebar() {
           style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;cursor:pointer;"
         >
       </div>
- 
+
       <div id="schedulePreview" class="hidden" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:13px;">
       </div>
- 
+
       <div id="scheduleUploadStatus" class="schedule-status"></div>
- 
+
       <div class="override-actions" style="margin-top:14px;">
         <button class="btn-override" id="scheduleUploadBtn" onclick="confirmScheduleUpload()" disabled>
           Upload Schedule
         </button>
         <button class="btn-override danger" onclick="closeScheduleUpload()">Cancel</button>
       </div>
- 
+
     </div>
   </div>
 </div>
+
 <div id="tabeUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeTABEUpload()">
   <div class="modal-box" style="max-width:480px;">
     <div class="modal-header">
@@ -979,7 +1168,7 @@ function closeSidebar() {
         (Test: TABE 13/14) and upload the <strong style="color:var(--text);">.xls</strong> file here.
         Previous scores, current scores, and gains will be calculated automatically.
       </p>
- 
+
       <div class="override-row" style="margin-bottom:14px;">
         <label>TABE report file (.xls)</label>
         <input
@@ -990,11 +1179,11 @@ function closeSidebar() {
           style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;cursor:pointer;"
         >
       </div>
- 
+
       <div id="tabePreview" class="hidden" style="background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:12px 14px;margin-bottom:14px;font-size:13px;"></div>
- 
+
       <div id="tabeUploadStatus" class="schedule-status"></div>
- 
+
       <div class="override-actions" style="margin-top:14px;">
         <button class="btn-override" id="tabeUploadBtn" onclick="confirmTABEUpload()" disabled>
           Upload Scores
@@ -1004,7 +1193,109 @@ function closeSidebar() {
     </div>
   </div>
 </div>
+
+<div id="rosterUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeRosterUpload()">
+  <div class="modal-box" style="max-width:520px;">
+    <div class="modal-header">
+      <h2>Verify Roster</h2>
+      <button class="modal-close" onclick="closeRosterUpload()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+        Export the CIS <strong style="color:var(--text);">Master Testing Roster Report</strong> and upload it here.
+        Trade and academic completion status will be cross-checked and written to Name Mapping —
+        completed status is never downgraded by this tool, and no active student is ever removed automatically.
+      </p>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Roster export file (.xls/.xlsx)</label>
+        <input
+          type="file"
+          id="rosterFileInput"
+          accept=".xls,.xlsx"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;cursor:pointer;"
+        >
+      </div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" id="rosterUploadBtn" onclick="handleRosterUpload()">Process File</button>
+        <button class="btn-override danger" onclick="closeRosterUpload()">Cancel</button>
+      </div>
+
+      <div id="rosterUploadStatus" class="schedule-status" style="margin-top:12px;"></div>
+      <div id="rosterUploadLog" style="margin-top:8px;max-height:180px;overflow-y:auto;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 10px;font-size:11px;white-space:pre-wrap;color:var(--text-muted);"></div>
+
+    </div>
+  </div>
+</div>
+
+<div id="wirGenerateModal" class="modal-overlay hidden" onclick="if(event.target===this && !_wirGenerating)closeWIRGenerateModal()">
+  <div class="modal-box" style="max-width:460px;">
+    <div class="modal-header">
+      <h2>Generate Weekly WIR</h2>
+      <button class="modal-close" id="wirGenerateCloseBtn" onclick="closeWIRGenerateModal()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <div id="wirGenerateForm">
+        <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+          Scores every active student against this week's academic pace, trade progress, and hours,
+          then writes one row per student to WIR Reports. Safe to run more than once — rows already
+          written for a given student + week are skipped, not duplicated.
+        </p>
+        <div class="override-row" style="margin-bottom:14px;">
+          <label>Week Of</label>
+          <input type="date" id="wirGenerateWeekInput"
+            style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;">
+        </div>
+        <div class="override-row" style="margin-bottom:14px;">
+          <label>Preview One Student First (optional)</label>
+          <input type="text" id="wirPreviewStudentId" placeholder="Student ID"
+            style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;">
+          <button class="btn-override" style="margin-top:8px;" onclick="previewWIRStudent()">Preview</button>
+        </div>
+        <div id="wirPreviewResult" style="margin-bottom:14px;"></div>
+        <div class="override-actions" style="margin-top:14px;">
+          <button class="btn-override" id="wirGenerateBtn" onclick="confirmGenerateWIR()">Generate</button>
+          <button class="btn-override danger" onclick="closeWIRGenerateModal()">Cancel</button>
+        </div>
+      </div>
+
+      <div id="wirGenerateLoading" class="hidden" style="padding:30px 10px;text-align:center;">
+        <div class="spinner" style="margin:0 auto 16px;"></div>
+        <div style="font-size:13.5px;color:var(--text);font-weight:600;margin-bottom:6px;">Scoring active students…</div>
+        <div style="font-size:12px;color:var(--text-muted);">This can take a minute or two for ~165 students. Don't close this window.</div>
+      </div>
+
+      <div id="wirGenerateStatus" class="schedule-status" style="margin-top:12px;"></div>
+
+    </div>
+  </div>
+</div>
+
+<div id="tradeSummaryModal" class="modal-overlay hidden" onclick="closeTradeSummaryModal(event)">
+  <div class="modal-box" style="max-width:640px;width:92vw;max-height:85vh;display:flex;flex-direction:column;">
+    <div class="modal-header">
+      <h2>Trade % Summary</h2>
+      <button class="modal-close" onclick="document.getElementById('tradeSummaryModal').classList.add('hidden')">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:16px 20px;overflow-y:auto;">
+      <input type="text" id="tradeSummarySearch" placeholder="Search student name…" oninput="_renderTradeSummary()"
+        style="width:100%;margin-bottom:14px;background:var(--bg);border:1px solid var(--border);border-radius:5px;color:var(--text);font-family:var(--font);font-size:13px;padding:8px 10px;">
+      <div id="tradeSummaryBody"></div>
+    </div>
+  </div>
+</div>
+
 <div id="dashTooltip"></div>
+
 <div id="bulkPacingModal" class="modal-overlay hidden" onclick="if(event.target===this)closeBulkPacingModal()">
   <div class="modal-box" style="max-width:960px;width:96vw;max-height:90vh;display:flex;flex-direction:column;">
     <div class="modal-header">
@@ -1070,7 +1361,80 @@ function closeSidebar() {
     </div>
   </div>
 </div>
+<div id="academicCreditsUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeAcademicCreditsUpload()">
+  <div class="modal-box" style="max-width:520px;">
+    <div class="modal-header">
+      <h2>Generate Academic Snapshot</h2>
+      <button class="modal-close" onclick="closeAcademicCreditsUpload()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+        Pulls every active student's current remaining credits directly from Student Course Data,
+        compares it to their last recorded snapshot of the same type, and writes today's numbers
+        to Academic Snapshots. Run this on Fridays (weekly) or the last day of the month (monthly).
+      </p>
+
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn-override" id="acCadenceWeeklyBtn" onclick="_setAcademicCreditsCadence('weekly')" style="flex:1;">Weekly</button>
+        <button class="btn-override" id="acCadenceMonthlyBtn" onclick="_setAcademicCreditsCadence('monthly')" style="flex:1;opacity:0.5;">Monthly</button>
+      </div>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Snapshot Date (defaults to today)</label>
+        <input type="date" id="academicCreditsDateInput"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;">
+      </div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" id="academicCreditsUploadBtn" onclick="confirmGenerateAcademicSnapshot()">Generate Snapshot</button>
+        <button class="btn-override danger" onclick="closeAcademicCreditsUpload()">Cancel</button>
+      </div>
+
+      <div id="academicCreditsUploadStatus" class="schedule-status" style="margin-top:12px;"></div>
+      <div id="academicCreditsUploadLog" style="margin-top:8px;font-size:11.5px;color:var(--text-muted);white-space:pre-wrap;"></div>
+
+    </div>
+  </div>
+</div>
+<div id="creditReportModal" class="modal-overlay hidden" onclick="closeCreditReportModal(event)">
+  <div class="modal-box" style="max-width:800px;width:94vw;max-height:88vh;display:flex;flex-direction:column;">
+    <div class="modal-header">
+      <h2>Weekly Credit Report</h2>
+      <button class="btn-override" style="margin-right:8px;" onclick="copyCreditReport()">Copy for Email/Doc</button>
+      <button class="modal-close" onclick="document.getElementById('creditReportModal').classList.add('hidden')">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:16px 22px 20px;overflow-y:auto;">
+
+      <div id="creditReportToolbar" style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;margin-bottom:14px;padding-bottom:14px;border-bottom:1px solid var(--border);">
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;" onclick="loadCreditReportPreset('thisWeek')">This Week</button>
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;" onclick="loadCreditReportPreset('lastWeek')">Last Week</button>
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;" onclick="loadCreditReportPreset('twoWeeksAgo')">2 Weeks Ago</button>
+
+        <span style="width:1px;height:20px;background:var(--border);margin:0 4px;"></span>
+
+        <input type="date" id="creditReportDateInput" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;">
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;" onclick="loadCreditReportCustomDate()">Load Week</button>
+
+        <span style="width:1px;height:20px;background:var(--border);margin:0 4px;"></span>
+
+        <select id="creditReportSnapshotSelect" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:5px 8px;min-width:160px;">
+          <option value="">— Saved Snapshots —</option>
+        </select>
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;" onclick="loadSelectedCreditReportSnapshot()">Load</button>
+        <button class="btn-override" style="font-size:11.5px;padding:5px 10px;margin-left:auto;" onclick="saveCurrentCreditReportAsSnapshot()">Save as Snapshot</button>
+      </div>
+
+      <div id="creditReportBody"></div>
+    </div>
+  </div>
+</div>
 <?!= include('ProductivityModal') ?>
 <?!= include('ProductivityScripts') ?>
+<?!= include('TradeETARUpload'); ?>
 </body>
 </html>
