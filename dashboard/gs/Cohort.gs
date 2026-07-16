@@ -1,10 +1,5 @@
-
 // ============================================================
 // Cohorts.gs — Monthly progress cohort summaries
-// Single source of truth for both HS Credits and Trade %
-// monthly progress. Nothing else in the project should parse
-// the HS Monthly Percentage sheet or recompute these summaries —
-// everything reads from what this file produces.
 // ============================================================
 
 // ── Month-label normalizer ─────────────────────────────────────
@@ -179,4 +174,173 @@ function getTradeMonthlyCohortSummary(tradeMonthlyData) {
       stalledPct:   m.entries.length ? +((stalledCount / m.entries.length) * 100).toFixed(1) : null,
     };
   });
+}
+
+// ============================================================
+// VAULT PATH — HS Monthly cohort
+// ------------------------------------------------------------
+// Academic Snapshots is already flat and ID-keyed (one row per
+// student per snapshot), which replaces the whole matrix-parsing
+// + loose-name-matching approach buildHSMonthlyCohort() above
+// needed. No adapter/reshape needed — this reads the Vault shape
+// directly and produces the same { byStudent, cohort } output
+// shape the frontend already expects.
+//
+// Confirmed against real data:
+//   - cadence: 'weekly' / 'monthly', same as Trade Snapshots
+//   - status: 'New' / 'Continuing', same as Trade Snapshots — a
+//     'New' row has a blank gain (no prior snapshot to diff
+//     against), same meaning as addedPostFirst had for trades.
+//     There's no evidence of a 'removed' or 'in_progress' status
+//     value, so those guesses are dropped. "Is this the current,
+//     still-accumulating month" is determined by date instead
+//     (isCurrentMonth), same as the legacy matrix-based function
+//     above did — status doesn't carry that information here.
+//
+// IMPORTANT: this depends on VAULT_ACADEMIC_SNAPSHOT_HEADERS in
+// VaultConfig.gs being ['studentId','cadence','snapshotDate',
+// 'creditsEarned','gain','status'] — the real sheet has cadence
+// BEFORE snapshotDate, which is the reverse of what that constant
+// currently declares. Fix the constant before relying on this;
+// readVaultSheetAsObjects_ maps columns positionally, so a wrong
+// header order silently swaps values into the wrong fields rather
+// than erroring.
+//
+// `name` is left null per student — Academic Snapshots doesn't
+// carry a display name. Assumes the caller merges in displayName
+// per studentId separately (e.g. from profiles).
+function buildHSMonthlyCohortFromVault_(academicSnapshotRows) {
+  const empty = { byStudent: {}, cohort: [] };
+  if (!academicSnapshotRows || !academicSnapshotRows.length) return empty;
+
+  try {
+    const currentMonthKey = _normMonthLabel(
+      Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MMM yyyy')
+    );
+
+    const byStudentRaw = {};
+    academicSnapshotRows.forEach(row => {
+      if (String(row.cadence || '').trim().toLowerCase() !== 'monthly') return;
+      const id = String(row.studentId || '').trim();
+      if (!id) return;
+      (byStudentRaw[id] = byStudentRaw[id] || []).push(row);
+    });
+
+    const finalByStudent = {};
+    const monthEntries   = {}; // monthKey -> [{ month, creditsGained, inProgress }]
+
+    Object.entries(byStudentRaw).forEach(([id, rows]) => {
+      rows.sort((a, b) => String(a.snapshotDate || '') < String(b.snapshotDate || '') ? -1 : 1);
+
+      const months = rows.map(row => {
+        const dateStr = String(row.snapshotDate || '');
+        const dateObj = _parseLocalDate(dateStr.slice(0, 10)) || new Date(dateStr);
+        const monthLabel = !isNaN(dateObj.getTime())
+          ? Utilities.formatDate(dateObj, Session.getScriptTimeZone(), 'MMM yyyy')
+          : dateStr;
+        const monthKey = _normMonthLabel(monthLabel);
+        const isCurrentMonth = monthKey === currentMonthKey;
+        const isNew = String(row.status || '').trim().toLowerCase() === 'new';
+
+        // 'New' rows have no prior snapshot to diff against — no
+        // usable gain regardless of month. Current-month rows are
+        // also excluded from the "finalized" totals, same as the
+        // legacy matrix path did, since the month isn't over yet.
+        const inProgress = isCurrentMonth;
+        const endCredits    = inProgress ? null : _toNumber(row.creditsEarned);
+        const creditsGained = (inProgress || isNew) ? null : _toNumber(row.gain);
+        const startCredits  = (endCredits !== null && creditsGained !== null)
+          ? +(endCredits - creditsGained).toFixed(1)
+          : null;
+
+        if (!monthEntries[monthKey]) monthEntries[monthKey] = [];
+        monthEntries[monthKey].push({ month: monthLabel, inProgress, creditsGained });
+
+        return { month: monthLabel, monthKey, snapshotDate: dateStr, startCredits, endCredits, creditsGained, inProgress };
+      });
+
+      if (!months.length) return;
+      const completed = months.filter(m => !m.inProgress && m.creditsGained !== null);
+      const totalCreditsGained = +completed.reduce((sum, m) => sum + m.creditsGained, 0).toFixed(1);
+      const last = months[months.length - 1];
+
+      finalByStudent[id] = {
+        id, name: null,
+        months, totalCreditsGained,
+        latestCredits:   last.endCredits ?? last.startCredits,
+        earliestCredits: months[0].startCredits,
+      };
+    });
+
+    const cohort = Object.entries(monthEntries).map(([monthKey, entries]) => {
+      const completed  = entries.filter(e => !e.inProgress && e.creditsGained !== null);
+      const gains       = completed.map(e => e.creditsGained);
+      const avgGained   = gains.length ? +(gains.reduce((a, v) => a + v, 0) / gains.length).toFixed(1) : null;
+      const totalGained = +gains.reduce((a, v) => a + v, 0).toFixed(1);
+      return {
+        month:          entries[0] ? entries[0].month : monthKey,
+        studentCount:   entries.length,
+        completedCount: completed.length,
+        avgGained,
+        totalGained,
+      };
+    }).filter(m => m.studentCount > 0)
+      .sort((a, b) => new Date(a.month) - new Date(b.month));
+
+    Logger.log('HS Monthly Cohort (vault): ' + Object.keys(finalByStudent).length + ' students, ' + cohort.length + ' months');
+    return { byStudent: finalByStudent, cohort };
+
+  } catch(e) {
+    Logger.log('buildHSMonthlyCohortFromVault_ error: ' + e.message);
+    return empty;
+  }
+}
+
+// =========
+// VAULT PATH — Trade Monthly cohort
+// ---------
+
+function reshapeTradeSnapshotsForCohort_(tradeSnapshotRows, nameMap) {
+  const nameById = {};
+  (nameMap || []).forEach(m => {
+    if (m.studentId) nameById[String(m.studentId).trim()] = m.masterName || m.studentId;
+  });
+
+  const currentMonthKey = _normMonthLabel(
+    Utilities.formatDate(new Date(), Session.getScriptTimeZone(), 'MMM yyyy')
+  );
+
+  const byKey = {};
+  (tradeSnapshotRows || []).forEach(row => {
+    if (String(row.cadence || '').trim().toLowerCase() !== 'monthly') return;
+    const sid   = String(row.studentId || '').trim();
+    const trade = String(row.trade || '').trim();
+    if (!sid || !trade) return;
+
+    const dateStr = String(row.snapshotDate || '');
+    const dateObj = _parseLocalDate(dateStr.slice(0, 10)) || new Date(dateStr);
+    const monthLabel = !isNaN(dateObj.getTime())
+      ? Utilities.formatDate(dateObj, Session.getScriptTimeZone(), 'MMM yyyy')
+      : dateStr;
+    const monthKey = _normMonthLabel(monthLabel);
+    const isCurrentMonth = monthKey === currentMonthKey;
+    const isNew = String(row.status || '').trim().toLowerCase() === 'new';
+
+    const key = sid + '||' + trade;
+    if (!byKey[key]) byKey[key] = { student: nameById[sid] || sid, trade, months: [] };
+    byKey[key].months.push({
+      month:          monthLabel,
+      addedPostFirst: isNew,
+      inProgress:     isCurrentMonth,
+      overallGain:    (isCurrentMonth || isNew) ? null : (row.gain !== undefined && row.gain !== '' ? Number(row.gain) : null),
+      endOverallPct:  isCurrentMonth ? null : (row.overallPercent !== undefined && row.overallPercent !== '' ? Number(row.overallPercent) : null),
+    });
+  });
+
+  return Object.values(byKey);
+}
+
+function getTradeMonthlyCohortSummaryFromVault_(tradeSnapshotRows, nameMap) {
+  const reshaped = reshapeTradeSnapshotsForCohort_(tradeSnapshotRows, nameMap);
+  return getTradeMonthlyCohortSummary(reshaped); // unchanged, reused as-is
 }
