@@ -111,11 +111,7 @@ const TargetDateEngine = {
   },
 
   // ── Credit calculator ─────────────────────────────────────
-  // Category is now derived directly from the Course ID's 2-letter
-  // prefix (EL/EN/FA/LA/MA/SC/SS) rather than a catalogue lookup or
-  // free-text Subject matching. This works for both catalogue
-  // courses and manually-assigned transfer-course IDs, as long as
-  // the prefix was chosen to match the right category.
+
 
   calculateCredits(courses, courseIdToCategory) {
     const maxCredits = {
@@ -139,9 +135,6 @@ const TargetDateEngine = {
       const credit = Number(course.credit) || 0;
 
       let category = this._categoryFromCourseId(course.courseId);
-
-      // Fall back to subject-text guessing only if the Course ID
-      // doesn't parse to a known prefix (e.g. truly blank/malformed ID)
       if (!category) {
         category = this._normalizeCategory(course.subject || '');
       }
@@ -171,10 +164,6 @@ const TargetDateEngine = {
   },
 
   // ── Private helpers ───────────────────────────────────────
-
-  // Parses the 2-letter prefix off a Course ID (e.g. "MA-0018-S1",
-  // case-insensitive) and returns the matching category name, or
-  // null if the ID is blank, malformed, or uses an unrecognized prefix.
   _categoryFromCourseId(courseId) {
     const id = String(courseId || '').trim();
     if (!id) return null;
