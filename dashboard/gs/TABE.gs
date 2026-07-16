@@ -4,18 +4,17 @@
 // ============================================================
 
 // ── Upload ────────────────────────────────────────────────────
-// Accepts a base64-encoded CSV string, parses it, and writes
-// to the TABE Data and TABE History sheets in SS_HUB.
 function uploadTABEData(base64Csv, role) {
   _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
   try {
-    const csv     = Utilities.newBlob(Utilities.base64Decode(base64Csv)).getDataAsString();
-    const rows    = _parseTABECsv(csv);
+    const csv  = Utilities.newBlob(Utilities.base64Decode(base64Csv)).getDataAsString();
+    const rows = _parseTABECsv(csv);
     if (!rows.length) return { error: 'No valid student rows found in the CSV.' };
 
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    _writeTABEDataSheet(hubSS, rows);
-    _appendTABEHistory(hubSS, rows);
+    if (USE_VAULT_TABE) {
+      _writeTABEDataSheetVault_(rows);
+      _appendTABEHistoryVault_(rows);
+    }
     _clearDashboardCache();
 
     return { success: true, count: rows.length };
@@ -26,12 +25,6 @@ function uploadTABEData(base64Csv, role) {
 }
 
 // ── CIS Master Testing Roster HTML parsing ───────────────────
-// CIS exports this report as an HTML file with a .xls extension.
-// Unlike the old flat CSV (one row per student with precomputed
-// prev/curr/best columns), this report lists RAW test attempts:
-// one header block per student, followed by one row per test
-// taken (grouped by subject, newest first), repeated across many
-// printed "pages" with duplicate column headers in between.
 function _tabeLooksLikeRosterHtml(str) {
   return /MASTER TESTING ROSTER REPORT/i.test(str) ||
          (/Student Name\s*\/\s*ID/i.test(str) && /TABE (Mathematics|Reading)/i.test(str));
@@ -51,9 +44,6 @@ function _tabeStripTags(html) {
   return _tabeDecodeEntities(String(html).replace(/<[^>]+>/g, ' ')).replace(/\s+/g, ' ').trim();
 }
 
-// Parses the CIS Master Testing Roster HTML export into rows shaped
-// to match TABE_HEADERS — same output contract as _parseTABECsv, so
-// _writeTABEDataSheet / _appendTABEHistory need no further changes.
 function _tabeParseRosterHtml(html) {
   const rowsHtml = [];
   const trRegex  = /<tr[^>]*>([\s\S]*?)<\/tr>/gi;
@@ -74,12 +64,11 @@ function _tabeParseRosterHtml(html) {
 
   rowsHtml.forEach(trInner => {
     const cells = cellsOf(trInner);
-    if (cells.length < 8) return; // banner/title rows have far fewer cells — skip
+    if (cells.length < 8) return; 
 
     const firstCellRaw = cells[0] || '';
     const divMatches    = [...firstCellRaw.matchAll(/<div>([\s\S]*?)<\/div>/gi)];
 
-    // Student header row: first cell holds two stacked <div>s — name, then ID
     if (divMatches.length >= 2) {
       const name = _tabeStripTags(divMatches[0][1]);
       const id   = _tabeStripTags(divMatches[1][1]);
@@ -89,21 +78,19 @@ function _tabeParseRosterHtml(html) {
         byId[id] = current;
         studentsInOrder.push(current);
       } else {
-        current = byId[id]; // continuation of same student across a page break
+        current = byId[id]; 
       }
       const hsdStatus = _tabeStripTags(cells[3] || '');
       if (hsdStatus) current.hsdStatus = hsdStatus;
       return;
     }
 
-    // Otherwise, a test-attempt row for whichever student is "current"
     if (!current) return;
     const testType = _tabeStripTags(cells[4] || '');
-    if (!testType) return; // blank filler row or repeated column-header row
+    if (!testType) return;
 
     const validTest = _tabeStripTags(cells[7] || '').toUpperCase();
-    if (validTest === 'N') return; // explicitly invalidated test — skip
-
+    if (validTest === 'N') return; 
     const testDate = _tabeStripTags(cells[8] || '');
     const scale    = parseFloat(_tabeStripTags(cells[9] || ''));
     const efl      = _tabeStripTags(cells[11] || '');
@@ -154,8 +141,6 @@ function _tabeParseRosterHtml(html) {
 
 
 // ── CSV parsing ───────────────────────────────────────────────
-// Converts raw TABE CSV export into structured row arrays
-// ready to write to the TABE Data sheet.
 function _parseTABECsv(csv) {
   if (_tabeLooksLikeRosterHtml(csv)) {
     return _tabeParseRosterHtml(csv);
@@ -184,7 +169,6 @@ function _parseTABECsv(csv) {
       const c = col(label);
       return c >= 0 ? String(cells[c] || '').trim().replace(/"/g, '') : '';
     }
-
     rows.push([
       id, name, val('hsd status'),
       // Math
@@ -204,8 +188,6 @@ function _parseTABECsv(csv) {
   }
   return rows;
 }
-
-// Handles quoted fields and commas within quotes
 function _splitCsvLine(line) {
   const result = [];
   let current  = '';
@@ -225,50 +207,70 @@ function _splitCsvLine(line) {
   return result;
 }
 
-// ── Sheet writers ─────────────────────────────────────────────
-// Overwrites the TABE Data sheet with the latest upload
-function _writeTABEDataSheet(hubSS, rows) {
-  let sheet = hubSS.getSheetByName(SHEET_TABE);
-  if (!sheet) {
-    sheet = hubSS.insertSheet(SHEET_TABE);
-  } else {
-    sheet.clearContents();
+// ── Sheet writers (legacy path — clear + rewrite) ───────────────
+
+
+
+// ── Sheet writers — VAULT PATH (upsert, not clear-and-rewrite) ──
+
+// TABE Data under Vault follows the same upsert-not-delete
+// principle as the rest of SS_VAULT, unlike the legacy sheet which
+// wipes and rewrites the entire tab on every upload. Existing
+// students (matched by studentId in column A) get their row
+// replaced in place; new students get appended.
+function _writeTABEDataSheetVault_(rows) {
+  const sheet   = getVaultSheet_(VAULT_SHEET_TABE);
+  const lastRow = sheet.getLastRow();
+  const numCols = VAULT_TABE_HEADERS_().length;
+
+
+
+  const existingIdToRow = {};
+  if (lastRow >= VAULT_DATA_START_ROW) {
+    sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues()
+      .forEach((r, i) => {
+        const id = String(r[0] || '').trim();
+        if (id) existingIdToRow[id] = VAULT_DATA_START_ROW + i;
+      });
   }
-  const allRows = [TABE_HEADERS, ...rows];
-  sheet.getRange(1, 1, allRows.length, allRows[0].length).setValues(allRows);
-  sheet.getRange(1, 1, 1, TABE_HEADERS.length)
-    .setFontWeight('bold')
-    .setBackground('#1f2937')
-    .setFontColor('#ffffff');
-  sheet.setFrozenRows(1);
-  Logger.log('TABE Data: wrote ' + rows.length + ' rows');
+
+  const toAppend = [];
+  let updated = 0;
+  rows.forEach(row => {
+    const id = String(row[0] || '').trim();
+    if (!id) return;
+    const rowNum = existingIdToRow[id];
+    if (rowNum) {
+      sheet.getRange(rowNum, 1, 1, numCols).setValues([row]);
+      updated++;
+    } else {
+      toAppend.push(row);
+    }
+  });
+
+  if (toAppend.length) {
+    sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, numCols).setValues(toAppend);
+  }
+  // Guard studentId against Sheets auto-converting numeric-looking IDs
+  sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
+
+  Logger.log('TABE Data (vault): ' + updated + ' updated in place, ' + toAppend.length + ' new');
 }
 
-// Appends new test entries to TABE History (one row per subtest per student)
-// Skips entries that already exist for the same student + subject + date.
-function _appendTABEHistory(hubSS, rows) {
-  let sheet = hubSS.getSheetByName(SHEET_TABE_HISTORY);
-  if (!sheet) {
-    sheet = hubSS.insertSheet(SHEET_TABE_HISTORY);
-    sheet.appendRow(TABE_HISTORY_HEADERS);
-    sheet.getRange(1, 1, 1, TABE_HISTORY_HEADERS.length)
-      .setFontWeight('bold')
-      .setBackground('#1f2937')
-      .setFontColor('#ffffff');
-    sheet.setFrozenRows(1);
-  }
-
-  // Build a set of existing entries to avoid duplicates
-  const lastRow  = sheet.getLastRow();
+// Same append-only, dedupe-by-(id||subject||date) logic as the
+// legacy version — VAULT_TABE_HISTORY_HEADERS reuses
+// TABE_HISTORY_HEADERS verbatim, so no reshaping needed, just a
+// different destination sheet.
+function _appendTABEHistoryVault_(rows) {
+  const sheet   = getVaultSheet_(VAULT_SHEET_TABE_HISTORY);
+  const lastRow = sheet.getLastRow();
   const existing = new Set();
-  if (lastRow > 1) {
-    sheet.getRange(2, 1, lastRow - 1, 4).getValues().forEach(r => {
+  if (lastRow >= VAULT_DATA_START_ROW) {
+    sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 4).getValues().forEach(r => {
       existing.add(String(r[0]) + '||' + String(r[2]) + '||' + String(r[3]));
     });
   }
 
-  // Subtest column indices within each data row (matching TABE_HEADERS order)
-  // Math current: cols 8-11, Reading current: cols 22-25
   const SUBTESTS = [
     { subject: 'Math',    dateIdx: 8,  scaleIdx: 9,  eflIdx: 10, eflLevelIdx: 11 },
     { subject: 'Reading', dateIdx: 22, scaleIdx: 23, eflIdx: 24, eflLevelIdx: 25 },
@@ -288,14 +290,16 @@ function _appendTABEHistory(hubSS, rows) {
     });
   });
 
-  if (!toAppend.length) { Logger.log('TABE History: no new entries to append'); return; }
+  if (!toAppend.length) { Logger.log('TABE History (vault): no new entries to append'); return; }
   sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, 7).setValues(toAppend);
-  Logger.log('TABE History: appended ' + toAppend.length + ' new entries');
+  sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
+  Logger.log('TABE History (vault): appended ' + toAppend.length + ' new entries');
 }
 
 // ── Cohort summary ────────────────────────────────────────────
-// Computes aggregate TABE stats for the dashboard cohort card.
-// Accepts the tabeData map from parseTABESheet().
+// No Vault branch needed — operates on already-parsed tabeData
+// (parseTABESheet output), and TABE's row shape is unchanged
+// under Vault. Confirmed compatible as-is.
 function getTABECohortSummary(tabeData) {
   if (!tabeData || !Object.keys(tabeData).length) {
     return { totalStudents: 0, math: null, reading: null };
@@ -340,36 +344,61 @@ function getTABECohortSummary(tabeData) {
   };
 }
 
-// ── Scheduled snapshot ────────────────────────────────────────
-// Appends the current TABE predictions to a history sheet
-// for trend tracking. Called by a monthly trigger.
+// ============================================================
+// snapshotTABEGainPredictions() — rebuilt Vault-native.
+// ------------------------------------------------------------
+// The old version (see prior comment, now removed) read from a
+// sheet nothing ever wrote to and wrote into a sheet with an
+// incompatible column shape — confirmed dead. This version just
+// calls the existing, already-correct getTABEGainPredictions()
+// (which computes everything live from TABE History) and appends
+// its output into VAULT_SHEET_TABE_PREDICTIONS as an append-only
+// snapshot log, one row per student+subject, dated to when the
+// snapshot ran. Uses a large topN so this snapshots every
+// student with enough test history, not just the top 10 shown
+// on the dashboard.
+// ============================================================
 function snapshotTABEGainPredictions() {
   try {
-    const hubSS     = SpreadsheetApp.openById(SS_HUB);
-    const predSheet = hubSS.getSheetByName(SHEET_TABE_PREDICTIONS);
-    if (!predSheet) { Logger.log('snapshotTABEGainPredictions: predictions sheet not found'); return; }
-
-    let histSheet = hubSS.getSheetByName(SHEET_TABE_HISTORY);
-    if (!histSheet) {
-      histSheet = hubSS.insertSheet(SHEET_TABE_HISTORY);
-      histSheet.appendRow(TABE_PREDICTIONS_HEADERS);
-      histSheet.getRange(1, 1, 1, TABE_PREDICTIONS_HEADERS.length)
-        .setFontWeight('bold')
-        .setBackground('#1f2937')
-        .setFontColor('#ffffff');
-      histSheet.setFrozenRows(1);
+    const today = _toDateStr(new Date());
+    const predictions = getTABEGainPredictions(999999);
+    if (predictions.error) {
+      Logger.log('snapshotTABEGainPredictions: ' + predictions.error);
+      return { success: false, error: predictions.error };
     }
 
-    const lastPredRow = predSheet.getLastRow();
-    if (lastPredRow < 2) { Logger.log('snapshotTABEGainPredictions: no predictions to snapshot'); return; }
+    const rowsToWrite = [];
+    [['Reading', predictions.reading], ['Math', predictions.math]].forEach(([subjectLabel, list]) => {
+      (list || []).forEach(s => {
+        rowsToWrite.push({
+          'Snapshot Date':    today,
+          'Subject':          subjectLabel,
+          'Rank':             s.rank || '',
+          'Student ID':       s.id,
+          'Student Name':     s.name,
+          'Current Level':    s.currentLevel,
+          'Current Scale':    s.currentScale,
+          'Next Level':       s.nextLevel,
+          'Points To Next':   s.pointsToNext,
+          'Weekly Rate':      s.weeklyRate,
+          'Predicted Weeks':  s.predictedWeeks,
+          'Tests On File':    s.testsOnFile,
+          'Span Weeks':       s.spanWeeks,
+        });
+      });
+    });
 
-    const predRows = predSheet.getRange(2, 1, lastPredRow - 1, TABE_PREDICTIONS_HEADERS.length).getValues();
-    if (!predRows.length) return;
+    if (!rowsToWrite.length) {
+      Logger.log('snapshotTABEGainPredictions: no predictions to snapshot');
+      return { success: true, written: 0 };
+    }
 
-    histSheet.getRange(histSheet.getLastRow() + 1, 1, predRows.length, predRows[0].length).setValues(predRows);
-    Logger.log('snapshotTABEGainPredictions: appended ' + predRows.length + ' rows');
+    const written = appendVaultRows_(VAULT_SHEET_TABE_PREDICTIONS, TABE_PREDICTIONS_HEADERS, rowsToWrite);
+    Logger.log('snapshotTABEGainPredictions: appended ' + written + ' rows');
+    return { success: true, written };
   } catch(e) {
     Logger.log('snapshotTABEGainPredictions error: ' + e.message);
+    return { success: false, error: e.message };
   }
 }
 
@@ -391,23 +420,17 @@ function removeTABESnapshotTrigger() {
 }
 
 // ── TABE Gain Predictions ─────────────────────────────────────
-// Reads TABE History sheet, computes weekly gain rate per student
-// per subject using full test history, ranks by predicted weeks
-// to reach next EFL level. Returns top N for each subject.
-//
-// Called directly by getLatestTABEGainSnapshot() below, and also
-// by snapshotTABEGainPredictions() on the monthly trigger.
 function getTABEGainPredictions(topN) {
   topN = topN || 10;
   try {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
-    const sheet = hubSS.getSheetByName(SHEET_TABE_HISTORY);
-    if (!sheet) return { reading: [], math: [], error: 'TABE History sheet not found yet — upload TABE scores at least once.' };
+    let values;
 
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { reading: [], math: [], error: 'No history recorded yet.' };
-
-    const values = sheet.getRange(2, 1, lastRow - 1, TABE_HISTORY_HEADERS.length).getValues();
+    if (USE_VAULT_TABE) {
+      const sheet   = getVaultSheet_(VAULT_SHEET_TABE_HISTORY);
+      const lastRow = sheet.getLastRow();
+      if (lastRow < VAULT_DATA_START_ROW) return { reading: [], math: [], error: 'No history recorded yet.' };
+      values = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, VAULT_TABE_HISTORY_HEADERS_().length).getValues();
+    }
 
     // Group by student ID + subject
     const grouped = {};
@@ -435,13 +458,9 @@ function getTABEGainPredictions(topN) {
       if (!grouped[key]) grouped[key] = { id, name, subject, tests: [] };
       grouped[key].tests.push({ dateMs, date: dateStr, scale });
     });
-
     const results = { Reading: [], Math: [] };
-
     Object.values(grouped).forEach(g => {
       if (!TABE_THRESHOLDS[g.subject]) return;
-
-      // Dedup by date+score
       const uniqueTests = [];
       const seen = new Set();
       g.tests.sort((a, b) => a.dateMs - b.dateMs);
@@ -469,11 +488,9 @@ function getTABEGainPredictions(topN) {
       const totalDays  = (latest.dateMs - first.dateMs) / 86400000;
       const totalWeeks = totalDays / 7;
       if (totalWeeks <= 0) return;
-
       const totalGain  = latest.scale - first.scale;
       const weeklyRate = totalGain / totalWeeks;
       if (weeklyRate <= 0) return;
-
       const predictedWeeks = pointsToNext / weeklyRate;
 
       results[g.subject].push({
@@ -552,8 +569,6 @@ function _tabeParseDate(dateStr) {
 }
 
 // ── Latest snapshot for UI ────────────────────────────────────
-// Called via google.script.run.getLatestTABEGainSnapshot()
-// Computes live from TABE History — no separate predictions sheet needed.
 function getLatestTABEGainSnapshot() {
   try {
     const result = getTABEGainPredictions(10);
@@ -568,12 +583,10 @@ function getLatestTABEGainSnapshot() {
     return { reading: [], math: [], snapshotDate: null, error: e.message };
   }
 }
-// Detects CIS's fake-.xls-but-actually-HTML export format
 function _looksLikeHtmlTable(str) {
   return /<html[\s>]|<table[\s>]/i.test(str.slice(0, 3000));
 }
 
-// Extracts table rows (array of cell-string arrays) from an HTML table export
 function _parseHtmlTableRows(html) {
   const tableMatch = html.match(/<table[^>]*>([\s\S]*?)<\/table>/i);
   const tableHtml  = tableMatch ? tableMatch[1] : html;
@@ -603,7 +616,6 @@ function _decodeHtmlEntities(str) {
     .replace(/&#39;|&apos;/gi, "'");
 }
 
-// Legacy plain-CSV path, unchanged behavior — now returns array of arrays
 function _parseDelimitedTextRows(csv) {
   const lines = csv.split('\n').map(l => l.trim()).filter(Boolean);
   return lines.map(l => _splitCsvLine(l));
@@ -622,4 +634,9 @@ function debugTABEGainPredictions() {
     Logger.log((i+1) + '. ' + s.name + ' — Level ' + s.currentLevel + ' (' + s.currentScale +
       ') → Level ' + s.nextLevel + ' | needs +' + s.pointsToNext +
       ' | rate: ' + s.weeklyRate + ' pts/wk | ~' + s.predictedWeeks + ' wks'));
+}
+function checkTriggers() {
+  ScriptApp.getProjectTriggers().forEach(t => {
+    Logger.log(t.getHandlerFunction() + ' — ' + t.getEventType());
+  });
 }
