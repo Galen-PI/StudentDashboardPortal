@@ -1,24 +1,29 @@
 // ============================================================
-// BulkPacing.gs — "Assign Student Hours" bulk tool
+// BulkPacing.gs — "Assign Student Hours" bulk tool (Vault-only)
 // ------------------------------------------------------------
 // Scans every student's on-file weekly schedule, detects how
 // many academic hours/week they're scheduled for and which
 // bi-weekly rotation (weeks 1&3 vs 2&4) they're currently in,
 // and lets staff batch-apply those as pacing settings.
 //
-// Mirrors the exact logic already used elsewhere so results
-// never drift from what the rest of the dashboard shows:
-//   - Period/day schedule shape & ACADEMIC_NAMES matching:
-//     same as getStudentSchedule() in DataFetch.gs
-//   - Week-of-month bucketing (1-7/8-14/15-21/22+):
-//     same as TargetDateEngine's day-of-month logic
-//   - Settings storage (Name Mapping columns O-S):
-//     same as saveSettingsToHub_() / getSettingsFromHub_()
-//     in Transcripts.gs
+// Pacing settings (weekly hours + active-week rotation) now live
+// in their own Vault sheet, VAULT_SHEET_STUDENT_PACING, keyed by
+// studentId — NOT Name Mapping columns O-S, which never existed
+// in Vault's 5-column Name Mapping schema in the first place.
+// Reads/writes here are upsert-not-delete, same principle as
+// every other Vault write in this project.
 // ============================================================
 
-const PACING_VALID_PERIODS  = { M:[1,2,3,5,6], T:[1,2,3,5,6,7], W:[1,2,3,5,6], TH:[1,2,3,5,6,7], F:[1,2,3,5,6,7] };
-const PACING_ACADEMIC_NAMES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
+// NOTE: PACING_VALID_PERIODS / PACING_ACADEMIC_NAMES used to be
+// this file's own local copy of the schedule-matching constants
+// (now consolidated in Config.gs as SCHEDULE_VALID_PERIODS /
+// SCHEDULE_ACADEMIC_NAMES). Intentionally NOT aliased here at
+// top level — cross-file .gs load order isn't guaranteed, so a
+// top-level `const X = Y` reaching into another file's top-level
+// const risks a "cannot access before initialization" error if
+// this file happens to load before Config.gs. Referenced directly
+// inside the function body below instead, which is always safe
+// since all files finish loading before any function runs.
 
 // ============================================================
 // SECTION 1 — SCAN ALL STUDENTS
@@ -26,44 +31,32 @@ const PACING_ACADEMIC_NAMES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
 
 function scanAllStudentPacing() {
   try {
-    const hubSS = SpreadsheetApp.openById(SS_HUB);
+    // ── Student list — Vault Name Mapping (5-column schema) ──────
+    const nameRows = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
+    if (!nameRows.length) return { success: false, error: 'Name Mapping is empty.' };
 
-    // ── Name Mapping: student list + existing settings (cols A-S) ──
-    const mapSheet = hubSS.getSheetByName(SHEET_MAPPING);
-    if (!mapSheet) return { success: false, error: 'Name Mapping sheet not found.' };
+    // ── Existing pacing settings — dedicated Vault sheet, ID-keyed ──
+    const pacingRows = readVaultSheetAsObjects_(VAULT_SHEET_STUDENT_PACING, VAULT_STUDENT_PACING_HEADERS);
+    const pacingById = {};
+    pacingRows.forEach(row => {
+      const id = String(row.studentId || '').trim();
+      if (id) pacingById[id] = row;
+    });
 
-    const mapLastRow = mapSheet.getLastRow();
-    if (mapLastRow < 2) return { success: false, error: 'Name Mapping is empty.' };
-
-    const mapData = mapSheet.getRange(2, 1, mapLastRow - 1, NM_COL_W4).getValues();
-
-    // ── Schedule sheet: one row per student, batch-read once ──
-    const schedSheet = hubSS.getSheetByName(SHEET_SCHEDULE);
-    const scheduleByStudentId = {};
-    if (schedSheet && schedSheet.getLastRow() > 1) {
-      const schedValues = schedSheet.getDataRange().getValues();
-      // Row 0 is header: Week, Student Name, Student ID, Schedule JSON
-      for (let i = 1; i < schedValues.length; i++) {
-        const sid = String(schedValues[i][2] || '').trim();
-        if (!sid) continue;
-        try {
-          scheduleByStudentId[sid] = JSON.parse(String(schedValues[i][3] || '{}'));
-        } catch (e) {
-          // Malformed JSON for this student — treat as no schedule
-        }
-      }
-    }
+    // ── Schedule lookup — Vault Weekly Schedule, 'current' slot only ──
+    const scheduleByStudentId = _pacingLoadScheduleFromVault_();
 
     const currentRotation = _pacingCurrentRotation_();
 
     const students = [];
-    mapData.forEach(row => {
-      const studentId = String(row[NM_COL_ID - 1] || '').trim();
+    nameRows.forEach(row => {
+      const studentId = String(row.studentId || '').trim();
       if (!studentId) return;
 
-      const masterName = String(row[1] || '').trim();      // Col B
-      const academicName = String(row[NM_COL_ACADEMIC_NAME - 1] || '').trim();
-      const displayName = masterName || academicName || studentId;
+      const isActive = row.active === true || String(row.active).toLowerCase() === 'true';
+      if (!isActive) return;
+
+      const displayName = String(row.masterName || '').trim() || studentId;
 
       const schedule = scheduleByStudentId[studentId] || null;
       const hasSchedule = !!schedule;
@@ -72,16 +65,17 @@ function scanAllStudentPacing() {
         ? _pacingDetectFromSchedule_(schedule)
         : { hours: 0, activeWeeks: currentRotation };
 
-      // Existing saved settings (cols O-S)
-      const existingHoursRaw = Number(row[NM_COL_WEEKLY_HOURS - 1]);
-      const hasExisting = isFinite(existingHoursRaw) && existingHoursRaw > 0;
+      // Existing saved settings, from Student Pacing Settings
+      const existing = pacingById[studentId] || null;
+      const existingHoursRaw = existing ? Number(existing.weeklyHours) : NaN;
+      const hasExisting = existing != null && isFinite(existingHoursRaw) && existingHoursRaw > 0;
       const existingHours = hasExisting ? existingHoursRaw : SETTINGS_DEFAULTS.weeklyHours;
-      const existingActiveWeeks = {
-        w1: row[NM_COL_W1 - 1] === true || row[NM_COL_W1 - 1] === 'TRUE',
-        w2: row[NM_COL_W2 - 1] === true || row[NM_COL_W2 - 1] === 'TRUE',
-        w3: row[NM_COL_W3 - 1] === true || row[NM_COL_W3 - 1] === 'TRUE',
-        w4: row[NM_COL_W4 - 1] === true || row[NM_COL_W4 - 1] === 'TRUE',
-      };
+      const existingActiveWeeks = existing ? {
+        w1: existing.w1 === true || String(existing.w1).toUpperCase() === 'TRUE',
+        w2: existing.w2 === true || String(existing.w2).toUpperCase() === 'TRUE',
+        w3: existing.w3 === true || String(existing.w3).toUpperCase() === 'TRUE',
+        w4: existing.w4 === true || String(existing.w4).toUpperCase() === 'TRUE',
+      } : { w1: false, w2: false, w3: false, w4: false };
 
       let status;
       if (!hasSchedule) {
@@ -115,7 +109,7 @@ function scanAllStudentPacing() {
 
     students.sort((a, b) => a.displayName.localeCompare(b.displayName));
 
-    return { success: true, students, currentRotation };
+    return { success: true, students, currentRotation, scheduleSource: 'vault' };
 
   } catch (err) {
     Logger.log('scanAllStudentPacing error: ' + err.message);
@@ -123,27 +117,59 @@ function scanAllStudentPacing() {
   }
 }
 
+// ── Vault schedule loader — 2-slot rotation format, only reads
+function _pacingLoadScheduleFromVault_() {
+  const scheduleByStudentId = {};
+  const rows = readVaultSheetAsObjects_(VAULT_SHEET_WEEKLY_SCHEDULE, VAULT_SCHEDULE_HEADERS);
+
+  rows.forEach(row => {
+    if (String(row.slot).trim().toLowerCase() !== 'current') return;
+    const sid = String(row.studentId || '').trim();
+    if (!sid) return;
+    try {
+      scheduleByStudentId[sid] = JSON.parse(String(row.scheduleJson || '{}'));
+    } catch (e) {
+      // Malformed JSON for this student — treat as no schedule
+    }
+  });
+
+  return scheduleByStudentId;
+}
+
 // ── Detect weekly hours + rotation from one student's schedule JSON ──
 function _pacingDetectFromSchedule_(schedule) {
   let hours = 0;
-  Object.entries(PACING_VALID_PERIODS).forEach(([day, validPeriods]) => {
+  Object.entries(SCHEDULE_VALID_PERIODS).forEach(([day, validPeriods]) => {
     validPeriods.forEach(periodNum => {
       const entry = (schedule['Period ' + periodNum] || {})[day];
       if (!entry || !entry.class) return;
-      if (PACING_ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
+      if (SCHEDULE_ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
         hours++;
       }
     });
   });
 
-  return { hours, activeWeeks: _pacingCurrentRotation_() };
+  // Ground-truth check for the CURRENT week only — this is the one
+  // week we actually have real schedule data for (Weekly Schedule
+  // only holds the 'current' slot). If the schedule shows academic
+  // periods this week, this week really is an academic week; if it
+  // shows none, it's a trade week. This corrects the current bucket
+  // against real data instead of assuming. We still can't verify
+  // the OTHER three rotation weeks this way — there's no schedule
+  // data for weeks we haven't uploaded yet — so those three stay on
+  // the calendar-alternation assumption from _pacingCurrentRotation_().
+  const activeWeeks = _pacingCurrentRotation_();
+  const currentBucket = 'w' + getCurrentWeekOfMonth_();
+  activeWeeks[currentBucket] = hours > 0;
+
+  return { hours, activeWeeks };
 }
 
-// ── Which bi-weekly rotation is "now", using the same day-of-month
-//    week buckets as TargetDateEngine (1-7=w1, 8-14=w2, 15-21=w3, 22+=w4) ──
+// ── Which bi-weekly rotation is "now" — routed through the shared
+//    getCurrentWeekOfMonth_() (Helpers.gs) so setWeekOverride()
+//    actually takes effect here too, same as TimeLog.gs. ──
 function _pacingCurrentRotation_() {
-  const dayOfMonth = new Date().getDate();
-  const week = dayOfMonth <= 7 ? 1 : dayOfMonth <= 14 ? 2 : dayOfMonth <= 21 ? 3 : 4;
+  const week = getCurrentWeekOfMonth_();
   const isOdd = week === 1 || week === 3;
   return isOdd
     ? { w1: true,  w2: false, w3: true,  w4: false }
@@ -152,54 +178,68 @@ function _pacingCurrentRotation_() {
 
 // ============================================================
 // SECTION 2 — BATCH APPLY
+// ------------------------------------------------------------
+// Upsert into VAULT_SHEET_STUDENT_PACING, keyed by studentId —
+// same upsert-not-delete principle as TABE Data / Weekly Schedule
+// / Student Course Data.
 // ============================================================
 
 function batchApplyStudentPacing(updates) {
   try {
     if (!updates || !updates.length) return { success: false, error: 'No updates provided.' };
 
-    const hubSS   = SpreadsheetApp.openById(SS_HUB);
-    const sheet   = hubSS.getSheetByName(SHEET_MAPPING);
-    if (!sheet) return { success: false, error: 'Name Mapping sheet not found.' };
-
+    const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
     const lastRow = sheet.getLastRow();
-    if (lastRow < 2) return { success: false, error: 'Name Mapping is empty.' };
+    const numCols = VAULT_STUDENT_PACING_HEADERS.length;
 
-    const ids = sheet.getRange(2, NM_COL_ID, lastRow - 1, 1).getValues().map(r => String(r[0] || '').trim());
+    const existingIdToRow = {};
+    if (lastRow >= VAULT_DATA_START_ROW) {
+      sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues()
+        .forEach((r, i) => {
+          const id = String(r[0] || '').trim();
+          if (id) existingIdToRow[id] = VAULT_DATA_START_ROW + i;
+        });
+    }
 
-    const idToRowNum = {};
-    ids.forEach((id, i) => { if (id) idToRowNum[id] = i + 2; });
-
+    const now = new Date().toISOString();
+    const toAppend = [];
     let applied = 0;
     const skipped = [];
 
-    // Batch the writes: build one contiguous range write per row rather
-    // than 5 separate setValue calls per student (matches the batching
-    // style used elsewhere, e.g. seedHubSettings()).
     updates.forEach(u => {
-      const rowNum = idToRowNum[u.studentId];
-      if (!rowNum) { skipped.push(u.studentId); return; }
+      const studentId = String(u.studentId || '').trim();
+      if (!studentId) { skipped.push(u.studentId); return; }
 
       const weeklyHours = u.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
       const weeks = u.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
 
-      sheet.getRange(rowNum, NM_COL_WEEKLY_HOURS, 1, 5).setValues([[
-        weeklyHours,
-        weeks.w1 === true,
-        weeks.w2 === true,
-        weeks.w3 === true,
-        weeks.w4 === true,
-      ]]);
+      const row = [
+        studentId, weeklyHours,
+        weeks.w1 === true, weeks.w2 === true, weeks.w3 === true, weeks.w4 === true,
+        now,
+      ];
 
+      const rowNum = existingIdToRow[studentId];
+      if (rowNum) {
+        sheet.getRange(rowNum, 1, 1, numCols).setValues([row]);
+      } else {
+        toAppend.push(row);
+      }
       applied++;
 
-      logTranscriptWrite_(
-        'Hub Settings (Bulk)',
-        rowNum,
+      logTranscriptWriteVault_(
+        studentId,
+        'pacing',
         'SETTINGS_UPDATED',
-        `Student ${u.studentId}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`
+        `Student ${studentId}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`
       );
     });
+
+    if (toAppend.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, numCols).setValues(toAppend);
+    }
+    // Guard studentId against Sheets auto-converting numeric-looking IDs
+    sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
 
     SpreadsheetApp.flush();
 
@@ -213,5 +253,20 @@ function batchApplyStudentPacing(updates) {
   } catch (err) {
     Logger.log('batchApplyStudentPacing error: ' + err.message);
     return { success: false, error: err.message };
+  }
+}
+
+
+// ============================================================
+// VAULT DEBUG HELPER
+// ============================================================
+
+function debugPacingScheduleSourceVault() {
+  const scheduleByStudentId = _pacingLoadScheduleFromVault_();
+  const ids = Object.keys(scheduleByStudentId);
+  Logger.log('Students with a "current" Vault schedule: ' + ids.length);
+  if (ids.length) {
+    Logger.log('Sample studentId: ' + ids[0]);
+    Logger.log('Detected pacing: ' + JSON.stringify(_pacingDetectFromSchedule_(scheduleByStudentId[ids[0]])));
   }
 }
