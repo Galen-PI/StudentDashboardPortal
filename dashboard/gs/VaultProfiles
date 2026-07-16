@@ -1,0 +1,427 @@
+// ============================================================
+// ProfilesVault.gs — Student profile assembly (Vault-native)
+// ------------------------------------------------------------
+// PERF FIX applied: startDateById is now read ONCE (Student Info
+// sheet, via Code.gs) and passed in, instead of calling
+// getStudentStartDate(studentId) once per student inside the
+// loop. The old version opened SS_VAULT and re-read the whole
+// Student Info sheet fresh for every single profile — for 165
+// students, that was 165 spreadsheet opens/reads for one column
+// of data. This was the majority of the ~20s rebuild time.
+// ============================================================
+
+// ── Main entry point ──────────────────────────────────────────
+// startDateById: { [studentId]: startDateStr } — built ONCE in
+// Code.gs from a single read of VAULT_SHEET_STUDENT_INFO, passed
+// in rather than looked up per-student here.
+function buildStudentProfilesFromVault(
+  nameMap, courseDataById, tradeOverviewRows, tradeSnapshotRows,
+  productivityRows, wirCombined, scheduleByStudentId, tabeById, overrides,
+  startDateById, academicSnapshotRows
+) {
+  academicSnapshotRows = academicSnapshotRows || [];
+
+  // Group weekly Academic Snapshots by student -- current week's
+  // gain feeds thisWeekCredits, which was hardcoded null before.
+  // Snapshot weeks are Friday-anchored while Productivity Data
+  // weeks are Monday-anchored (same mismatch found and fixed in
+  // WIREngineV2.gs); mirror that same 4-day shift here so the two
+  // line up on the same calendar week.
+  const weeklySnapshotsByStudent_ = {};
+  academicSnapshotRows
+    .filter(r => String(r.cadence || '').trim().toLowerCase() === 'weekly')
+    .forEach(r => {
+      const id = String(r.studentId || '').trim();
+      if (!id) return;
+      const friday = _parseLocalDate(_normVaultDateField_(r.snapshotDate, 'yyyy-MM-dd'));
+      if (!friday) return;
+      const monday = new Date(friday.getTime());
+      monday.setDate(monday.getDate() - 4);
+      const mondayKey = _toDateStr(monday);
+      if (!weeklySnapshotsByStudent_[id]) weeklySnapshotsByStudent_[id] = {};
+      weeklySnapshotsByStudent_[id][mondayKey] =
+        (r.gain !== undefined && r.gain !== '') ? Number(r.gain) : null;
+    });
+  nameMap              = nameMap              || [];
+  courseDataById       = courseDataById       || {};
+  tradeOverviewRows    = tradeOverviewRows    || [];
+  tradeSnapshotRows    = tradeSnapshotRows    || [];
+  productivityRows     = productivityRows     || [];
+  wirCombined          = wirCombined          || [];
+  scheduleByStudentId  = scheduleByStudentId  || {};
+  tabeById             = tabeById             || {};
+  overrides            = overrides            || [];
+  startDateById        = startDateById        || {};
+
+  const tradesByStudent = _indexByMulti(tradeOverviewRows, r => String(r.studentId || '').trim());
+
+  const snapshotsByStudentTrade = {};
+  tradeSnapshotRows.forEach(r => {
+    const key = String(r.studentId || '').trim() + '||' + String(r.trade || '').trim();
+    (snapshotsByStudentTrade[key] = snapshotsByStudentTrade[key] || []).push(r);
+  });
+
+  const productivityByStudent = _indexByMulti(productivityRows, r => String(r.studentId || '').trim());
+
+  const wirByStudent = {};
+  wirCombined.forEach(c => {
+    if (c.report && c.report.studentId) wirByStudent[String(c.report.studentId).trim()] = c;
+  });
+
+  const tradeCompleteByStudent = {};
+  tradeOverviewRows.forEach(r => {
+    const pct = Number(r.overallPercent);
+    if (!isNaN(pct) && pct >= 100) {
+      const sid = String(r.studentId || '').trim();
+      (tradeCompleteByStudent[sid] = tradeCompleteByStudent[sid] || []).push(r.trade);
+    }
+  });
+
+  const overridesByStudent = {};
+  overrides.forEach(o => {
+    (overridesByStudent[o.studentId] = overridesByStudent[o.studentId] || []).push(o);
+  });
+  const mergeMap = {};
+  overrides.forEach(o => {
+    if (o.type === 'merged_into' && o.value) mergeMap[o.studentId] = String(o.value).trim();
+  });
+
+  const profiles = [];
+  nameMap.forEach(map => {
+    const id = String(map.studentId || '').trim();
+    if (!id) return;
+
+    const isActive = map.active === true || String(map.active).trim().toUpperCase() === 'TRUE';
+    if (!isActive) return;
+
+    const displayName       = String(map.masterName || '').trim() || id;
+    const hsComplete        = String(map.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
+    const tradeCompleteFlag = String(map.tradeComplete || '').trim().toUpperCase() === 'COMPLETE';
+    const examProgram       = String(map.examProgram || '').trim() || null;   // ← NEW
+
+    const tradeRows   = tradesByStudent[id] || [];
+    const productivity = productivityByStudent[id] || [];
+    const wirEntry     = wirByStudent[id] || null;
+    const tabe          = tabeById[id] || null;
+    const scheduledAcademicHours = scheduleByStudentId[id] || null;
+    const completedTrades = tradeCompleteByStudent[id] || [];
+
+    const courseData = courseDataById[id] || null;
+
+    const academic = _buildAcademicFromCourseData_(courseData, startDateById[id] || null, productivity, weeklySnapshotsByStudent_[id] || {}, map.examProgram);
+
+    const trades       = tradeRows.length
+      ? tradeRows.map(t => _buildTradeRowFromVault_(t, snapshotsByStudentTrade))
+      : null;
+    const time          = _buildTimeFromProductivity_(productivity);
+    const intervention = wirEntry ? _buildInterventionFromWirEntry_(wirEntry) : null;
+
+    const tradeComplete = tradeCompleteFlag || completedTrades.length > 0;
+    const risk = _calcRisk(
+      academic, trades, time, hsComplete, tradeComplete,
+      completedTrades, intervention, scheduledAcademicHours
+    );
+
+    profiles.push({
+      id, displayName,
+      mappingMissing:         false,
+      hsComplete,
+      tradeComplete,
+      examProgram,                              
+      completedTrades,
+      statusTag:              null,
+      academicStatusOverride: null,
+      tradeStatusOverride:    null,
+      tradeNameOverride:      null,
+      lastModified:           null,
+      notes:                  [],
+      progressSnapshot:       null,
+      progressSnapshots:      [],
+      isStale:                false,
+      riskTrend:              null,
+      staffNote:              null,
+      academicId:             id,
+      tradesId:               id,
+      academic, trades, time, intervention, risk,
+      hasAcademic:            !!academic,
+      hasTrades:              !!(trades && trades.length),
+      hasTime:                !!time,
+      hasIntervention:        !!intervention,
+      scheduledAcademicHours: scheduledAcademicHours || null,
+      tabe:                   tabe || null,
+      hasTABE:                !!(tabe && (tabe.math || tabe.reading)),
+      courseData:             courseData || null,
+    });
+  });
+
+  const AUTO_CLEAR_RULES_ = [
+    {
+      type: 'academic_status',
+      matches: p => p.academicStatusOverride === 'NOT_STARTED' &&
+                    !!(p.academic && p.academic.start && p.academic.targetDate),
+      reason: 'Student has a start date and target date on file.',
+    },
+    {
+      type: 'trade_status',
+      matches: p => p.tradeStatusOverride === 'NOT_STARTED' && p.hasTrades === true,
+      reason: 'Student has an active trade enrollment on file.',
+    },
+    {
+      type: 'trade_status',
+      matches: p => p.tradeStatusOverride === 'TRADE_COMPLETE' && p.hasTrades === true,
+      reason: 'Student has an active (re-enrolled) trade on file, overriding a stale Complete status.',
+    },
+    {
+      type: 'trade_name',
+      matches: p => {
+        if (!p.tradeNameOverride || !p.hasTrades) return false;
+        const activeNames = (p.trades || []).map(t => t.tarName);
+        return !activeNames.includes(p.tradeNameOverride);
+      },
+      reason: 'Overridden trade name no longer matches the student\'s active trade enrollment.',
+    },
+  ];
+
+  const overrideFieldByType_ = {
+    academic_status: 'academicStatusOverride',
+    trade_status:    'tradeStatusOverride',
+    trade_name:      'tradeNameOverride',
+  };
+
+  profiles.forEach(p => {
+    _applyOverrides(p, overridesByStudent);
+    _computeRiskTrend(p);
+  });
+
+  const _overridesToAutoClear = [];
+  profiles.forEach(p => {
+    AUTO_CLEAR_RULES_.forEach(rule => {
+      if (rule.matches(p)) {
+        _overridesToAutoClear.push({ studentId: p.id, type: rule.type, reason: rule.reason });
+        p[overrideFieldByType_[rule.type]] = null;
+      }
+    });
+});
+
+if (_overridesToAutoClear.length) {
+  _writeAutoClearOverrides_(_overridesToAutoClear);
+}
+
+  const finalProfiles = _applyMerges(profiles, mergeMap);
+  finalProfiles.sort((a, b) => a.displayName.localeCompare(b.displayName));
+  return finalProfiles;
+}
+function _writeAutoClearOverrides_(entries) {
+  try {
+    const sheet = _ensureVaultOverridesSheet_();
+    entries.forEach(e => {
+      _deleteMatchingVaultRows_(sheet, e.studentId, e.type);
+    });
+    const auditRows = entries.map(e => [e.studentId, 'auto_clear_note', e.reason, '', 'system', new Date()]);
+    if (auditRows.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, auditRows.length, 6).setValues(auditRows);
+    }
+  } catch (e) {
+    Logger.log('_writeAutoClearOverrides_ error: ' + e.message);
+  }
+}
+// ── Academic sub-object — built from Student Course Data ───────
+function _buildAcademicFromCourseData_(courseData, startDateStr, productivity, weeklySnapshotsForStudent, examProgram) {
+  if (!courseData) return null;
+  weeklySnapshotsForStudent = weeklySnapshotsForStudent || {};
+
+  const graduation = _computeGraduationDate_(startDateStr, courseData.remainingCredits);
+  const daysToGrad = graduation ? _daysUntil_(graduation) : null;
+
+  // Sorted newest-first (unchanged from before)
+  const sortedWeeks = (productivity || [])
+    .filter(p => p.weekLabel)
+    .sort((a, b) => String(b.weekLabel).localeCompare(String(a.weekLabel)));
+
+  const thisWeek = sortedWeeks[0] || null;
+  const lastWeek = sortedWeeks[1] || null;
+
+  // thisWeekCredits -- was hardcoded null everywhere before. Now
+  // pulled from this week's Academic Snapshot gain, keyed by the
+  // same Monday-anchored week label as Productivity Data.
+  const thisWeekCredits = thisWeek && weeklySnapshotsForStudent[thisWeek.weekLabel] !== undefined
+    ? weeklySnapshotsForStudent[thisWeek.weekLabel]
+    : null;
+
+  const thisWeekHours = thisWeek
+    ? (Number(thisWeek.assignedHours) === 0 ? 'NWH' : Number(thisWeek.actualWorkedTime) || 0)
+    : null;
+  const lastWeekHours = lastWeek ? (Number(lastWeek.actualWorkedTime) || 0) : null;
+  const recentWeeks = sortedWeeks.filter(w => Number(w.assignedHours) > 0).slice(0, 4);
+
+  const weeklyAvgHours = recentWeeks.length
+    ? +(recentWeeks.reduce((s, w) => s + (Number(w.actualWorkedTime) || 0), 0) / recentWeeks.length).toFixed(1)
+    : null;
+
+  const monthWorked   = recentWeeks.reduce((s, w) => s + (Number(w.actualWorkedTime) || 0), 0);
+  const monthAssigned = recentWeeks.reduce((s, w) => s + (Number(w.assignedHours) || 0), 0);
+  const monthRatio     = recentWeeks.length && monthAssigned > 0 ? monthWorked / monthAssigned : null;
+
+  const pace = monthRatio === null ? null
+    : monthRatio < 0.50 ? 'Behind'
+    : monthRatio < 0.75 ? 'At Risk'
+    : 'On Track';
+
+  // academic.type used to be `graduation ? 'HS' : null` — a proxy based on
+  // whether a graduation date could be projected, not the student's actual
+  // exam program. That meant HiSET/GED could never show up automatically,
+  // only "HS" or blank. Now driven directly by Name Mapping's examProgram
+  // column (F), which already carries the real value for every student.
+  const type = (String(examProgram || '').trim() || 'HS');
+
+  return {
+    type:              type,
+    pace,                                    // ← was hardcoded null
+    progress:          null,
+    percent:           courseData.completionPct     ?? null,
+    hours:             courseData.totalHours         ?? null,
+    start:             startDateStr || null,
+    graduation:        graduation,
+    daysToGrad:        daysToGrad,
+    gCredits:          null,
+    credits:           courseData.remainingCredits   ?? null,  // FIXED — was totalCredits, showed whole-program total instead of what's left
+    nextMilestone:     courseData.nextCourse         || null,
+    targetDate:        courseData.nextCourseTarget   || null,
+    targetDaysLeft:    courseData.nextCourseTarget ? _daysUntil_(courseData.nextCourseTarget) : null,
+    thisWeekHours,
+    lastWeekHours,
+    lastMonth:         null,
+    lastMonthAssigned: null,
+    thisWeekCredits,                          // FIXED — was hardcoded null, now reads real Academic Snapshot gain
+    worked:            null,
+    weeklyAvgHours,
+  };
+}
+
+function _computeGraduationDate_(startDateStr, remainingCredits) {
+  if (!startDateStr) return null;
+  if (remainingCredits === null || remainingCredits === undefined) return null;
+
+  const start = _parseLocalDate(String(startDateStr).slice(0, 10));
+  if (!start) return null;
+
+  const hardCap = _addMonths_(start, 24);
+
+  const monthsByYearlyPace  = Math.ceil(remainingCredits / (23 / 12));
+  const monthsByMonthlyPace = Math.ceil(remainingCredits / 20);
+  const monthsNeeded = Math.max(monthsByYearlyPace, monthsByMonthlyPace);
+
+  const paceProjected = _addMonths_(new Date(), monthsNeeded);
+
+  const result = hardCap < paceProjected ? hardCap : paceProjected;
+  return _toDateStr(result);
+}
+
+function _addMonths_(date, months) {
+  const d = new Date(date.getTime());
+  d.setMonth(d.getMonth() + months);
+  return d;
+}
+
+function _daysUntil_(dateStr) {
+  const d = _parseLocalDate(dateStr);
+  if (!d) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
+
+function _buildTradeRowFromVault_(t, snapshotsByStudentTrade) {
+  const sid = String(t.studentId || '').trim();
+  const key = sid + '||' + String(t.trade || '').trim();
+  const snapshots = snapshotsByStudentTrade[key] || [];
+
+  const enrollmentStatus = String(t.enrollmentStatus || '').trim() || null;
+
+  const paceMetrics = _computeTradePaceMetrics_(
+    t.overallPercent, _toDateStr(t.tarBeginDate), t.trade, enrollmentStatus
+  );
+
+  return {
+    tarName:          t.trade                          ?? null,
+    paceGap:          paceMetrics.paceGap,
+    status:           enrollmentStatus,
+    enrollment:       enrollmentStatus,
+    progress:         null,
+    staffPct:         t.staffPercent   !== undefined ? _toPercent(t.staffPercent)   : null,
+    studentPct:       t.studentPercent !== undefined ? _toPercent(t.studentPercent) : null,
+    overallPct:       t.overallPercent !== undefined ? _toPercent(t.overallPercent) : null,
+    etarStart:        _toDateStr(t.tarBeginDate) ?? null,
+    earliestEnd:      paceMetrics.earliestEnd,
+    daysToEarliest:   paceMetrics.daysToEarliest,
+    etarProjectedEnd: paceMetrics.earliestEnd,       
+    daysToETAR:       paceMetrics.daysToEarliest,
+    weeklyPctChange:  _computeWeeklyPctChange_(snapshots),
+    monthlyProgress:  _buildMonthlyProgressFromSnapshots_(snapshots),
+  };
+}
+
+function _buildMonthlyProgressFromSnapshots_(snapshots) {
+  return snapshots
+    .filter(s => String(s.cadence || '').trim().toLowerCase() === 'monthly')
+    .map(s => ({
+      month:          s.snapshotDate || '',
+      addedPostFirst: String(s.status || '').trim().toLowerCase() === 'new',
+      overallGain:    s.gain            !== undefined && s.gain            !== '' ? Number(s.gain)            : null,
+      endOverallPct:  s.overallPercent  !== undefined && s.overallPercent  !== '' ? Number(s.overallPercent)  : null,
+    }));
+}
+
+function _buildTimeFromProductivity_(productivity) {
+  if (!productivity || !productivity.length) return null;
+
+  let totalHours = 0;
+  const sheets = {};
+  productivity.forEach(p => {
+    const hrs = Number(p.actualWorkedTime);
+    if (isNaN(hrs)) return;
+    totalHours += hrs;
+    const label = String(p.weekLabel || '').trim();
+    if (label) sheets[label] = (sheets[label] || 0) + hrs;
+  });
+
+  if (totalHours <= 0) return null;
+  return {
+    totalHours: +totalHours.toFixed(2),
+    sheets,
+  };
+}
+
+function _buildInterventionFromWirEntry_(entry) {
+  const report  = entry.report  || {};
+  const caseData = entry.caseData || null;
+  return {
+    weekLabel:         report.weekLabel         || '',
+    status:            report.status            || null,
+    priority:          report.priority          || null,
+    adminPriority:     report.adminPriority     || null,
+    urgency:           report.urgency           || null,
+    percent:           report.percent           ?? null,
+    thisWeekHours:     report.thisWeekHours     || null,
+    lastActiveHours:   report.lastActiveHours   || null,
+    lastActiveLabel:   report.lastActiveLabel   || null,
+    credits:           report.creditsThisWeek   || null,
+    courseDaysLeft:    report.courseDaysLeft    ?? null,
+    issueTags:         report.issueTags         || null,
+    detectedPatterns:  report.detectedPatterns  || null,
+    instructorAction:  report.instructorAction  || null,
+    coordinatorAction: report.coordinatorAction || null,
+    reason:            report.reason            || null,
+    streak:            report.streak            || null,
+    trajectory:        report.trajectory        || null,
+    gradGap:           report.gradGap           || null,
+    comments:          caseData ? caseData.comments      || null : null,
+    caseOwner:         caseData ? caseData.caseOwner     || null : null,
+    caseStatus:        caseData ? caseData.caseStatus    || null : null,
+    focus:             caseData ? caseData.focus         || null : null,
+    followUp:          caseData ? (_toDateStr(caseData.followUpDate) || null) : null,
+    caseNotes:         caseData ? caseData.caseNotes     || null : null,
+    lastUpdated:       caseData ? (_toDateStr(caseData.lastUpdated) || null) : null,
+  };
+}
