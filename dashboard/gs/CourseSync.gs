@@ -1,279 +1,143 @@
 // ============================================================
-// CourseSync.gs — Student course data sync
-// Reads individual student Edgenuity sheets from SS_ACADEMIC and writes summarized course data to the Student Course Data sheet in SS_HUB. Runs on a Monday 5am trigger.
+// CourseSync.gs — DEPRECATED as a sync job (2026-07-15 redesign)
+// ------------------------------------------------------------
+// Student Course Data is no longer written to. Course data is now
+// computed LIVE from Transcript Rows on every dashboard rebuild
+// (see Code.gs, _rebuildDashboardData), using the exact same
+// _computeCourseDataFromVaultRows_ math this file always used —
+// it's kept here unchanged and reused, not duplicated.
+//
+// WHY: Student Course Data was a synced, weekly-refreshed copy of
+// Transcript Rows. Anything that changed between Monday runs (a
+// completed course, a corrected transcript) wouldn't show up
+// anywhere downstream — Overview, risk scoring, WIR — until the
+// next sync. This caused a real, confirmed bug: a student who
+// finished her program mid-week continued to score as "Needs
+// Attention" on stale, incomplete-looking numbers days later.
+// Removing the synced middle layer removes the entire class of
+// staleness bug, since there's nothing left to go stale.
+//
+// REMOVED:
+//   - syncStudentCourseData()          (the batch job itself)
+//   - _writeStudentCourseDataToVault_() (wrote to the now-unused sheet)
+//   - installCourseSyncTrigger() / removeCourseSyncTrigger()
+//     If you had this trigger installed, run
+//     removeCourseSyncTriggerOneTime() below once, then delete it.
+//
+// KEPT (still doing real work, called from Code.gs now instead of
+// from the old batch job):
+//   - _computeCourseDataFromVaultRows_()
+//   - _isoToMDY_()
+//
+// KEPT (still useful — this is now your standing visibility check
+// for the "new student, no transcript yet" gap, since real
+// automation isn't possible without an external transcript-import
+// source. Recommend running this on a schedule, e.g. weekly
+// alongside the roster upload, or adding its output to whatever
+// digest email already exists):
+//   - debugSyncSkipped()
+//
+// Student Course Data (the sheet) can be left alone — nothing
+// reads or writes it anymore, it's a frozen historical artifact.
+// Safe to delete once you've confirmed nothing else references it.
 // ============================================================
 
-// ── Main sync entry point ─────────────────────────────────────
-function syncStudentCourseData() {
-  const t0 = Date.now();
-  Logger.log('syncStudentCourseData: starting...');
-
-  const hubSS      = SpreadsheetApp.openById(SS_HUB);
-  const academicSS = SpreadsheetApp.openById(SS_ACADEMIC);
-
-  // Get active HS students from Name Mapping
-  const mapSheet = hubSS.getSheetByName(SHEET_MAPPING);
-  if (!mapSheet) { Logger.log('syncStudentCourseData: Name Mapping sheet not found'); return; }
-
-  const mapValues    = mapSheet.getDataRange().getValues();
-  const activeStudents = [];
-  for (let i = 1; i < mapValues.length; i++) {
-    const row              = mapValues[i];
-    const id               = String(row[0] || '').trim();
-    const academicName     = String(row[3] || '').trim();
-    const tradeComplete    = ['yes','true','1','complete'].includes(String(row[4] || '').trim().toLowerCase());
-    const academicComplete = ['yes','true','1','complete'].includes(String(row[5] || '').trim().toLowerCase());
-    if (!academicName || (tradeComplete && academicComplete)) continue;
-    activeStudents.push({ id, academicName });
-  }
-  Logger.log('syncStudentCourseData: ' + activeStudents.length + ' active students');
-
-  // Build a sheet-name → sheet map for fast lookup
-  const sheetMap = {};
-  academicSS.getSheets().forEach(s => { sheetMap[s.getName()] = s; });
-
-  // Process each student
-  const rows    = [COURSE_DATA_HEADERS];
-  let synced    = 0;
-  let skipped   = 0;
-  const skippedNames = [];
-
-  activeStudents.forEach(({ id, academicName }) => {
-    const sheet = sheetMap[academicName];
-    if (!sheet) {
-      skipped++;
-      skippedNames.push(academicName + ' (sheet not found)');
-      return;
-    }
-    try {
-      const courseData = _extractCoursesFromStudentSheet(sheet);
-      if (!courseData) {
-        skipped++;
-        skippedNames.push(academicName + ' (no course data)');
-        return;
-      }
-      rows.push([
-        academicName,
-        courseData.remainingCredits,
-        courseData.remainingHours,
-        courseData.courseCountLeft,
-        courseData.nextCourse,
-        courseData.nextCourseHours,
-        courseData.nextCourseTarget,
-        courseData.totalCredits,
-        courseData.totalHours,
-        courseData.completionPct,
-        _todayStr(),
-      ]);
-      synced++;
-    } catch(e) {
-      skipped++;
-      skippedNames.push(academicName + ' (error: ' + e.message + ')');
+// One-time cleanup — run this once from the Apps Script editor to
+// remove the old Monday 5am trigger, then delete this function.
+function removeCourseSyncTriggerOneTime() {
+  let removed = 0;
+  ScriptApp.getProjectTriggers().forEach(t => {
+    if (t.getHandlerFunction() === 'syncStudentCourseData') {
+      ScriptApp.deleteTrigger(t);
+      removed++;
     }
   });
-
-  // Write results to SS_HUB
-  let courseSheet = hubSS.getSheetByName(SHEET_STUDENT_COURSE_DATA);
-  if (!courseSheet) {
-    courseSheet = hubSS.insertSheet(SHEET_STUDENT_COURSE_DATA);
-  } else {
-    courseSheet.clearContents();
-  }
-
-  if (rows.length > 1) {
-    courseSheet.getRange(1, 1, rows.length, rows[0].length).setValues(rows);
-    courseSheet.getRange(1, 1, 1, rows[0].length)
-      .setFontWeight('bold')
-      .setBackground('#1f2937')
-      .setFontColor('#ffffff');
-    courseSheet.setFrozenRows(1);
-  }
-
-  _clearDashboardCache();
-
-  const elapsed = ((Date.now() - t0) / 1000).toFixed(1);
-  Logger.log([
-    'syncStudentCourseData complete:',
-    '  synced:  ' + synced,
-    '  skipped: ' + skipped,
-    '  time:    ' + elapsed + 's',
-    skippedNames.length ? '  skipped names:\n    ' + skippedNames.join('\n    ') : '',
-  ].filter(Boolean).join('\n'));
+  Logger.log('Removed ' + removed + ' syncStudentCourseData trigger(s).');
 }
 
-// ── Extract course data from one student sheet ─────────────────
-// Reads the Edgenuity course table from a student's individual sheet.
-// Returns a summarized object or null if no usable data is found.
-function _extractCoursesFromStudentSheet(sheet) {
-  // ── Layout (1-indexed, as shown in spreadsheet) ───────────
-  // Block 1: header row 2, data rows 3–26
-  //   B=CourseID, C=CourseName, F=Subject, G=Credits, H=Hours,
-  //   I=StartDate, J=AdjStart, K=TargetDate, L=Completed(checkbox)
-  // Credits remaining (live formula): L30 (merged L30:L33)
-  //
-  // Block 2: header row 54, data rows 55–77
-  // Credits remaining (live formula): L81 (merged L81:L82)
-  //
-  // Columns (0-indexed): B=1, C=2, F=5, G=6, H=7, I=8, J=9, K=10, L=11
+// ── Kept: the actual math, unchanged ─────────────────────────
+// Computes the same summary shape the legacy per-tab scan used to
+// produce, but from an array of flat Transcript Rows objects.
+// remainingCredits always uses the sum-of-incomplete-course-credits
+// approach — the legacy "L30 formula" special case had no Vault
+// equivalent, and its own fallback logic already computed it this
+// same way.
+function _computeCourseDataFromVaultRows_(courses) {
+  const totalCredits = courses.reduce((s, c) => s + (Number(c.credit) || 0), 0);
+  const totalHours   = courses.reduce((s, c) => s + (Number(c.classHours) || 0), 0);
 
-  try {
-    const lastRow = sheet.getLastRow();
-    if (lastRow < 3) return null;
+  const remaining = courses.filter(c => c.completed !== true);
+  const remainingCredits = remaining.reduce((s, c) => s + (Number(c.credit) || 0), 0);
+  const remainingHours   = remaining.reduce((s, c) => s + (Number(c.classHours) || 0), 0);
 
-    // Read the whole sheet in one call — avoids multiple round trips
-    const values = sheet.getRange(1, 1, Math.min(lastRow, 85), 12).getValues();
+  const completionPct = totalCredits > 0
+    ? +((1 - remainingCredits / totalCredits) * 100).toFixed(1)
+    : 0;
 
-    const COL_COURSE_ID  = 1;  // B
-    const COL_NAME       = 2;  // C
-    const COL_CREDITS    = 6;  // G
-    const COL_HOURS      = 7;  // H
-    const COL_TARGET     = 10; // K
-    const COL_COMPLETE   = 11; // L (checkbox — TRUE = done)
+  const nextCourseRow =
+    remaining.find(c => !String(c.courseName || '').toLowerCase().includes('pathway elective'))
+    || remaining[0]
+    || null;
 
-    // ── Helper: parse one block of rows ───────────────────
-    function parseBlock(dataStart, dataEnd) {
-      const courses = [];
-      for (let r = dataStart; r <= dataEnd && r < values.length; r++) {
-        const row      = values[r];
-        const courseId = String(row[COL_COURSE_ID] || '').trim();
-        const name     = String(row[COL_NAME]      || '').trim();
-        if (!courseId && !name) continue;
-        // Skip placeholder rows (e.g. "Pathway Elective" with no ID)
-        const displayName = name || courseId;
-        const credits     = _toNumber(row[COL_CREDITS]) || 0;
-        const hours       = _toNumber(row[COL_HOURS])   || 0;
-        const isComplete  = row[COL_COMPLETE] === true;
-        const target      = _formatDateCell(row[COL_TARGET]);
-        courses.push({ courseId, name: displayName, credits, hours, isComplete, target });
-      }
-      return courses;
-    }
-
-    // Block 1: rows 3–26 → 0-indexed 2–25
-    const block1 = parseBlock(2, 25);
-    // Block 2: rows 55–77 → 0-indexed 54–76
-    const block2 = parseBlock(54, 76);
-    const allCourses = [...block1, ...block2];
-
-    if (!allCourses.length) return null;
-
-    // ── Credits remaining — read live formula result ───────
-    // L30 = row 30, col L = col 12 (1-indexed) → 0-indexed row 29, col 11
-    // L81 = row 81, col L → 0-indexed row 80, col 11
-    // We read these directly to get the formula result, not recompute.
-    let remainingCredits = null;
-    try {
-      const credRow1 = sheet.getRange(30, 12).getValue();
-      const credRow2 = lastRow >= 81 ? sheet.getRange(81, 12).getValue() : null;
-      // L30 formula already sums both blocks, so prefer it
-      const v1 = _toNumber(credRow1);
-      if (v1 !== null && v1 >= 0) {
-        remainingCredits = v1;
-      } else {
-        // Fallback: sum incomplete course credits manually
-        remainingCredits = allCourses
-          .filter(c => !c.isComplete)
-          .reduce((s, c) => s + c.credits, 0);
-      }
-    } catch(e) {
-      remainingCredits = allCourses
-        .filter(c => !c.isComplete)
-        .reduce((s, c) => s + c.credits, 0);
-    }
-
-    // ── Totals ─────────────────────────────────────────────
-    const totalCredits = allCourses.reduce((s, c) => s + c.credits, 0);
-    const totalHours   = allCourses.reduce((s, c) => s + c.hours,   0);
-    const remaining    = allCourses.filter(c => !c.isComplete);
-    const remainingHours = remaining.reduce((s, c) => s + c.hours, 0);
-
-    const completionPct = totalCredits > 0
-      ? +((1 - remainingCredits / totalCredits) * 100).toFixed(1)
-      : 0;
-
-    // Next course = first incomplete, skipping pure placeholders
-    const nextCourse = remaining.find(c => !c.name.toLowerCase().includes('pathway elective'))
-      || remaining[0]
-      || null;
-
-    return {
-      remainingCredits:  +remainingCredits.toFixed(2),
-      remainingHours:    +remainingHours.toFixed(2),
-      courseCountLeft:   remaining.length,
-      nextCourse:        nextCourse ? nextCourse.name   : '',
-      nextCourseHours:   nextCourse ? nextCourse.hours  : 0,
-      nextCourseTarget:  nextCourse ? nextCourse.target : '',
-      totalCredits:      +totalCredits.toFixed(2),
-      totalHours:        +totalHours.toFixed(2),
-      completionPct,
-    };
-
-  } catch(e) {
-    Logger.log('_extractCoursesFromStudentSheet error: ' + e.message);
-    return null;
-  }
+  return {
+    remainingCredits: +remainingCredits.toFixed(2),
+    remainingHours:   +remainingHours.toFixed(2),
+    courseCountLeft:  remaining.length,
+    nextCourse:       nextCourseRow ? String(nextCourseRow.courseName || '') : '',
+    nextCourseHours:  nextCourseRow ? (Number(nextCourseRow.classHours) || 0) : 0,
+    nextCourseTarget: nextCourseRow ? _isoToMDY_(nextCourseRow.targetDate) : '',
+    totalCredits:     +totalCredits.toFixed(2),
+    totalHours:       +totalHours.toFixed(2),
+    completionPct,
+  };
 }
 
-// Formats a date cell value to M/D/YYYY string
-function _formatDateCell(val) {
-  if (!val) return '';
-  if (val instanceof Date && !isNaN(val.getTime())) {
-    return (val.getMonth() + 1) + '/' + val.getDate() + '/' + val.getFullYear();
+// Reformats a Vault ISO date string ("2026-08-09") to the same
+// M/D/YYYY display format the legacy path produced.
+function _isoToMDY_(isoStr) {
+  if (!isoStr) return '';
+  if (isoStr instanceof Date && !isNaN(isoStr.getTime())) {
+    return (isoStr.getMonth() + 1) + '/' + isoStr.getDate() + '/' + isoStr.getFullYear();
   }
-  return String(val).trim();
+  const match = String(isoStr).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (!match) return String(isoStr);
+  const year = match[1], month = Number(match[2]), day = Number(match[3]);
+  return month + '/' + day + '/' + year;
 }
 
-// ── Debug helpers ─────────────────────────────────────────────
-// Run these manually from the Apps Script editor to diagnose sync issues.
+// ── Kept: debug/visibility helpers ───────────────────────────
+function debugCourseDataLookup(studentId) {
+  const allRows = readVaultSheetAsObjects_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS);
+  const courses = allRows.filter(row => String(row.studentId).trim() === String(studentId).trim());
 
-// Lists students that were skipped on the last sync run
-function debugSyncSkipped() {
-  const hubSS      = SpreadsheetApp.openById(SS_HUB);
-  const academicSS = SpreadsheetApp.openById(SS_ACADEMIC);
-  const mapSheet   = hubSS.getSheetByName(SHEET_MAPPING);
-  if (!mapSheet) { Logger.log('Name Mapping sheet not found'); return; }
-
-  const mapValues = mapSheet.getDataRange().getValues();
-  const sheetMap  = {};
-  academicSS.getSheets().forEach(s => { sheetMap[s.getName()] = s; });
-
-  const missing = [];
-  for (let i = 1; i < mapValues.length; i++) {
-    const row              = mapValues[i];
-    const academicName     = String(row[3] || '').trim();
-    const tradeComplete    = ['yes','true','1','complete'].includes(String(row[4] || '').trim().toLowerCase());
-    const academicComplete = ['yes','true','1','complete'].includes(String(row[5] || '').trim().toLowerCase());
-    if (!academicName || (tradeComplete && academicComplete)) continue;
-    if (!sheetMap[academicName]) missing.push(academicName);
+  if (!courses.length) {
+    Logger.log('No transcript rows found for studentId: ' + studentId);
+    return;
   }
 
-  Logger.log('Students with no matching sheet (' + missing.length + '):');
-  missing.forEach(n => Logger.log('  ' + n));
-}
-
-// Runs the sync for a single student and logs the result
-function debugSyncSingleStudent(academicName) {
-  const academicSS = SpreadsheetApp.openById(SS_ACADEMIC);
-  const sheet      = academicSS.getSheetByName(academicName);
-  if (!sheet) { Logger.log('Sheet not found: ' + academicName); return; }
-  const result = _extractCoursesFromStudentSheet(sheet);
-  Logger.log('Result for ' + academicName + ':');
+  const result = _computeCourseDataFromVaultRows_(courses);
+  Logger.log('Result for studentId ' + studentId + ' (' + courses.length + ' course rows):');
   Logger.log(JSON.stringify(result, null, 2));
 }
 
-// ── Trigger management ────────────────────────────────────────
-function installCourseSyncTrigger() {
-  removeCourseSyncTrigger();
-  ScriptApp.newTrigger('syncStudentCourseData')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.MONDAY)
-    .atHour(5)
-    .create();
-  Logger.log('Course sync trigger installed — runs every Monday at 5am.');
-}
+// Standing visibility check for the "new student, no transcript
+// yet" gap. Run this periodically (recommend: weekly, alongside
+// the roster upload) rather than discovering it by accident.
+function debugSyncSkipped() {
+  const nameRows = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
+  const allTranscriptRows = readVaultSheetAsObjects_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS);
+  const idsWithTranscripts = new Set(allTranscriptRows.map(r => String(r.studentId).trim()));
 
-function removeCourseSyncTrigger() {
-  ScriptApp.getProjectTriggers().forEach(t => {
-    if (t.getHandlerFunction() === 'syncStudentCourseData') ScriptApp.deleteTrigger(t);
+  const missing = nameRows.filter(row => {
+    const isActive = row.active === true || String(row.active).toLowerCase() === 'true';
+    const bothComplete =
+      String(row.tradeComplete || '').trim().toUpperCase() === 'COMPLETE' &&
+      String(row.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
+    if (!isActive || bothComplete || !row.studentId) return false;
+    return !idsWithTranscripts.has(String(row.studentId).trim());
   });
+
+  Logger.log('Students with no transcript rows (' + missing.length + '):');
+  missing.forEach(m => Logger.log('  ' + (m.masterName || m.studentId)));
+  return missing.length;
 }
