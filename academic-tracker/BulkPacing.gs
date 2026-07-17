@@ -48,6 +48,16 @@ function scanAllStudentPacing() {
 
     const currentRotation = _pacingCurrentRotation_();
 
+    // ── Historical rotation, observed from real Productivity Data ──
+    // Weekly Schedule only ever holds the current week's real data,
+    // so the other 3 rotation-week buckets used to fall back on a
+    // pure calendar assumption (odd weeks vs even weeks) with no way
+    // to check it against reality. Productivity Data already has real
+    // per-week assignedHours history (written by TimeLog.gs every
+    // time a weekly time log is saved) — so instead of guessing, look
+    // at what actually happened for THIS student historically.
+    const observedRotationByStudentId = _pacingObservedRotationFromHistory_();
+
     const students = [];
     nameRows.forEach(row => {
       const studentId = String(row.studentId || '').trim();
@@ -60,10 +70,11 @@ function scanAllStudentPacing() {
 
       const schedule = scheduleByStudentId[studentId] || null;
       const hasSchedule = !!schedule;
+      const observedRotation = observedRotationByStudentId[studentId] || null;
 
       const detected = hasSchedule
-        ? _pacingDetectFromSchedule_(schedule)
-        : { hours: 0, activeWeeks: currentRotation };
+        ? _pacingDetectFromSchedule_(schedule, observedRotation)
+        : { hours: 0, activeWeeks: observedRotation ? Object.assign({}, currentRotation, observedRotation) : currentRotation };
 
       // Existing saved settings, from Student Pacing Settings
       const existing = pacingById[studentId] || null;
@@ -137,7 +148,7 @@ function _pacingLoadScheduleFromVault_() {
 }
 
 // ── Detect weekly hours + rotation from one student's schedule JSON ──
-function _pacingDetectFromSchedule_(schedule) {
+function _pacingDetectFromSchedule_(schedule, observedRotation) {
   let hours = 0;
   Object.entries(SCHEDULE_VALID_PERIODS).forEach(([day, validPeriods]) => {
     validPeriods.forEach(periodNum => {
@@ -149,16 +160,21 @@ function _pacingDetectFromSchedule_(schedule) {
     });
   });
 
-  // Ground-truth check for the CURRENT week only — this is the one
-  // week we actually have real schedule data for (Weekly Schedule
-  // only holds the 'current' slot). If the schedule shows academic
+  // Ground-truth check for the CURRENT week — this is the one week
+  // we actually have real schedule data for (Weekly Schedule only
+  // holds the 'current' slot). If the schedule shows academic
   // periods this week, this week really is an academic week; if it
   // shows none, it's a trade week. This corrects the current bucket
-  // against real data instead of assuming. We still can't verify
-  // the OTHER three rotation weeks this way — there's no schedule
-  // data for weeks we haven't uploaded yet — so those three stay on
-  // the calendar-alternation assumption from _pacingCurrentRotation_().
+  // against real data instead of assuming.
+  //
+  // For the OTHER three buckets: rather than a pure calendar
+  // alternation guess, use this student's own observed history from
+  // Productivity Data (_pacingObservedRotationFromHistory_) when we
+  // have it — real past behavior beats an assumption. Only fall
+  // back to the calendar guess for buckets with no history at all
+  // (e.g. a brand-new student with no time logs yet).
   const activeWeeks = _pacingCurrentRotation_();
+  if (observedRotation) Object.assign(activeWeeks, observedRotation);
   const currentBucket = 'w' + getCurrentWeekOfMonth_();
   activeWeeks[currentBucket] = hours > 0;
 
@@ -176,6 +192,67 @@ function _pacingCurrentRotation_() {
     : { w1: false, w2: true,  w3: false, w4: true  };
 }
 
+// ── Observed rotation from real history ──────────────────────
+// Weekly Schedule only ever holds the current week's real data, so
+// the other 3 rotation buckets used to fall back on a pure
+// calendar-alternation guess with nothing to check it against.
+// Productivity Data already has real per-week assignedHours history
+// (TimeLog.gs writes it every time a weekly time log is saved) — so
+// for any week bucket where a student has actual logged history,
+// use what really happened instead of assuming.
+//
+// NOTE: deliberately does NOT use getCurrentWeekOfMonth_() here —
+// that function checks the manual holiday override, which is about
+// what week it is *today*, not about correctly re-bucketing a
+// student's past week labels. A separate, override-independent
+// day-of-month check (_pacingDayOfMonthBucket_) is used instead so
+// historical classification isn't distorted by whatever override
+// happens to be set right now.
+function _pacingObservedRotationFromHistory_() {
+  const rows = readVaultSheetAsObjects_(VAULT_SHEET_PRODUCTIVITY, VAULT_PRODUCTIVITY_HEADERS);
+
+  // studentId -> { w1: {t,f}, w2: {t,f}, w3: {t,f}, w4: {t,f} }
+  const tally = {};
+  rows.forEach(row => {
+    const studentId = String(row.studentId || '').trim();
+    if (!studentId) return;
+    const d = _parseLocalDate(row.weekLabel);
+    if (!d) return;
+
+    const bucket = 'w' + _pacingDayOfMonthBucket_(d);
+    const wasAssigned = Number(row.assignedHours) > 0;
+
+    if (!tally[studentId]) {
+      tally[studentId] = { w1: { t: 0, f: 0 }, w2: { t: 0, f: 0 }, w3: { t: 0, f: 0 }, w4: { t: 0, f: 0 } };
+    }
+    if (wasAssigned) tally[studentId][bucket].t++;
+    else tally[studentId][bucket].f++;
+  });
+
+  const result = {};
+  Object.entries(tally).forEach(([studentId, buckets]) => {
+    const rotation = {};
+    Object.entries(buckets).forEach(([bucket, counts]) => {
+      // No observations at all for this bucket — leave it unset so
+      // the caller falls back to the calendar guess for just this
+      // bucket, not the whole student.
+      if (counts.t + counts.f === 0) return;
+      // Majority vote across however many weeks of history we have
+      // for this bucket — a single anomalous week (e.g. a one-off
+      // schedule change) won't flip the whole bucket by itself.
+      rotation[bucket] = counts.t >= counts.f;
+    });
+    if (Object.keys(rotation).length) result[studentId] = rotation;
+  });
+
+  return result;
+}
+
+function _pacingDayOfMonthBucket_(date) {
+  const day = date.getDate();
+  return day <= 7 ? 1 : day <= 14 ? 2 : day <= 21 ? 3 : 4;
+}
+
 // ============================================================
 // SECTION 2 — BATCH APPLY
 // ------------------------------------------------------------
@@ -188,6 +265,11 @@ function batchApplyStudentPacing(updates) {
   try {
     if (!updates || !updates.length) return { success: false, error: 'No updates provided.' };
 
+    // Locked: reads existing row indices, then writes/appends against
+    // them below. Without a lock, a single-student saveTranscriptSettings
+    // save on the same Student Pacing Settings sheet at the same time
+    // could shift or duplicate a row this batch is targeting.
+    return _withLock(() => {
     const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
     const lastRow = sheet.getLastRow();
     const numCols = VAULT_STUDENT_PACING_HEADERS.length;
@@ -249,6 +331,7 @@ function batchApplyStudentPacing(updates) {
       skipped,
       skippedCount: skipped.length,
     };
+    });
 
   } catch (err) {
     Logger.log('batchApplyStudentPacing error: ' + err.message);
