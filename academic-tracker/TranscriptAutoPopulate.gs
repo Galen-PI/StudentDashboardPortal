@@ -1,515 +1,120 @@
 // ============================================================
-// Transcripts.gs — Read/write student transcript data
+// TranscriptAutoPopulate.gs
 // ------------------------------------------------------------
-// Vault-only. The legacy per-student-tab path (SS_ACADEMIC,
-// rowIndex/block-based positional writes, findNextEmptyRow_,
-// buildRowValues_) has been removed along with the
-// USE_VAULT_TRANSCRIPTS dispatch flag — there was no live
-// scenario left where the flag would ever be false, and keeping
-// a permanently-true toggle around read like a real decision
-// point when it wasn't one anymore.
-//
-// getStudentNameById_, seedHubSettings, and
-// auditTranscriptCategories were also removed: all three
-// referenced either SS_ACADEMIC (no longer a defined constant)
-// or a Name Mapping column layout that predates the simplified
-// Vault schema, and would have thrown or silently misread data
-// if ever actually invoked.
+// Auto-populates a brand-new student's transcript from the
+// Master Schedule Hours course plan. Only runs if the student
+// has ZERO existing transcript rows — meant for newly added
+// students, not for editing existing transcripts.
 // ============================================================
 
-const SETTINGS_DEFAULTS = {
-  weeklyHours: 10,
-  activeWeeks: { w1: true, w2: true, w3: true, w4: true }
+// Grade level for core courses that repeat once per year.
+// Anything not in this map is treated as an elective (no fixed
+// grade) and gets bucketed into Year 2 per Galen's instruction.
+const CORE_COURSE_GRADE_MAP_ = {
+  'English 1': 9, 'Physical Science': 9, 'Oklahoma History': 9,
+  'American Government': 9, 'Biology': 9, 'Algebra 1': 9,
+
+  'English 2': 10, 'Earth and Space': 10, 'Geometry': 10,
+
+  'English 3': 11, 'Intermediate Algebra': 11, 'US History': 11,
+
+  'English 4': 12, 'Algebra 2': 12, 'World History': 12,
 };
 
-
-// ============================================================
-// SECTION 1 — READ
-// ============================================================
-
-function getStudentTranscript(studentId) {
-  try {
-    const rows = readVaultRowsForStudent_(
-      VAULT_SHEET_TRANSCRIPT_ROWS,
-      VAULT_TRANSCRIPT_HEADERS,
-      studentId
-    );
-
-    const courses = rows.map(row => ({
-      rowId:         row.rowId,
-      block:         Number(row.block) || 1,   // rows with no value default to Year 1
-      sourceTabName: String(row.sourceTabName || '').trim(),
-      courseId:      String(row.courseId || '').trim(),
-      courseName:    String(row.courseName || '').trim(),
-      instance:      String(row.instance || '').trim(),
-      transfer:      row.transfer === true,
-      subject:       String(row.subject || '').trim(),
-      credit:        Number(row.credit) || 0,
-      classHours:    Number(row.classHours) || 0,
-      startDate:     row.startDate || null,
-      adjStart:      row.adjStart || null,
-      targetDate:    row.targetDate || null,
-      completed:     row.completed === true
-    }));
-
-    const settings = getTranscriptSettings_(studentId);
-
-    return {
-      success:        true,
-      studentId:      String(studentId).trim(),
-      courses:        courses,
-      settings:       settings,
-      settingsSource: USE_HUB_SETTINGS ? 'hub' : 'academic_tracker'
-    };
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
+function _gradeForCourse_(baseName) {
+  return CORE_COURSE_GRADE_MAP_[baseName] || null; // null = elective
 }
 
-
-// ============================================================
-// SECTION 2 — SETTINGS
-// ============================================================
-
-function getTranscriptSettings_(studentId) {
-  const id = String(studentId || '').trim();
-  if (!id) return SETTINGS_DEFAULTS;
-
-  try {
-    const rows = readVaultRowsForStudent_(VAULT_SHEET_STUDENT_PACING, VAULT_STUDENT_PACING_HEADERS, id);
-    if (!rows.length) return SETTINGS_DEFAULTS;
-
-    const row = rows[0];
-    const hours = Number(row.weeklyHours);
-
-    return {
-      weeklyHours: isFinite(hours) && hours > 0 ? hours : SETTINGS_DEFAULTS.weeklyHours,
-      activeWeeks: {
-        w1: row.w1 === true || String(row.w1).toUpperCase() === 'TRUE',
-        w2: row.w2 === true || String(row.w2).toUpperCase() === 'TRUE',
-        w3: row.w3 === true || String(row.w3).toUpperCase() === 'TRUE',
-        w4: row.w4 === true || String(row.w4).toUpperCase() === 'TRUE',
-      }
-    };
-  } catch (err) {
-    Logger.log('getTranscriptSettings_ error: ' + err.message);
-    return SETTINGS_DEFAULTS;
-  }
+function _blockForGrade_(grade) {
+  if (grade === 9 || grade === 10) return 1;
+  if (grade === 11 || grade === 12) return 2;
+  return 2; // electives → Year 2, per instruction
 }
 
-function saveTranscriptSettings(studentId, settings) {
-  const id = String(studentId || '').trim();
-  if (!id) return { success: false, error: 'Student ID is required.' };
-
-  try {
-    // Locked: read-row-index-then-write-or-append. Without a lock,
-    // Bulk Assign Hours (BulkPacing.gs) writing to this same sheet at
-    // the same time could shift/duplicate this student's row.
-    return _withLock(() => {
-      const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
-      const lastRow = sheet.getLastRow();
-      const numCols = VAULT_STUDENT_PACING_HEADERS.length;
-
-      let existingRowNum = null;
-      if (lastRow >= VAULT_DATA_START_ROW) {
-        const ids = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
-        for (let i = 0; i < ids.length; i++) {
-          if (String(ids[i][0] || '').trim() === id) { existingRowNum = VAULT_DATA_START_ROW + i; break; }
-        }
-      }
-
-      const weeklyHours = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
-      const weeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
-      const row = [
-        id, weeklyHours,
-        weeks.w1 === true, weeks.w2 === true, weeks.w3 === true, weeks.w4 === true,
-        new Date().toISOString(),
-      ];
-
-      if (existingRowNum) {
-        sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
-      } else {
-        sheet.getRange(sheet.getLastRow() + 1, 1, 1, numCols).setValues([row]);
-      }
-      sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
-
-      SpreadsheetApp.flush();
-
-      logTranscriptWriteVault_(id, 'pacing', 'SETTINGS_UPDATED',
-        `Student ${id}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`);
-
-      return { success: true, studentId: id };
-    });
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
+function _splitMasterScheduleCourseName_(rawName) {
+  const name = String(rawName || '').trim();
+  if (name.startsWith('S1 ')) return { instance: 'S1', base: name.slice(3).trim() };
+  if (name.startsWith('S2 ')) return { instance: 'S2', base: name.slice(3).trim() };
+  return { instance: '', base: name };
 }
 
+const TRANSCRIPT_AUTO_POPULATE_COURSES_ = new Set([
+  'English 1', 'Physical Science', 'Oklahoma History', 'American Government', 'Biology',
+  'Algebra 1', 'English 2', 'Earth and Space', 'Geometry', 'English 3', 'Intermediate Algebra',
+  'US History', 'Trade Completion', 'English 4', 'Algebra 2', 'World History',
+  'Financial Literacy', 'Intro to Art', 'Language 1', 'Pathway Elective 1', 'Pathway Elective 2',
+  'Pathway Elective 3', 'Pathway Elective 4', 'Pathway Elective 5', 'Pathway Elective 6',
+]);
 
-// ============================================================
-// SECTION 3 — SAVE EXISTING ROW
-// ------------------------------------------------------------
-// Identifies the row by rowId — Vault rows aren't positional.
-// Finds the matching studentId+rowId row and overwrites it in
-// place. No cell coloring (Vault is pure data; nobody opens
-// this sheet directly).
-// ============================================================
-
-function saveTranscriptRow(studentId, rowData) {
+function autoPopulateTranscript(studentId, employeeId, role) {
+  const lock = LockService.getScriptLock();
   try {
-    if (!rowData.rowId) {
-      return { success: false, error: 'rowId is required to save an existing row.' };
+    lock.waitLock(10000);
+  } catch (e) {
+    return { success: false, error: 'Another change is saving right now — please wait a moment and try again.' };
+  }
+
+  try {
+    if (!studentId) return { success: false, error: 'No student ID provided.' };
+
+    _requirePermission(role || ROLES.ADMIN, 'edit_transcript');
+
+    const existingRows = readVaultRowsForStudent_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS, studentId);
+    if (existingRows.length > 0) {
+      return { success: true, skipped: true, message: 'This student already has transcript rows — auto-populate only applies to new, empty transcripts.' };
     }
 
-    // Locked: scans for the row index, then writes to it. Without a
-    // lock, a concurrent addTranscriptRow appending a row for the same
-    // student between the scan and the write is a low-probability but
-    // real race (row numbers found here would still point at the right
-    // row in that case, but locking keeps this consistent with every
-    // other transcript writer below).
-    return _withLock(() => {
-      const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
-      const lastRow = sheet.getLastRow();
-      if (lastRow < VAULT_DATA_START_ROW) {
-        return { success: false, error: 'Transcript Rows is empty.' };
-      }
+    const masterRows = readVaultSheetAsObjects_(VAULT_SHEET_CLASSES_ORDER, VAULT_CLASSES_ORDER_HEADERS)
+      .filter(r => String(r.courseName || '').trim() !== '')
+      .filter(r => {
+        const { base } = _splitMasterScheduleCourseName_(r.courseName);
+        return TRANSCRIPT_AUTO_POPULATE_COURSES_.has(base);
+      });
 
-      const numRows = lastRow - VAULT_DATA_START_ROW + 1;
-      const data = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, VAULT_TRANSCRIPT_HEADERS.length).getValues();
+    const catalogueRows = readVaultSheetAsObjects_(VAULT_SHEET_COURSE_CATALOGUE, VAULT_COURSE_CATALOGUE_HEADERS);
 
-      const targetId = String(studentId).trim();
-      const targetRowId = String(rowData.rowId).trim();
+    const nowIso = new Date().toISOString();
 
-      for (let i = 0; i < data.length; i++) {
-        if (String(data[i][0]).trim() !== targetId) continue;
-        if (String(data[i][2]).trim() !== targetRowId) continue; // col index 2 = rowId (studentId, sourceTabName, rowId, ...)
+    const newRows = masterRows.map(m => {
+      const { instance, base } = _splitMasterScheduleCourseName_(m.courseName);
+      const grade = _gradeForCourse_(base);
+      const block = _blockForGrade_(grade);
 
-        const sheetRow = VAULT_DATA_START_ROW + i;
-        const values = buildVaultRowValues_(targetId, targetRowId, rowData);
-        sheet.getRange(sheetRow, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
-        // Same text-format guard as addTranscriptRow — prevents Sheets
-        // from silently auto-converting startDate/adjStart/targetDate
-        // into real Date cells on this update path too.
-        sheet.getRange(sheetRow, 11, 1, 3).setNumberFormat('@');
+      const matches = catalogueRows.filter(c => String(c.className || '').trim() === base);
+      const catalogueMatch = instance
+        ? (matches.find(c => String(c.classId || '').endsWith('-' + instance)) || matches[0])
+        : matches[0];
 
-        logTranscriptWriteVault_(targetId, targetRowId, 'UPDATED', rowData.courseName);
-
-        return { success: true, rowId: targetRowId, studentId: targetId };
-      }
-
-      return { success: false, error: 'Row not found — studentId ' + targetId + ', rowId ' + targetRowId };
-    });
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-
-// ============================================================
-// SECTION 4 — ADD NEW ROW
-// ------------------------------------------------------------
-// Vault rows are just appended. rowId generated fresh via
-// Utilities.getUuid() (collision-proof, after the earlier
-// Date.now()+random collision bug).
-// ============================================================
-
-function addTranscriptRow(studentId, rowData) {
-  try {
-    const targetId = String(studentId).trim();
-    const newRowId = targetId + '_' + Utilities.getUuid();
-    const values = buildVaultRowValues_(targetId, newRowId, rowData);
-
-    // Locked: plain append at getLastRow()+1 — two staff adding rows
-    // for different students at the same moment could otherwise target
-    // the same row number and one write silently overwrites the other.
-    return _withLock(() => {
-      const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
-      sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
-      // Force text formatting on studentId/rowId — same guard used
-      // everywhere else in Vault against Sheets auto-converting
-      // ID-looking strings to numbers/dates.
-      sheet.getRange(sheet.getLastRow(), 1, 1, 2).setNumberFormat('@');
-      // Same guard for startDate/adjStart/targetDate (columns 11-13) —
-      // these are saved as plain 'yyyy-MM-dd' strings, and without this,
-      // Sheets can silently auto-convert a date-looking string into a
-      // real Date cell on write.
-      sheet.getRange(sheet.getLastRow(), 11, 1, 3).setNumberFormat('@');
-
-      logTranscriptWriteVault_(targetId, newRowId, 'ADDED', rowData.courseName);
-
-      return { success: true, rowId: newRowId, studentId: targetId };
-    });
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-
-// ============================================================
-// SECTION 5 — COURSE CATALOGUE READER
-// (Used by dashboard to populate course dropdowns)
-// ============================================================
-
-function getCourseCatalogue() {
-  try {
-    const cache = CacheService.getScriptCache();
-    const cached = cache.get('VAULT_COURSE_CATALOGUE');
-    if (cached) return JSON.parse(cached);
-
-    const rows = readVaultSheetAsObjects_(VAULT_SHEET_COURSE_CATALOGUE, VAULT_COURSE_CATALOGUE_HEADERS);
-
-    const courses = rows
-      .filter(row => row.className && row.classId)
-      .map(row => ({
-        className: String(row.className).trim(),
-        category:  String(row.category || '').trim(),
-        classId:   String(row.classId).trim()
-      }));
-
-    const result = { success: true, courses: courses };
-
-    try {
-      cache.put('VAULT_COURSE_CATALOGUE', JSON.stringify(result), 1800);
-    } catch (e) {}
-
-    return result;
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-
-// ============================================================
-// SECTION 6 — MASTER SCHEDULE HOURS READER
-// (Pulls standard hours per course for auto-fill)
-// ============================================================
-
-function getMasterScheduleHours() {
-  try {
-    const cache  = CacheService.getScriptCache();
-    const cached = cache.get('VAULT_MASTER_SCHEDULE_HOURS');
-    if (cached) return JSON.parse(cached);
-
-    const rows = readVaultSheetAsObjects_(VAULT_SHEET_CLASSES_ORDER, VAULT_CLASSES_ORDER_HEADERS);
-
-    const hours = {};
-    rows.forEach(row => {
-      const courseName = String(row.courseName || '').trim();
-      if (!courseName) return;
-      hours[courseName] = {
-        hours:        Number(row.hours) || 0,
-        units:        Number(row.units) || 0,
-        lessons:      Number(row.lessons) || 0,
-        minimumHours: Number(row.minimumHours) || 0
+      return {
+        studentId,
+        sourceTabName: '',
+        rowId: Utilities.getUuid(),
+        courseId: catalogueMatch ? catalogueMatch.classId : '',
+        courseName: base,
+        instance,
+        transfer: false,
+        subject: catalogueMatch ? catalogueMatch.category : '',
+        credit: m.units || 0,
+        classHours: m.hours || 0,
+        startDate: '',
+        adjStart: '',
+        targetDate: '',
+        completed: false,
+        lastModified: nowIso,
+        block,
       };
     });
 
-    const result = { success: true, hours: hours };
-
-    try {
-      cache.put('VAULT_MASTER_SCHEDULE_HOURS', JSON.stringify(result), 1800);
-    } catch (e) {}
-
-    return result;
-
-  } catch (err) {
-    return { success: false, error: err.message };
-  }
-}
-
-
-// ============================================================
-// SECTION 7 — HELPERS
-// ============================================================
-
-// Vault row builder — matches VAULT_TRANSCRIPT_HEADERS column
-// order exactly: studentId, sourceTabName, rowId, courseId,
-// courseName, instance, transfer, subject, credit, classHours,
-// startDate, adjStart, targetDate, completed, lastModified,
-// block. Dates stored as ISO strings, not Date objects.
-function buildVaultRowValues_(studentId, rowId, rowData) {
-  return [
-    studentId,
-    rowData.sourceTabName || '',
-    rowId,
-    rowData.courseId    || '',
-    rowData.courseName  || '',
-    rowData.instance    || '',
-    rowData.transfer    === true ? true : false,
-    rowData.subject     || '',
-    Number(rowData.credit)     || 0,
-    Number(rowData.classHours) || 0,
-    rowData.startDate  || '',
-    rowData.adjStart   || '',
-    rowData.targetDate || '',
-    rowData.completed  === true ? true : false,
-    new Date().toISOString(),
-    rowData.block === 2 ? 2 : 1,
-  ];
-}
-
-// Writes to Vault's Transcript Log, keyed by studentId + rowId.
-function logTranscriptWriteVault_(studentId, rowId, action, detail) {
-  try {
-    const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_LOG);
-    sheet.appendRow([new Date().toISOString(), studentId, action, rowId, detail || '']);
-  } catch (e) {
-    // Non-fatal — log failure never surfaces to user
-  }
-}
-
-
-// ============================================================
-// SECTION 8 — TARGET DATE ENGINE (CLIENT-SIDE PORT)
-// Pure calculation, no data source dependency.
-// ============================================================
-
-function calculateTargetDateJS(courseHours, startDateStr, settings) {
-  // This function is called client-side in the dashboard HTML.
-  // Duplicated here for reference and server-side testing.
-
-  if (!startDateStr || !courseHours || courseHours <= 0) return null;
-
-  const startDate = new Date(startDateStr);
-  if (isNaN(startDate.getTime())) return null;
-
-  const weeklyHours  = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
-  const allowedWeeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
-
-  const hasActiveWeek = allowedWeeks.w1 || allowedWeeks.w2 ||
-                        allowedWeeks.w3 || allowedWeeks.w4;
-  if (!hasActiveWeek) return null;
-
-  let remainingHours = courseHours;
-  let cursor         = new Date(startDate);
-  cursor.setHours(0, 0, 0, 0);
-
-  let safety = 0;
-
-  while (remainingHours > 0 && safety++ < 5000) {
-    const dayOfMonth = cursor.getDate();
-    const week       = dayOfMonth <= 7  ? 1
-                     : dayOfMonth <= 14 ? 2
-                     : dayOfMonth <= 21 ? 3 : 4;
-    const isWeekday  = cursor.getDay() >= 1 && cursor.getDay() <= 5;
-    const weekKey    = 'w' + week;
-
-    if (isWeekday && allowedWeeks[weekKey]) {
-      const weekdaysInWeek = countWeekdaysInMonthWeek_JS(cursor, week);
-      if (weekdaysInWeek > 0) remainingHours -= weeklyHours / weekdaysInWeek;
+    if (!newRows.length) {
+      return { success: true, added: 0, message: 'No matching courses found to populate.' };
     }
 
-    if (remainingHours <= 0) break;
-    cursor.setDate(cursor.getDate() + 1);
+    appendVaultRows_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS, newRows);
+
+    return { success: true, added: newRows.length };
+  } catch (err) {
+    return { success: false, error: err.message || 'Auto-populate failed.' };
+  } finally {
+    lock.releaseLock();
   }
-
-  if (remainingHours > 0) return null;
-
-  const y = cursor.getFullYear();
-  const m = String(cursor.getMonth() + 1).padStart(2, '0');
-  const d = String(cursor.getDate()).padStart(2, '0');
-  return `${y}-${m}-${d}`;
-}
-
-function countWeekdaysInMonthWeek_JS(date, week) {
-  const year     = date.getFullYear();
-  const month    = date.getMonth();
-  const startDay = week === 1 ? 1  : week === 2 ? 8  : week === 3 ? 15 : 22;
-  const lastDay  = new Date(year, month + 1, 0).getDate();
-  const endDay   = week === 1 ? 7  : week === 2 ? 14 : week === 3 ? 21 : lastDay;
-
-  let count = 0;
-  for (let day = startDay; day <= endDay; day++) {
-    const d = new Date(year, month, day).getDay();
-    if (d >= 1 && d <= 5) count++;
-  }
-  return count;
-}
-
-
-// ============================================================
-// SECTION 9 — TEST FUNCTIONS
-// ============================================================
-
-function testGetTranscript() {
-  const result = getStudentTranscript('2082094'); // adjust to a real studentId in Vault
-  Logger.log(JSON.stringify(result, null, 2));
-}
-
-function testAddTranscriptRow() {
-  const result = addTranscriptRow('TEST_STUDENT_0001', {
-    courseId:   'TEST-101',
-    courseName: 'Test Course — safe to delete',
-    instance:   '1',
-    transfer:   false,
-    subject:    'Electives',
-    credit:     0.5,
-    classHours: 40,
-    startDate:  '2026-07-09',
-    adjStart:   '',
-    targetDate: '2026-08-09',
-    completed:  false,
-    block:      1
-  });
-  Logger.log(JSON.stringify(result, null, 2));
-  // Note the returned rowId — use it in testSaveTranscriptRow below.
-}
-
-function testSaveTranscriptRow(rowIdFromAddTest) {
-  const result = saveTranscriptRow('TEST_STUDENT_0001', {
-    rowId:      rowIdFromAddTest,
-    courseId:   'TEST-101',
-    courseName: 'Test Course — UPDATED',
-    instance:   '1',
-    transfer:   false,
-    subject:    'Electives',
-    credit:     0.5,
-    classHours: 40,
-    startDate:  '2026-07-09',
-    adjStart:   '',
-    targetDate: '2026-08-09',
-    completed:  true,
-    block:      1
-  });
-  Logger.log(JSON.stringify(result, null, 2));
-}
-
-function testGetSettings() {
-  const result = getStudentTranscript('2082094');
-  Logger.log('Settings source: ' + result.settingsSource);
-  Logger.log('Settings: ' + JSON.stringify(result.settings, null, 2));
-}
-
-function testSaveSettings() {
-  const result = saveTranscriptSettings('2082094', {
-    weeklyHours: 10,
-    activeWeeks: { w1: true, w2: false, w3: true, w4: false }
-  });
-  Logger.log(JSON.stringify(result, null, 2));
-}
-
-function testTargetDateEngine() {
-  const result = calculateTargetDateJS(49, '2026-01-06', {
-    weeklyHours: 10,
-    activeWeeks: { w1: true, w2: true, w3: true, w4: true }
-  });
-  Logger.log('Target date: ' + result);
-}
-
-function testGetCourseCatalogue() {
-  const result = getCourseCatalogue();
-  Logger.log('Course count: ' + (result.courses ? result.courses.length : 0));
-  Logger.log(JSON.stringify(result.courses ? result.courses.slice(0, 3) : result, null, 2));
-}
-
-function testGetMasterScheduleHours() {
-  const result = getMasterScheduleHours();
-  const keys = result.hours ? Object.keys(result.hours) : [];
-  Logger.log('Course count: ' + keys.length);
-  if (keys.length) Logger.log('Sample: ' + keys[0] + ' -> ' + JSON.stringify(result.hours[keys[0]]));
 }
