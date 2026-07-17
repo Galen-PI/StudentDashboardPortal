@@ -507,6 +507,13 @@ function writeProgressSnapshots(profiles, hubSS) {
 
 function writeProgressSnapshotsVault_(profiles) {
   if (!profiles || !profiles.length) return;
+
+  // Locked: this both deletes stale rows AND appends new ones in the
+  // same Overrides sheet other functions read/write (notes, status
+  // overrides, merges). Without a lock, an overlapping cache-warm run
+  // or a staff action mid-write can see a half-pruned sheet or race
+  // the append.
+  return _withLock(() => {
   const sheet = _ensureVaultOverridesSheet_();
 
   const todayStr = _todayStr();
@@ -563,6 +570,7 @@ function writeProgressSnapshotsVault_(profiles) {
   }
   sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
   Logger.log('Snapshots (vault): wrote ' + newRows.length + ' new rows');
+  });
 }
 
 // ============================================================
