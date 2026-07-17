@@ -25,11 +25,14 @@ body {
   background: var(--bg);
   color: var(--text);
   min-height: 100vh;
+  /* Slightly looser than default — reduces fatigue on long sessions */
   font-size: 15px;
   line-height: 1.65;
 }
 
-/* ── Focus visibility (keyboard navigation) ─────────────────*/
+/* ── Focus visibility (keyboard navigation) ─────────────────
+   One consistent ring, reused everywhere, instead of relying on
+   inconsistent browser defaults for buttons/chips/cards. */
 a:focus-visible,
 button:focus-visible,
 input:focus-visible,
@@ -241,7 +244,6 @@ textarea:focus-visible,
 /* ── Filter Bar ──────────────────────────────────────────── */
 .filter-bar {
   display: flex; flex-wrap: wrap; align-items: center; gap: 10px;
-  /* Asymmetric padding — more left than right subtly grounds the filter bar */
   padding: 13px 16px 13px 18px;
   background: var(--bg2);
   border: 1px solid var(--border); border-radius: 7px; margin-bottom: 10px;
@@ -279,10 +281,6 @@ textarea:focus-visible,
 .chip:hover  { border-color: var(--border-bright); color: var(--text); }
 .chip:active { transform: scale(0.96); }
 .chip.active { background: var(--accent-glow); border-color: var(--accent-dim); color: var(--accent); }
-
-/* Chip active states now derive from the theme's own risk colors
-   (--high/--medium/--low/--neutral + the matching -glow token)
-   instead of a fixed rgba snapshot of the dark theme's palette. */
 .chip-high.active {
   background: var(--high-glow);
   border-color: color-mix(in srgb, var(--high) 40%, transparent);
@@ -353,8 +351,23 @@ textarea:focus-visible,
 .sort-select:focus, .role-select:focus { border-color: var(--accent-mid); }
 .sort-select:hover, .role-select:hover { border-color: var(--border-bright); }
 
-.result-bar { padding: 5px 0 8px; min-height: 26px; }
+.result-bar { padding: 5px 0 8px; min-height: 26px; display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
 .result-count { font-size: 12px; color: var(--text-muted); white-space: nowrap; font-weight: 500; }
+
+.active-filter-chips { display: flex; align-items: center; gap: 6px; flex-wrap: wrap; }
+.filter-chip {
+  display: inline-flex; align-items: center; gap: 6px;
+  background: var(--accent-glow); color: var(--accent);
+  border: 1px solid color-mix(in srgb, var(--accent) 35%, transparent);
+  border-radius: 20px; padding: 3px 6px 3px 12px;
+  font-size: 12px; font-weight: 600; white-space: nowrap;
+}
+.filter-chip-x {
+  border: none; background: transparent; color: inherit; cursor: pointer;
+  font-size: 11px; line-height: 1; padding: 3px 5px; border-radius: 50%;
+  opacity: 0.75;
+}
+.filter-chip-x:hover { opacity: 1; background: color-mix(in srgb, var(--accent) 20%, transparent); }
 
 .view-toggle-wrap { display: flex; align-items: center; gap: 3px; margin-left: 10px; }
 
@@ -402,8 +415,55 @@ textarea:focus-visible,
 /* Name cell gets more generous padding — it's the primary data point */
 .students-table td:nth-child(2) { padding: 14px 16px; white-space: normal; max-width: none; min-width: 190px; }
 
-/* ── Student name cell ───────────────────────────────────── */
-.student-name { font-weight: 700; font-size: 14px; color: var(--text); line-height: 1.3; }
+/* ── Zoom / text-size control ────────────────────────────────
+   Uses the browser's native `zoom` property rather than rem
+   conversion — the whole app is built on hardcoded px values,
+   so `zoom` scales everything (text, spacing, buttons)
+   proportionally without touching every rule. Works well in
+   Chrome/Edge; less reliable in Firefox/Safari, but that's an
+   acceptable tradeoff for a one-line toggle vs. a full px->rem
+   rewrite of every style rule in this file. */
+html.zoom-sm { zoom: 0.85; }
+html.zoom-lg { zoom: 1.15; }
+
+.zoom-control { display: flex; align-items: center; gap: 2px; border: 1px solid var(--border); border-radius: 7px; padding: 2px; background: var(--bg2); }
+.zoom-control button {
+  border: none; background: transparent; color: var(--text-muted); cursor: pointer;
+  font-family: var(--font); font-weight: 700; border-radius: 5px; padding: 5px 9px; font-size: 12px;
+}
+.zoom-control button.active { background: var(--accent-glow); color: var(--accent); }
+.zoom-control button:hover:not(.active) { background: var(--bg3); }
+
+/* ── Density toggle — compact row spacing ─────────────────── */
+body.density-compact .students-table td { padding: 7px 16px; }
+body.density-compact .students-table td:first-child  { padding: 7px 8px; }
+body.density-compact .students-table td:nth-child(2)  { padding: 7px 16px; }
+body.density-compact .students-table thead th { padding: 9px 16px 7px; }
+body.density-compact .student-name { font-size: 13px; }
+body.density-compact .student-id   { font-size: 10px; margin-top: 1px; }
+
+/* ── Pin-to-top ───────────────────────────────────────────── */
+.pin-btn {
+  border: none; background: transparent; cursor: pointer; color: var(--text);
+  opacity: 0.55;
+  padding: 8px; line-height: 1; margin: -8px 2px -8px -6px;
+  min-width: 28px; min-height: 28px;
+  border-radius: 6px;
+  display: inline-flex; align-items: center; justify-content: center;
+  flex-shrink: 0;
+}
+.pin-btn svg { width: 14px; height: 14px; display: block; flex-shrink: 0; fill: currentColor !important; }
+.pin-btn.pinned { color: var(--accent); opacity: 1; }
+.pin-btn:hover { color: var(--accent); opacity: 1; background: var(--bg3); }
+.students-table tbody tr.row-pinned { background: var(--accent-glow); }
+
+/* ── Row highlight after save ─────────────────────────────── */
+@keyframes rowSavedGlow {
+  0%   { background-color: var(--accent-glow); }
+  100% { background-color: transparent; }
+}
+.students-table tbody tr.row-just-saved { animation: rowSavedGlow 2.2s ease-out; }
+.student-name { display: flex; align-items: center; gap: 5px; font-weight: 700; font-size: 14px; color: var(--text); line-height: 1.3; }
 .student-id   { font-size: 11px; color: var(--text-muted); margin-top: 3px; }
 
 .hidden-col { display: none !important; }
@@ -482,6 +542,7 @@ textarea:focus-visible,
 }
 .tag-hs       { color: var(--accent);     border-color: color-mix(in srgb, var(--accent) 32%, transparent); }
 .tag-hiset    { color: var(--accent-mid); border-color: color-mix(in srgb, var(--accent-mid) 28%, transparent); }
+.tag-ged      { color: var(--accent-mid); border-color: color-mix(in srgb, var(--accent-mid) 28%, transparent); }
 .tag-trades   { color: var(--accent-mid); border-color: color-mix(in srgb, var(--accent-mid) 28%, transparent); }
 .tag-complete { color: var(--low);        border-color: color-mix(in srgb, var(--low) 32%, transparent); }
 .tag-warn     { color: var(--medium);     border-color: color-mix(in srgb, var(--medium) 32%, transparent); }
@@ -698,6 +759,28 @@ textarea:focus-visible,
 .sc-footer       { margin-top: auto; padding: 9px 16px; border-top: 1px solid var(--border); display: flex; align-items: center; gap: 8px; }
 .sc-grad-window  { font-size: 11px; font-weight: 600; flex: 1; }
 
+.sc-target-date {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin: 8px 0;
+  padding: 6px 0;
+  font-size: 12px;
+  border-top: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+}
+
+.sc-target-label {
+  color: var(--text-muted);
+  font-weight: 600;
+}
+
+.sc-target-value {
+  color: var(--text);
+  font-weight: 700;
+}
+
+
 /* ── Action Needed View ──────────────────────────────────── */
 .action-view { display: flex; flex-direction: column; gap: 14px; margin-top: 6px; }
 
@@ -846,10 +929,9 @@ textarea:focus-visible,
 .modal-body        { overflow-y: auto; padding: 0; flex: 1; }
 .modal-columns     { display: grid; grid-template-columns: 1fr 1fr; gap: 0; min-height: 100%; }
 .modal-col         { padding: 20px 22px; display: flex; flex-direction: column; gap: 14px; }
+/* Left column gets slightly more padding — it's the primary column */
 .modal-col:first-child { border-right: 1px solid var(--border); padding: 22px 24px 22px 22px; }
 .modal-col:last-child  { padding: 20px 22px 20px 22px; }
-
-
 #detailModal .modal-box.tr-wide {
   max-width: 1180px;
 }
@@ -1045,7 +1127,7 @@ textarea:focus-visible,
   gap: 8px;
 }
 
-
+// Pacing //
 .pacing-table-wrap {
   max-height: 480px;
   overflow-y: auto;
@@ -1421,12 +1503,18 @@ textarea:focus-visible,
   padding: 10px 4px 4px;
   text-transform: uppercase; letter-spacing: 0.6px;
 }
+.sidebar-section-sublabel {
+  font-size: 10px; font-weight: 700; color: var(--text-muted);
+  padding: 2px 4px 6px;
+  text-transform: uppercase; letter-spacing: 0.5px;
+}
 .sidebar-btn {
   display: flex; align-items: center; gap: 11px;
   width: 100%; padding: 10px 13px; border-radius: 6px;
   border: 1px solid var(--border); background: var(--bg3);
   color: var(--text); font-size: 13px; font-weight: 600;
   font-family: var(--font); cursor: pointer; text-align: left;
+  /* Indent on hover — psychologically suggests depth and selection */
   transition: background 0.15s, border-color 0.15s, padding-left 0.18s;
 }
 .sidebar-btn svg        { width: 15px; height: 15px; color: var(--accent-dim); flex-shrink: 0; }
@@ -1447,6 +1535,48 @@ textarea:focus-visible,
   transition: border-color 0.15s;
 }
 .sidebar-role-select:focus { border-color: var(--accent-mid); }
+
+.sidebar-display-settings { display: flex; flex-direction: column; gap: 4px; padding: 2px 4px; }
+.sidebar-toggle-row {
+  display: flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text);
+  padding: 6px 4px; cursor: pointer; border-radius: 4px;
+}
+.sidebar-toggle-row:hover { background: var(--bg3); }
+.sidebar-toggle-row input { cursor: pointer; }
+
+/* ── Custom theme controls ───────────────────────────────── */
+.custom-theme-base { display: flex; align-items: center; gap: 6px; margin-bottom: 8px; }
+.ct-base-btn {
+  flex: 1; padding: 6px 0; border-radius: 6px; border: 1px solid var(--border);
+  background: var(--bg); color: var(--text-muted); font-family: var(--font);
+  font-size: 12px; font-weight: 600; cursor: pointer;
+}
+.ct-base-btn.active { background: var(--accent-glow); color: var(--accent); border-color: var(--accent); }
+.custom-theme-swatch {
+  width: 22px; height: 22px; border-radius: 50%; flex-shrink: 0;
+  border: 2px solid var(--border-bright);
+}
+.custom-theme-slider-row { display: flex; align-items: center; gap: 8px; margin-bottom: 8px; }
+.custom-theme-slider-label { font-size: 11px; color: var(--text-muted); width: 46px; flex-shrink: 0; }
+.custom-theme-slider-row input[type="range"] {
+  flex: 1; -webkit-appearance: none; appearance: none;
+  height: 4px; border-radius: 2px; background: var(--border); outline: none;
+}
+.custom-theme-slider-row input[type="range"]::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg2);
+}
+.custom-theme-slider-row input[type="range"]::-moz-range-thumb {
+  width: 15px; height: 15px; border-radius: 50%;
+  background: var(--accent); cursor: pointer; border: 2px solid var(--bg2);
+}
+.ct-apply-btn {
+  width: 100%; padding: 8px 0; margin-top: 2px; border-radius: 6px; border: none;
+  background: var(--accent); color: var(--bg2); font-family: var(--font);
+  font-size: 12px; font-weight: 700; cursor: pointer;
+}
+.ct-apply-btn:hover { opacity: 0.9; }
 
 /* ── Hidden utility ──────────────────────────────────────── */
 .hidden { display: none !important; }
@@ -1774,6 +1904,29 @@ textarea:focus-visible,
 .sv-login-hint {
   margin-top: 16px; font-size: 12px;
   color: var(--text-muted); text-align: center; line-height: 1.5;
+}
+.sv-login-message {
+  width: 100%;
+  box-sizing: border-box;
+  margin-top: 18px;
+  padding: 12px 14px;
+  background: color-mix(in srgb, var(--accent) 8%, transparent);
+  border-left: 4px solid var(--accent);
+  border-radius: 8px;
+  text-align: left;
+  font-size: 0.9rem;
+}
+
+.sv-login-message strong {
+  display: block;
+  margin-bottom: 5px;
+  color: var(--text);
+}
+
+.sv-login-message p {
+  margin: 0;
+  line-height: 1.4;
+  color: var(--text-muted);
 }
 /* ── Responsive ──────────────────────────────────────────── */
 @media (max-width: 1100px) {
