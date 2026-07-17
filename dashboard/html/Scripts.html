@@ -250,12 +250,24 @@ document.addEventListener('DOMContentLoaded', () => {
     if (btn) openModal(btn.dataset.id);
   });
   try { _lockModeActive = localStorage.getItem('dashLockMode') === '1'; } catch(e) {}
+  _restoreColumnVisibility();
+  _restoreZoomLevel();
+  _restoreDensity();
   try {
-    if (localStorage.getItem('dashColsExpanded')) {
-      _colsExpanded = true;
-      document.querySelectorAll('.col-expandable').forEach(el => el.classList.remove('hidden-col'));
-      const btn = document.getElementById('expandColsBtn');
-      if (btn) { btn.textContent = '－'; btn.classList.add('open'); }
+    const savedRisk = localStorage.getItem('dashActiveRisk');
+    if (savedRisk) {
+      const riskBtn = document.querySelector('[data-risk="' + savedRisk + '"]');
+      if (riskBtn) { document.querySelectorAll('[data-risk]').forEach(b => b.classList.remove('active')); riskBtn.classList.add('active'); activeRisk = savedRisk; }
+    }
+    const savedType = localStorage.getItem('dashActiveType');
+    if (savedType) {
+      const typeBtn = document.querySelector('[data-type="' + savedType + '"]');
+      if (typeBtn) { document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active')); typeBtn.classList.add('active'); activeType = savedType; }
+    }
+    const savedSort = localStorage.getItem('dashSortKey');
+    if (savedSort) {
+      const sortEl = document.getElementById('sortSelect');
+      if (sortEl) sortEl.value = savedSort;
     }
   } catch(e) {}
   _renderCustomPresets();
@@ -276,6 +288,7 @@ document.addEventListener('DOMContentLoaded', () => {
   if (_currentRole) {
     document.getElementById('loginScreen').classList.add('hidden');
     _applyRoleUI();
+    _loadPinnedIds();
     loadData();
     initCounselorFilter();
     initTeacherFilter();
@@ -333,6 +346,7 @@ function _completeLogin() {
   const wirLabel = document.getElementById('wirWeekLabel');
   if (wirLabel) wirLabel.textContent = _currentName + ' · ' + _currentRole;
   _applyRoleUI();
+  _loadPinnedIds();
   loadData();
   initCounselorFilter();
   initTeacherFilter();
@@ -580,6 +594,7 @@ function setRiskFilter(el) {
   document.querySelectorAll('[data-risk]').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   activeRisk = el.dataset.risk;
+  try { localStorage.setItem('dashActiveRisk', activeRisk); } catch(e) {}
   applyFilters();
 }
 
@@ -587,15 +602,18 @@ function setTypeFilter(el) {
   document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
   activeType = el.dataset.type;
+  try { localStorage.setItem('dashActiveType', activeType); } catch(e) {}
   applyFilters();
 }
 
 function applyFilters() {
+  try { localStorage.setItem('dashSortKey', document.getElementById('sortSelect').value); } catch(e) {}
   const filtered = _getFilteredSorted();
   const sortKey     = document.getElementById('sortSelect').value;
   const fingerprint = _currentView + '|' + sortKey + '|' + filtered.map(p => p.id + p.risk.score).join(',');
   const countEl = document.getElementById('resultCount');
   countEl.textContent = `${filtered.length} student${filtered.length !== 1 ? 's' : ''}`;
+  _renderFilterChips();
   if (fingerprint === _lastRenderFingerprint) return;
   _lastRenderFingerprint = fingerprint;
   selectedIds.clear();
@@ -603,6 +621,46 @@ function applyFilters() {
   if      (_currentView === 'cards')  renderCards(filtered);
   else if (_currentView === 'action') renderActionView(filtered);
   else                                renderTable(filtered);
+}
+
+// ── Active filter chips ───────────────────────────────────────
+// The one thing people kept losing track of: forgetting a filter
+// was set from days ago and wondering where half their students
+// went. This shows every active filter in plain words with a
+// one-click ✕ to clear it, right above the table.
+function _renderFilterChips() {
+  const box = document.getElementById('activeFilterChips');
+  if (!box) return;
+  const chips = [];
+
+  if (activeRisk !== 'ALL') {
+    const label = document.querySelector('[data-risk="' + activeRisk + '"]')?.textContent || activeRisk;
+    chips.push({ label, onClear: "document.querySelector('[data-risk=\"ALL\"]').click()" });
+  }
+  if (activeType !== 'ALL') {
+    const label = document.querySelector('[data-type="' + activeType + '"]')?.textContent || activeType;
+    chips.push({ label, onClear: "document.querySelector('[data-type=\"ALL\"]').click()" });
+  }
+  const searchVal = (document.getElementById('searchInput')?.value || '').trim();
+  if (searchVal) {
+    chips.push({ label: 'Search: "' + searchVal + '"', onClear: "document.getElementById('searchInput').value=''; applyFilters();" });
+  }
+  if (_activeCounselorTrades) {
+    const name = document.getElementById('counselorSelect')?.value || '';
+    chips.push({ label: 'Counselor: ' + name, onClear: 'clearCounselorFilter()' });
+  }
+  if (_activeHSDFilter) {
+    chips.push({ label: 'Teacher: ' + _activeHSDFilter, onClear: 'clearTeacherFilter()' });
+  }
+  if (_staleOnlyActive) {
+    chips.push({ label: 'No Recent Updates', onClear: '_staleOnlyActive=false; applyFilters();' });
+  }
+
+  if (!chips.length) { box.innerHTML = ''; box.classList.remove('show'); return; }
+  box.classList.add('show');
+  box.innerHTML = chips.map(c =>
+    `<span class="filter-chip">${esc(c.label)}<button class="filter-chip-x" onclick="${c.onClear}" title="Clear this filter">✕</button></span>`
+  ).join('');
 }
 
 // ── Counselor filter ─────────────────────────────────────────
@@ -744,14 +802,18 @@ function renderTable(profiles) {
   tbody.innerHTML = profiles.map(p => {
     const d = _buildStudentDisplay(p);
     const isChecked = selectedIds.has(p.id);
+    const isPinned  = _pinnedIds.has(p.id);
     return `
-      <tr class="${isChecked ? 'row-selected' : ''}">
+      <tr class="${isChecked ? 'row-selected' : ''} ${isPinned ? 'row-pinned' : ''}">
         <td style="width:36px;text-align:center;">
           <input type="checkbox" class="row-check" data-id="${esc(p.id)}"
             ${isChecked ? 'checked' : ''} onchange="toggleRowSelect(this)">
         </td>
         <td>
-          <div class="student-name">${esc(p.displayName || 'Unknown')}</div>
+          <div class="student-name">
+            <button class="pin-btn ${isPinned ? 'pinned' : ''}" onclick="togglePin('${esc(p.id)}', event)" title="${isPinned ? 'Unpin' : 'Pin to top'}">${isPinned ? PIN_ICON_FILLED : PIN_ICON_OUTLINE}</button>
+            ${esc(p.displayName || 'Unknown')}
+          </div>
           <div class="student-id">
             ${p.academicId ? `<span class="student-id-chip" onclick="copyId(event, '${esc(p.academicId)}')" title="Click to copy ID">ID: ${esc(p.academicId)}</span>` : ''}
             ${p.mappingMissing && !p.hsComplete ? '<span class="type-tag tag-warn">Not Set Up</span>' : ''}
@@ -760,17 +822,17 @@ function renderTable(profiles) {
             ${p.notes?.length ? `<span class="notes-badge">${p.notes.length}</span>` : ''}
           </div>
         </td>
-        <td>
+        <td class="col-risk">
           <span class="risk-badge risk-${d.riskLevel}">${riskLevelLabel(d.riskLevel)}</span>
           ${d.trendHtml}
         </td>
-        <td>${d.academicCell}</td>
+        <td class="col-status" title="${esc(_stripTags(d.academicCell))}">${d.academicCell}</td>
         <td class="col-academic-pct col-expandable hidden-col">${progressBar(d.acPct, 'academic')}</td>
-        <td>${d.tradesNameCell}</td>
+        <td class="col-trade-name" title="${esc(d.tradeName || _stripTags(d.tradesNameCell))}">${d.tradesNameCell}</td>
         <td class="col-trade-pct col-expandable hidden-col">${d.tradesPctCell}</td>
-        <td>${d.thisWkCell}</td>
+        <td class="col-thisweek">${d.thisWkCell}</td>
         <td class="col-etar col-expandable hidden-col">${d.etarCell}</td>
-        <td>${d.intBadge}</td>
+        <td class="col-wir">${d.intBadge}</td>
         <td>
           <div class="action-btns">
             <button class="detail-btn" data-id="${esc(p.id || '')}">View</button>
@@ -916,10 +978,14 @@ function _buildStudentDisplay(p) {
 // ─────────────────────────────────────────────────────────────
 // 12. Detail modal
 // ─────────────────────────────────────────────────────────────
+let _savedTableScrollTop = null;
+
 function openModal(id) {
   const p = allProfiles.find(x => x.id === id);
   if (!p) return;
-  
+  const tableWrap = document.querySelector('.table-wrap');
+  if (tableWrap) _savedTableScrollTop = tableWrap.scrollTop;
+
   _resetTranscriptStateIfNewStudent(p);
 
   try {
@@ -1188,8 +1254,17 @@ function infoRowsWithTips(rows) {
 function closeModal(e) {
   if (e && e.target !== document.getElementById('detailModal')) return;
   document.getElementById('detailModal').classList.add('hidden');
+  _restoreTableScroll();
 }
-function closeModalButton() { document.getElementById('detailModal').classList.add('hidden'); }
+function closeModalButton() {
+  document.getElementById('detailModal').classList.add('hidden');
+  _restoreTableScroll();
+}
+function _restoreTableScroll() {
+  if (_savedTableScrollTop === null) return;
+  const tableWrap = document.querySelector('.table-wrap');
+  if (tableWrap) tableWrap.scrollTop = _savedTableScrollTop;
+}
 
 document.addEventListener('keydown', e => {
   if (e.key === 'Escape') {
@@ -1401,10 +1476,15 @@ function buildOverridePanel(p) {
     { value: 'NOT_STARTED',    label: 'Not Started' },
   ];
   const TRADE_NAME_OPTIONS = ['BCT','Carpentry','CNA','Culinary','Security','USN','Pharmacy Technician','OTP in Advanced Manufacturing'];
+  // Same three HS class groups the Teacher Filter uses (TeacherFilter.gs:TEACHER_HSD_CLASSES) —
+  // this override lets staff manually place a student into one when the schedule-based
+  // auto-detection has nothing for them yet (no schedule uploaded, ambiguous class name, etc).
+  const HSD_CLASS_OPTIONS = ['HSD 2', 'HSD3', 'HSE/HSD1'];
 
   const currentAcademicStatus = p.academicStatusOverride || '';
   const currentTradeStatus    = p.tradeStatusOverride    || '';
   const currentTrade          = p.tradeNameOverride      || '';
+  const currentHsdClass       = p.hsdOverride            || '';
 
   return `<div id="overridePanel" class="info-section hidden">
     <h3>${ICONS.overrides} Manual Overrides</h3>
@@ -1442,6 +1522,17 @@ function buildOverridePanel(p) {
           <button class="btn-override danger" onclick="clearOverride('trade_name')">Clear</button>
         </div>
       </div>
+      <div class="override-row">
+        <label>High School View</label>
+        <select id="ovHsdClass">
+          <option value="">— No override (use schedule) —</option>
+          ${HSD_CLASS_OPTIONS.map(o => `<option value="${o}" ${currentHsdClass===o?'selected':''}>${esc(o)}</option>`).join('')}
+        </select>
+        <div class="override-actions">
+          <button class="btn-override" onclick="saveOverride('hsd_class')">Save</button>
+          <button class="btn-override danger" onclick="clearOverride('hsd_class')">Clear</button>
+        </div>
+      </div>
       <div id="overrideSaved" class="override-saved">Saved — refreshing…</div>
       <div id="overrideError" class="override-error"></div>
     </div>
@@ -1455,6 +1546,7 @@ function saveOverride(type) {
   if      (type === 'academic_status') { value = document.getElementById('ovAcademicStatus').value; if (!value) { clearOverride(type); return; } }
   else if (type === 'trade_status')    { value = document.getElementById('ovTradeStatus').value;    if (!value) { clearOverride(type); return; } }
   else if (type === 'trade_name')      { value = document.getElementById('ovTradeName').value;      if (!value) { clearOverride(type); return; } }
+  else if (type === 'hsd_class')       { value = document.getElementById('ovHsdClass').value;       if (!value) { clearOverride(type); return; } }
   applyOverrideLocally(id, type, value);
   google.script.run.withFailureHandler(err => onOverrideError(id, err)).setOverride(id, type, value, '', _currentEmployeeId, _currentRole);
 }
@@ -1466,17 +1558,34 @@ function clearOverride(type) {
   google.script.run.withFailureHandler(err => onOverrideError(id, err)).setOverride(id, type, '', '', 'staff');
 }
 
+// ── Row highlight after save ───────────────────────────────────
+// After saving, it's easy to lose track of which row you were just
+// on, especially once the table re-sorts. Briefly glows that
+// student's row so it stays visually anchored for a couple seconds.
+function _flashRowSaved(id) {
+  if (!id) return;
+  const checkbox = document.querySelector('.row-check[data-id="' + CSS.escape(String(id)) + '"]');
+  const row = checkbox ? checkbox.closest('tr') : null;
+  if (!row) return;
+  row.classList.remove('row-just-saved');
+  void row.offsetWidth; // force reflow so the animation restarts if it's already mid-flash
+  row.classList.add('row-just-saved');
+  setTimeout(() => row.classList.remove('row-just-saved'), 2200);
+}
+
 function applyOverrideLocally(id, type, value) {
   const p = allProfiles.find(x => x.id === id);
   if (!p) return;
   if      (type === 'academic_status') p.academicStatusOverride = value || null;
   else if (type === 'trade_status')    p.tradeStatusOverride    = value || null;
   else if (type === 'trade_name')      p.tradeNameOverride      = value || null;
+  else if (type === 'hsd_class')       p.hsdOverride            = value || null;
   currentModalProfile = p;
   applyFilters();
+  _flashRowSaved(id);
   openModal(id);
   const flash = document.getElementById('overrideSaved');
-  if (flash) { flash.classList.add('show'); setTimeout(() => flash.classList.remove('show'), 1500); }
+  if (flash) { flash.classList.add('show'); setTimeout(() => flash.classList.remove('show'), 2500); }
 }
 
 function onOverrideError(id, err) {
@@ -2187,6 +2296,12 @@ function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
+// Plain-text version of an HTML snippet, for use in title="" tooltips
+// (title attributes can't render markup, only plain text).
+function _stripTags(html) {
+  return String(html ?? '').replace(/<[^>]*>/g, '').trim();
+}
+
 function pct(v)    { return v !== null && v !== undefined ? (+v).toFixed(1) + '%' : '—'; }
 function pctStr(v) {
   if (v === null || v === undefined || v === '') return '—';
@@ -2313,9 +2428,10 @@ async function saveQuickEdit() {
     if (noteText)  { if (!p.notes) p.notes = []; p.notes.unshift({ text: noteText, setBy: 'staff', date: new Date().toISOString() }); }
   }
   applyFilters();
+  _flashRowSaved(id);
   btn.textContent = 'Save Changes'; btn.disabled = false;
   statusEl.textContent = 'Saved!'; statusEl.className = 'qe-status show';
-  setTimeout(() => { statusEl.className = 'qe-status'; closeQuickEdit(); }, 1200);
+  setTimeout(() => { statusEl.className = 'qe-status'; closeQuickEdit(); }, 1600);
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -2775,7 +2891,7 @@ function saveNote(studentId) {
   google.script.run
     .withSuccessHandler(() => {
       const flash = document.getElementById('noteSaved');
-      if (flash) { flash.classList.add('show'); setTimeout(() => flash.classList.remove('show'), 1500); }
+      if (flash) { flash.classList.add('show'); setTimeout(() => flash.classList.remove('show'), 2500); }
       const p = allProfiles.find(x => x.id === studentId);
       if (p) {
         if (!p.notes) p.notes = [];
@@ -2890,7 +3006,8 @@ function _getFilteredSorted() {
     }
     if (_activeHSDFilter) {
      const studentId = p.academicId || p.id || '';
-     if (_hsdAssignments[studentId] !== _activeHSDFilter) return false;
+     const effectiveHSD = p.hsdOverride || _hsdAssignments[studentId];
+     if (effectiveHSD !== _activeHSDFilter) return false;
     }
 
     return true;
@@ -2898,6 +3015,10 @@ function _getFilteredSorted() {
 
   const sortKey = document.getElementById('sortSelect').value;
   results.sort((a, b) => {
+    // Pinned students always float to the top, whatever the sort.
+    const aPinned = _pinnedIds.has(a.id), bPinned = _pinnedIds.has(b.id);
+    if (aPinned !== bPinned) return aPinned ? -1 : 1;
+
     switch (sortKey) {
       case 'risk': {
         const o = { HIGH:0, MEDIUM:1, LOW:2, UNKNOWN:3 };
@@ -3005,14 +3126,134 @@ function updateBulkBar() {
   else                       { bar.classList.add('hidden'); }
 }
 
-let _colsExpanded = false;
+// ── Column visibility — per-column model ──────────────────────
+// Replaces the old single on/off _colsExpanded boolean. The
+// existing "+" button (toggleExtraCols) still works exactly as
+// before as an "everything on/off" shortcut, but now it's backed
+// by the same per-column state the new Columns customizer panel
+// controls, so the two stay in sync with each other.
+const COL_VISIBILITY_KEYS = {
+  risk: 'col-risk', status: 'col-status', academicPct: 'col-academic-pct',
+  tradeName: 'col-trade-name', tradePct: 'col-trade-pct', thisWeek: 'col-thisweek',
+  etar: 'col-etar', wir: 'col-wir',
+};
+let _colVisibility = {
+  risk: true, status: true, academicPct: false,
+  tradeName: true, tradePct: false, thisWeek: true,
+  etar: false, wir: true,
+};
+
+function _applyColVisibility() {
+  Object.entries(COL_VISIBILITY_KEYS).forEach(([key, cls]) => {
+    document.querySelectorAll('.' + cls).forEach(el => el.classList.toggle('hidden-col', !_colVisibility[key]));
+    const cb = document.getElementById('colToggle-' + key);
+    if (cb) cb.checked = !!_colVisibility[key];
+  });
+  const anyShown = EXPANDABLE_COL_KEYS.some(k => _colVisibility[k]);
+  const btn = document.getElementById('expandColsBtn');
+  if (btn) { btn.textContent = anyShown ? '－' : '＋'; btn.classList.toggle('open', anyShown); btn.title = anyShown ? 'Hide extra columns' : 'Show more columns'; }
+  try { localStorage.setItem('dashColVisibility', JSON.stringify(_colVisibility)); } catch(e) {}
+}
+
+function setColumnVisibility(key, visible) {
+  _colVisibility[key] = visible;
+  _applyColVisibility();
+}
+
+// The "+" button's original scope — only the 3 columns that were
+// always hidden-by-default. Kept separate from the full
+// COL_VISIBILITY_KEYS set so this button's behavior doesn't change
+// now that Risk/Status/Trade/This Week/WIR are also individually
+// toggleable (those default to visible and are controlled only via
+// their own sidebar checkboxes, not this shortcut).
+const EXPANDABLE_COL_KEYS = ['academicPct', 'tradePct', 'etar'];
 
 function toggleExtraCols() {
-  _colsExpanded = !_colsExpanded;
-  document.querySelectorAll('.col-expandable').forEach(el => el.classList.toggle('hidden-col', !_colsExpanded));
-  const btn = document.getElementById('expandColsBtn');
-  if (btn) { btn.textContent = _colsExpanded ? '－' : '＋'; btn.classList.toggle('open', _colsExpanded); btn.title = _colsExpanded ? 'Hide extra columns' : 'Show more columns'; }
-  try { localStorage.setItem('dashColsExpanded', _colsExpanded ? '1' : ''); } catch(e) {}
+  const anyShown = EXPANDABLE_COL_KEYS.some(k => _colVisibility[k]);
+  const next = !anyShown;
+  EXPANDABLE_COL_KEYS.forEach(k => _colVisibility[k] = next);
+  _applyColVisibility();
+}
+
+function _restoreColumnVisibility() {
+  try {
+    const saved = localStorage.getItem('dashColVisibility');
+    if (saved) {
+      _colVisibility = Object.assign(_colVisibility, JSON.parse(saved));
+    } else if (localStorage.getItem('dashColsExpanded')) {
+      // Backward-compat with the old single-toggle preference.
+      Object.keys(_colVisibility).forEach(k => _colVisibility[k] = true);
+    }
+  } catch(e) {}
+  _applyColVisibility();
+}
+
+// ── Zoom / text size ───────────────────────────────────────────
+function setZoomLevel(level) {
+  document.documentElement.classList.remove('zoom-sm', 'zoom-lg');
+  if (level === 'sm' || level === 'lg') document.documentElement.classList.add('zoom-' + level);
+  document.querySelectorAll('.zoom-control [data-zoom]').forEach(b => b.classList.toggle('active', b.dataset.zoom === level));
+  try { localStorage.setItem('dashZoom', level); } catch(e) {}
+}
+
+function _restoreZoomLevel() {
+  let level = 'md';
+  try { level = localStorage.getItem('dashZoom') || 'md'; } catch(e) {}
+  setZoomLevel(level);
+}
+
+// ── Density toggle — now a checkbox in the sidebar's View section
+// (moved out of the filter-bar toolbar) ─────────────────────────
+function toggleDensity() {
+  const isCompact = document.body.classList.toggle('density-compact');
+  const cb = document.getElementById('densityCheckbox');
+  if (cb) cb.checked = isCompact;
+  try { localStorage.setItem('dashDensity', isCompact ? '1' : ''); } catch(e) {}
+}
+
+function _restoreDensity() {
+  let isCompact = false;
+  try { isCompact = localStorage.getItem('dashDensity') === '1'; } catch(e) {}
+  if (isCompact) {
+    document.body.classList.add('density-compact');
+    const cb = document.getElementById('densityCheckbox');
+    if (cb) cb.checked = true;
+  }
+}
+
+// ── Pin student to top ─────────────────────────────────────────
+// ── Pin to top ─────────────────────────────────────────────────
+const PIN_ICON_OUTLINE = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-pin" viewBox="0 0 16 16">
+  <path d="M4.146.146A.5.5 0 0 1 4.5 0h7a.5.5 0 0 1 .5.5c0 .68-.342 1.174-.646 1.479-.126.125-.25.224-.354.298v4.431l.078.048c.203.127.476.314.751.555C12.36 7.775 13 8.527 13 9.5a.5.5 0 0 1-.5.5h-4v4.5c0 .276-.224 1.5-.5 1.5s-.5-1.224-.5-1.5V10h-4a.5.5 0 0 1-.5-.5c0-.973.64-1.725 1.17-2.189A6 6 0 0 1 5 6.708V2.277a3 3 0 0 1-.354-.298C4.342 1.674 4 1.179 4 .5a.5.5 0 0 1 .146-.354m1.58 1.408-.002-.001zm-.002-.001.002.001A.5.5 0 0 1 6 2v5a.5.5 0 0 1-.276.447h-.002l-.012.007-.054.03a5 5 0 0 0-.827.58c-.318.278-.585.596-.725.936h7.792c-.14-.34-.407-.658-.725-.936a5 5 0 0 0-.881-.61l-.012-.006h-.002A.5.5 0 0 1 10 7V2a.5.5 0 0 1 .295-.458 1.8 1.8 0 0 0 .351-.271c.08-.08.155-.17.214-.271H5.14q.091.15.214.271a1.8 1.8 0 0 0 .37.282"/>
+</svg>`;
+const PIN_ICON_FILLED = `<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" fill="currentColor" class="bi bi-pin-angle-fill" viewBox="0 0 16 16">
+  <path d="M9.828.722a.5.5 0 0 1 .354.146l4.95 4.95a.5.5 0 0 1 0 .707c-.48.48-1.072.588-1.503.588-.177 0-.335-.018-.46-.039l-3.134 3.134a6 6 0 0 1 .16 1.013c.046.702-.032 1.687-.72 2.375a.5.5 0 0 1-.707 0l-2.829-2.828-3.182 3.182c-.195.195-1.219.902-1.414.707s.512-1.22.707-1.414l3.182-3.182-2.828-2.829a.5.5 0 0 1 0-.707c.688-.688 1.673-.767 2.375-.72a6 6 0 0 1 1.013.16l3.134-3.133a3 3 0 0 1-.04-.461c0-.43.108-1.022.589-1.503a.5.5 0 0 1 .353-.146"/>
+</svg>`;
+
+let _pinnedIds = new Set();
+
+function _pinStorageKey() {
+  return 'dashPinned_' + (_currentEmployeeId || 'anon');
+}
+
+function _loadPinnedIds() {
+  try {
+    const raw = localStorage.getItem(_pinStorageKey());
+    _pinnedIds = new Set(raw ? JSON.parse(raw) : []);
+  } catch(e) { _pinnedIds = new Set(); }
+}
+
+function _savePinnedIds() {
+  try { localStorage.setItem(_pinStorageKey(), JSON.stringify([..._pinnedIds])); } catch(e) {}
+}
+
+function togglePin(id, e) {
+  if (e) e.stopPropagation();
+  if (_pinnedIds.has(id)) _pinnedIds.delete(id);
+  else _pinnedIds.add(id);
+  _savePinnedIds();
+  _lastRenderFingerprint = null; // force a re-render so pin order updates
+  applyFilters();
 }
 
 function closeBulkModal(e, id) { if (e && e.target !== document.getElementById(id)) return; document.getElementById(id).classList.add('hidden'); }
@@ -4872,6 +5113,77 @@ function confirmGenerateAcademicSnapshot() {
       status.className = 'schedule-status err';
     })
     .generateAcademicSnapshot(_academicCreditsCadence, dateVal, _currentEmployeeId);
+}
+
+// ─────────────────────────────────────────────────────────────
+// 34b. Trade progress snapshot
+// ─────────────────────────────────────────────────────────────
+let _tradeSnapshotCadence = 'weekly';
+
+function openTradeSnapshotUpload() {
+  document.getElementById('tradeSnapshotUploadModal').classList.remove('hidden');
+  document.getElementById('tradeSnapshotUploadStatus').textContent = '';
+  document.getElementById('tradeSnapshotUploadStatus').className = 'schedule-status';
+  document.getElementById('tradeSnapshotUploadLog').textContent = '';
+  const dateInput = document.getElementById('tradeSnapshotDateInput');
+  if (!dateInput.value) {
+    const today = new Date();
+    dateInput.value = today.toISOString().slice(0, 10);
+  }
+  _setTradeSnapshotCadence('weekly');
+}
+
+function closeTradeSnapshotUpload() {
+  document.getElementById('tradeSnapshotUploadModal').classList.add('hidden');
+}
+
+function _setTradeSnapshotCadence(cadence) {
+  _tradeSnapshotCadence = cadence;
+  document.getElementById('tsCadenceWeeklyBtn').style.opacity = cadence === 'weekly' ? '1' : '0.5';
+  document.getElementById('tsCadenceMonthlyBtn').style.opacity = cadence === 'monthly' ? '1' : '0.5';
+}
+
+function confirmGenerateTradeSnapshot() {
+  const dateVal = document.getElementById('tradeSnapshotDateInput').value;
+  const status = document.getElementById('tradeSnapshotUploadStatus');
+  const log = document.getElementById('tradeSnapshotUploadLog');
+  const btn = document.getElementById('tradeSnapshotUploadBtn');
+
+  btn.disabled = true;
+  btn.textContent = 'Generating…';
+  status.textContent = 'Reading current trade percentages and comparing…';
+  status.className = 'schedule-status';
+  log.textContent = '';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled = false;
+      btn.textContent = 'Generate Snapshot';
+
+      if (!result || result.success === false) {
+        status.textContent = '✕ ' + (result?.error || 'Generation failed.');
+        status.className = 'schedule-status err';
+        return;
+      }
+
+      status.textContent = `✓ Snapshot written for ${result.snapshotDate} (${result.cadence}) — ${result.written} trade record(s) recorded.`;
+      status.className = 'schedule-status ok';
+
+      log.textContent =
+        `New baselines: ${result.newBaselines}\n` +
+        `Skipped (inactive): ${result.skippedInactive}\n` +
+        `Skipped (no percent on file): ${result.skippedNoData}\n` +
+        `Skipped (already run today): ${result.skippedAlreadyDone}`;
+
+      showToast(`Trade snapshot generated — ${result.written} record(s) recorded.`);
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled = false;
+      btn.textContent = 'Generate Snapshot';
+      status.textContent = '✕ ' + (err?.message || 'Generation failed — please try again.');
+      status.className = 'schedule-status err';
+    })
+    .generateTradeSnapshot(_tradeSnapshotCadence, dateVal, _currentEmployeeId);
 }
 
 let _creditReportData = null;
