@@ -1,138 +1,157 @@
-// ============================================================
-// Predictions.gs — Prediction models
-// ============================================================
-
-// ── HS Graduation Predictions ─────────────────────────────────
-function _computeHSGraduationPredictions(profiles, hsMonthlyData) {
-  if (!profiles || !profiles.length) return [];
-
-  const monthlyByStudent = hsMonthlyData|| {};
-
-  const today        = new Date();
-  const twoMonthsOut = new Date(today.getFullYear(), today.getMonth() + 2, today.getDate());
-  const predictions  = [];
-
-  profiles.forEach(p => {
-    if (p.hsComplete) return;
-    if (!p.academic || p.academic.type !== 'HS') return;
-
-    const ac         = p.academic;
-    const courseData = p.courseData || null;
-
-    const graduationDate = ac.graduation ? _parseLocalDate(ac.graduation) : null;
-    if (!graduationDate) return;
-    if (graduationDate > twoMonthsOut) return;
-    if (graduationDate < new Date(today.getFullYear(), today.getMonth() - 1, 1)) return;
-
-    const creditsLeft = ac.credits !== null && ac.credits !== undefined
-      ? ac.credits
-      : courseData ? courseData.remainingCredits : null;
-
-    const remainingHours = courseData ? courseData.remainingHours : null;
-
-    const monthlyRecord   = monthlyByStudent[p.academicId] || null;
-    const completedMonths = monthlyRecord
-      ? (monthlyRecord.months || []).filter(m => !m.inProgress && m.creditsGained !== null && m.creditsGained > 0)
-      : [];
-
-    let monthlyRate = null;
-    if (completedMonths.length >= 2) {
-      const recent = completedMonths.slice(-3);
-      monthlyRate  = +(recent.reduce((s, m) => s + m.creditsGained, 0) / recent.length).toFixed(2);
-    } else if (completedMonths.length === 1) {
-      monthlyRate = completedMonths[0].creditsGained;
+function getProductivityData(hubSS) {
+  try {
+    const sheet = hubSS.getSheetByName(VAULT_SHEET_PRODUCTIVITY);
+    if (!sheet) {
+      Logger.log('Productivity Data sheet not found — skipping.');
+      return [];
     }
+    const lastRow = sheet.getLastRow();
+    if (lastRow < 2) return [];
+    const values = sheet.getRange(2, 1, lastRow - 1, 25).getValues();
+    const WEEKS = [
+      { month:'April', week:1, workedIdx:1, assignedIdx:2 },
+      { month:'April', week:2, workedIdx:3, assignedIdx:4 },
+      { month:'April', week:3, workedIdx:5, assignedIdx:6 },
+      { month:'April', week:4, workedIdx:7, assignedIdx:8 },
+      { month:'May', week:1, workedIdx:9, assignedIdx:10 },
+      { month:'May', week:2, workedIdx:11, assignedIdx:12 },
+      { month:'May', week:3, workedIdx:13, assignedIdx:14 },
+      { month:'May', week:4, workedIdx:15, assignedIdx:16 },
+      { month:'June', week:1, workedIdx:17, assignedIdx:18 },
+      { month:'June', week:2, workedIdx:19, assignedIdx:20 },
+      { month:'June', week:3, workedIdx:21, assignedIdx:22 },
+      { month:'June', week:4, workedIdx:23, assignedIdx:24 },
+    ];
+    const results = [];
+    values.forEach(row => {
+      const name = String(row[0] || '').trim();
+      if (!name || name.toLowerCase().includes('name')) return;
+      const weeks = [];
+      let totalWorked = 0;
+      let totalAssigned = 0;
+      WEEKS.forEach(w => {
+        const worked = _parseProductivityHours(row[w.workedIdx]);
+        const assigned = _parseProductivityHours(row[w.assignedIdx]);
+        if (assigned === null) return;
+        const productivity = assigned > 0
+          ? +((worked / assigned) * 100).toFixed(1)
+          : null;
+        weeks.push({
+          month: w.month,
+          week: w.week,
+          label: w.month + ' Wk' + w.week,
+          worked: worked ?? 0,
+          assigned,
+          productivity,
+          notScheduled: assigned === 0,
+        });
+        if (worked !== null) totalWorked += worked;
+        if (assigned !== null) totalAssigned += assigned;
+      });
+      if (!weeks.length) return;
+      const overallProductivity = totalAssigned > 0
+        ? +((totalWorked / totalAssigned) * 100).toFixed(1)
+        : null;
+      const sorted = [...weeks]
+        .filter(w => w.productivity !== null)
+        .sort((a,b) => b.productivity - a.productivity);
+      const peakWeek = sorted[0] || null;
+      const troughWeek = sorted[sorted.length - 1] || null;
+      const half = Math.floor(weeks.length / 2);
+      const firstHalf = weeks.slice(0, half);
+      const secHalf = weeks.slice(half);
+      const avgFirst = firstHalf.length
+        ? firstHalf.reduce((s,w)=>s+(w.productivity||0),0) / firstHalf.length
+        : null;
+      const avgSecond = secHalf.length
+        ? secHalf.reduce((s,w)=>s+(w.productivity||0),0) / secHalf.length
+        : null;
+      let trend = 'stable';
+      if (avgFirst !== null && avgSecond !== null) {
+        if (avgSecond - avgFirst > 5) trend = 'improving';
+        if (avgSecond - avgFirst < -5) trend = 'declining';
+      }
+      results.push({
+        name,
+        weeks,
+        totalWorked: +totalWorked.toFixed(2),
+        totalAssigned: +totalAssigned.toFixed(2),
+        overallProductivity,
+        peakWeek,
+        troughWeek,
+        trend,
+        weeksWithData: weeks.length,
+      });
+    });
+    Logger.log('Productivity Data: ' + results.length + ' students');
+    return results;
+  } catch(e) {
+    Logger.log('getProductivityData error: ' + e.message);
+    return [];
+  }
+}
 
-    const weeklyAvgHours = ac.weeklyAvgHours || null;
-    const pace           = ac.pace ? String(ac.pace).trim() : null;
+function _parseProductivityHours(val) {
+  if (val === null || val === undefined) return null;
+  if (String(val).trim() === 'NOT_IN_MONTH') return null;
+  if (val === '' || val === 0) return 0;
+  if (val instanceof Date) {
+    const SHEETS_EPOCH = new Date(1899,11,30);
+    const diffMs = val.getTime() - SHEETS_EPOCH.getTime();
+    const h = diffMs / (1000 * 60 * 60);
+    return h > 0 ? +h.toFixed(2) : 0;
+  }
+  const str = String(val).trim();
+  if (!str || str === '—' || str === '-') return 0;
+  if (str.includes(':')) {
+    const parts = str.split(':').map(Number);
+    if (parts.length === 3)
+      return +((parts[0] + parts[1]/60 + parts[2]/3600)).toFixed(2);
+    if (parts.length === 2)
+      return +((parts[0] + parts[1]/60)).toFixed(2);
+  }
+  const n = Number(str);
+  return isNaN(n) ? 0 : +n.toFixed(2);
+}
 
-    let score = 0;
-    const notes = [];
-
-    // Signal 1: credits remaining (0–25 pts)
-    if (creditsLeft !== null) {
-      if (creditsLeft <= 2)       { score += 25; notes.push('Almost done — ' + creditsLeft + ' credit(s) left'); }
-      else if (creditsLeft <= 5)  { score += 18; notes.push(creditsLeft + ' credits remaining'); }
-      else if (creditsLeft <= 10) { score += 10; notes.push(creditsLeft + ' credits remaining'); }
-      else                        { score +=  3; notes.push(creditsLeft + ' credits remaining — significant work ahead'); }
-    }
-
-    // Signal 2: monthly rate vs credits left (0–20 pts)
-    if (monthlyRate !== null && creditsLeft !== null && monthlyRate > 0) {
-      const monthsNeeded = creditsLeft / monthlyRate;
-      if (monthsNeeded <= 1)      { score += 20; notes.push('At current pace (~' + monthlyRate + ' cr/mo), on track to finish in < 1 month'); }
-      else if (monthsNeeded <= 2) { score += 14; notes.push('At current pace (~' + monthlyRate + ' cr/mo), ~' + monthsNeeded.toFixed(1) + ' months to finish'); }
-      else if (monthsNeeded <= 3) { score +=  7; notes.push('At current pace (~' + monthlyRate + ' cr/mo), ~' + monthsNeeded.toFixed(1) + ' months to finish'); }
-      else                        { score +=  2; notes.push('Pace (' + monthlyRate + ' cr/mo) may not be enough to finish on time'); }
-    } else if (monthlyRate === null) {
-      notes.push('No monthly credit history on file');
-    }
-
-    // Signal 3: Edgenuity pace flag (0–15 pts)
-    if (pace) {
-      const paceLower = pace.toLowerCase();
-      if (paceLower.includes('ahead'))                              { score += 15; notes.push('Edgenuity pace: ' + pace); }
-      else if (paceLower.includes('on'))                           { score += 10; notes.push('Edgenuity pace: ' + pace); }
-      else if (paceLower.includes('slow') || paceLower.includes('behind')) { score +=  2; notes.push('Edgenuity pace: ' + pace + ' — may need support'); }
-    }
-
-    // Signal 4: completion % (0–15 pts)
-    const academicPct = ac.percent;
-    if (academicPct !== null) {
-      if (academicPct >= 95)      { score += 15; notes.push(academicPct + '% complete'); }
-      else if (academicPct >= 85) { score += 10; notes.push(academicPct + '% complete'); }
-      else if (academicPct >= 70) { score +=  6; notes.push(academicPct + '% complete'); }
-      else                        { score +=  2; notes.push(academicPct + '% complete — still significant coursework remaining'); }
-    }
-
-    // Signal 5: remaining hours vs weekly pace (0–15 pts)
-    if (remainingHours !== null && weeklyAvgHours !== null && weeklyAvgHours > 0) {
-      const weeksToFinish  = remainingHours / weeklyAvgHours;
-      const weeksUntilGrad = (graduationDate - today) / (7 * 86400000);
-      if (weeksToFinish <= weeksUntilGrad * 0.8) { score += 15; notes.push('Remaining hours (' + remainingHours + 'h) achievable at current pace (' + weeklyAvgHours + 'h/wk)'); }
-      else if (weeksToFinish <= weeksUntilGrad)   { score +=  8; notes.push('Remaining hours (' + remainingHours + 'h) tight but possible at ' + weeklyAvgHours + 'h/wk'); }
-      else                                         { score +=  2; notes.push('Remaining hours (' + remainingHours + 'h) may exceed time available at ' + weeklyAvgHours + 'h/wk'); }
-    } else if (remainingHours !== null) {
-      notes.push(remainingHours + 'h of coursework remaining');
-    }
-
-    // Signal 6: risk level (0–10 pts)
-    const riskLevel = p.risk ? p.risk.level : null;
-    if (riskLevel === 'LOW')         { score += 10; }
-    else if (riskLevel === 'MEDIUM') { score +=  5; notes.push('Flagged as medium risk'); }
-    else if (riskLevel === 'HIGH')   { score +=  0; notes.push('Flagged as high risk'); }
-
-    score = Math.min(100, Math.max(0, score));
-
-    const likelihood = score >= 65 ? 'On Track'
-                     : score >= 40 ? 'At Risk'
-                     : 'Unlikely';
-
-    predictions.push({
-      id:               p.id,
-      name:             p.displayName,
-      graduationDate:   ac.graduation || '',
-      likelihood,
-      score,
-      creditsLeft:      creditsLeft     !== null ? +creditsLeft     : null,
-      remainingHours:   remainingHours  !== null ? +remainingHours  : null,
-      weeklyAvgHours:   weeklyAvgHours  !== null ? +weeklyAvgHours  : null,
-      monthlyRate,
-      academicPct,
-      pace,
-      nextCourse:       courseData ? courseData.nextCourse       : null,
-      nextCourseTarget: courseData ? courseData.nextCourseTarget : null,
-      riskLevel,
-      notes,
-      monthsOfHistory:  completedMonths.length,
+function _buildProductivityCohortSummary(productivityData) {
+  if (!productivityData || !productivityData.length) return [];
+  const weekMap = {};
+  productivityData.forEach(student => {
+    student.weeks.forEach(w => {
+      if (!weekMap[w.label]) {
+        weekMap[w.label] = {
+          label:w.label,
+          month:w.month,
+          week:w.week,
+          students:[]
+        };
+      }
+      weekMap[w.label].students.push({
+        name:student.name,
+        worked:w.worked,
+        assigned:w.assigned,
+        productivity:w.productivity,
+      });
     });
   });
-
-  const order = { 'On Track': 0, 'At Risk': 1, 'Unlikely': 2 };
-  predictions.sort((a, b) =>
-    (order[a.likelihood] - order[b.likelihood]) || (b.score - a.score)
-  );
-
-  Logger.log('getHSGraduationPredictions: ' + predictions.length + ' predictions generated');
-  return predictions;
+  return Object.values(weekMap).map(w => {
+    const productivities = w.students.map(s=>s.productivity).filter(v=>v!==null);
+    const assignedVals = w.students.map(s=>s.assigned).filter(v=>v!==null && v>0);
+    const workedVals = w.students.map(s=>s.worked).filter(v=>v!==null);
+    const avg = arr => arr.length
+      ? +(arr.reduce((s,v)=>s+v,0)/arr.length).toFixed(1)
+      : null;
+    return {
+      label:w.label,
+      month:w.month,
+      week:w.week,
+      studentCount:w.students.length,
+      avgProductivity:avg(productivities),
+      avgAssigned:avg(assignedVals),
+      avgWorked:avg(workedVals),
+      minProductivity:productivities.length ? +Math.min(...productivities).toFixed(1) : null,
+      maxProductivity:productivities.length ? +Math.max(...productivities).toFixed(1) : null,
+    };
+  });
 }
