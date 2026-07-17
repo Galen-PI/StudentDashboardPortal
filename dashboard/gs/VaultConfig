@@ -5,7 +5,6 @@
 // ── Spreadsheet ID ────────────────────────────────────────────
 const SS_VAULT = '15AdLxifwIXSjT5ja9bpuBOhp8b6u4r2sniHbU4cA_2o';
 
-
 // ── Sheet names — SS_VAULT ────────────────────────────────────
 const VAULT_SHEET_TRANSCRIPT_ROWS     = 'Transcript Rows';
 const VAULT_SHEET_COURSE_CATALOGUE    = 'Course Catalogue';
@@ -102,7 +101,6 @@ const VAULT_OVERRIDES_NOTES_HEADERS = ['studentId', 'type', 'value', 'note', 'se
 // ── Trade totals (reuse existing constant — same 23-credit rule) ─
 function VAULT_TOTAL_CREDITS_REQUIRED_() { return TOTAL_CREDITS_REQUIRED; }
 
-// ── Migration flags
 const USE_VAULT_TRANSCRIPTS = true;
 const USE_VAULT_TABE        = true;
 const USE_VAULT_SCHEDULE    = true;
@@ -114,20 +112,17 @@ const USE_VAULT_NAME_MAPPING = true;
 const USE_VAULT_OVERRIDES = true;
 const USE_VAULT_PROFILES  = true;
 
-
 // ============================================================
 // SHARED VAULT CONNECTOR HELPERS
 // ============================================================
 
 let _vaultSpreadsheetCache_ = null;
-
 function getVaultSpreadsheet_() {
   if (!_vaultSpreadsheetCache_) {
     _vaultSpreadsheetCache_ = SpreadsheetApp.openById(SS_VAULT);
   }
   return _vaultSpreadsheetCache_;
 }
-
 
 function getVaultSheet_(sheetName) {
   const ss = getVaultSpreadsheet_();
@@ -142,10 +137,8 @@ function readVaultSheetAsObjects_(sheetName, headers) {
   const sheet = getVaultSheet_(sheetName);
   const lastRow = sheet.getLastRow();
   if (lastRow < VAULT_DATA_START_ROW) return [];
-
   const numRows = lastRow - VAULT_DATA_START_ROW + 1;
   const values = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, headers.length).getValues();
-
   return values.map(row => {
     const obj = {};
     headers.forEach((key, i) => { obj[key] = row[i]; });
@@ -158,7 +151,6 @@ function readVaultRowsForStudent_(sheetName, headers, studentId) {
   return readVaultSheetAsObjects_(sheetName, headers)
     .filter(row => String(row.studentId).trim() === id);
 }
-
 
 function appendVaultRows_(sheetName, headers, rowObjects) {
   if (!rowObjects || !rowObjects.length) return 0;
