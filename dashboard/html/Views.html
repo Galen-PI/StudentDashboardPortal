@@ -67,9 +67,8 @@
 <!-- ── SIDEBAR OVERLAY ──────────────────────────────────── -->
 <div id="sidebarOverlay" class="sidebar-overlay" onclick="closeSidebar()"></div>
 
-<!-- --- Tools Sidebar --------------------------------- -->
+<!-- ── TOOLS SIDEBAR ────────────────────────────────────── -->
 <aside id="toolsSidebar" class="sidebar">
-
   <div class="sidebar-header">
     <h2>Tools</h2>
     <button class="modal-close" onclick="closeSidebar()">
@@ -80,22 +79,20 @@
   </div>
   <div class="sidebar-body">
 
-
     <!-- ================================
-         STUDENT RECORDS
+         DATA IMPORTS
     ================================= -->
     <div class="sidebar-section-label"
-         onclick="toggleSection('sec-student_records', this)"
+         onclick="toggleSection('sec-data_imports', this)"
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      Student records <span class="sidebar-chevron">▾</span>
+      Data Imports <span class="sidebar-chevron">▸</span>
     </div>
 
-    <div id="sec-student_records" class="sidebar-section-body">
+    <div id="sec-data_imports" class="sidebar-section-body" style="display:none;">
 
       <button class="sidebar-btn" onclick="openRosterUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15.75 6a3.75 3.75 0 11-7.5 0 3.75 3.75 0 017.5 0zM4.501 20.118a7.5 7.5 0 0114.998 0A17.933 17.933 0 0112 21.75c-2.676 0-5.216-.584-7.499-1.632z"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Import Student Roster</span>
@@ -103,11 +100,9 @@
         </div>
       </button>
 
-
       <button class="sidebar-btn" onclick="openTABEUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75m3 .75H18a2.25 2.25 0 002.25-2.25V6.108c0-1.135-.845-2.098-1.976-2.192a48.424 48.424 0 00-1.123-.08"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Upload TABE Scores</span>
@@ -117,8 +112,7 @@
 
       <button class="sidebar-btn" onclick="openTradeUploadModal(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Upload Trade ETAR</span>
@@ -126,10 +120,29 @@
         </div>
       </button>
 
+      <button class="sidebar-btn" onclick="openScheduleUpload(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Upload Schedule</span>
+          <span class="sb-desc">Import this week's class schedule</span>
+        </div>
+      </button>
+    </div>
+
+    <!-- ================================
+         GENERATE / SNAPSHOTS
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-generate', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Generate &amp; Snapshots <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-generate" class="sidebar-section-body" style="display:none;">
       <button class="sidebar-btn" onclick="openAcademicCreditsUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319c.063.475.276.934.641 1.299"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319c.063.475.276.934.641 1.299"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Upload Academic Credits</span>
@@ -137,36 +150,25 @@
         </div>
       </button>
 
-      <button id="btnMergeProfiles"
-              class="sidebar-btn"
-              onclick="openMergeModal(); closeSidebar()">
+      <button class="sidebar-btn" onclick="openTradeSnapshotUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319c.063.475.276.934.641 1.299"/>
         </svg>
         <div class="sidebar-btn-inner">
-          <span class="sb-label">Merge Profiles</span>
-          <span class="sb-desc">Combine duplicate student records</span>
+          <span class="sb-label">Generate Trade Snapshot</span>
+          <span class="sb-desc">Record weekly or monthly trade progress</span>
         </div>
       </button>
-    </div>
-    <!-- ================================
-         ACADEMIC PLANNING
-    ================================= -->
-    <div class="sidebar-section-label"
-         onclick="toggleSection('sec-academic_planning', this)"
-         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      Academic Planning <span class="sidebar-chevron">▾</span>
-    </div>
-    <div id="sec-academic_planning" class="sidebar-section-body">
-      <button class="sidebar-btn" onclick="openScheduleUpload(); closeSidebar()">
+
+      <button id="btnGenerateWIR"
+              class="sidebar-btn"
+              onclick="openWIRGenerateModal(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M6.75 3v2.25M17.25 3v2.25M3 18.75V7.5a2.25 2.25 0 012.25-2.25h13.5A2.25 2.25 0 0121 7.5v11.25"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 12h3.75M9 15h3.75M9 18h3.75"/>
         </svg>
         <div class="sidebar-btn-inner">
-          <span class="sb-label">Upload Schedule</span>
-          <span class="sb-desc">Import this week's class schedule</span>
+          <span class="sb-label">Generate Weekly WIR</span>
+          <span class="sb-desc">Score and log this week's intervention reports</span>
         </div>
       </button>
 
@@ -174,8 +176,7 @@
               class="sidebar-btn"
               onclick="openBulkPacingModal(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Assign Student Hours</span>
@@ -185,70 +186,20 @@
     </div>
 
 
-
     <!-- ================================
-         STUDENT SUCCESS
-    ================================= -->
-    <div class="sidebar-section-label"
-         onclick="toggleSection('sec-student_success', this)"
-         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      Student Success <span class="sidebar-chevron">▾</span>
-    </div>
-    <div id="sec-student_success" class="sidebar-section-body">
-      <button id="btnGenerateWIR"
-              class="sidebar-btn"
-              onclick="openWIRGenerateModal(); closeSidebar()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M9 12h3.75M9 15h3.75M9 18h3.75"/>
-        </svg>
-        <div class="sidebar-btn-inner">
-          <span class="sb-label">Generate Weekly WIR</span>
-          <span class="sb-desc">Score and log this week's intervention reports</span>
-        </div>
-      </button>
-
-      <button id="btnSendDigest"
-              class="sidebar-btn"
-              onclick="triggerDigest(); closeSidebar()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15"/>
-        </svg>
-        <div class="sidebar-btn-inner">
-          <span class="sb-label">Email Intervention Summary</span>
-          <span class="sb-desc">Send high-risk digest to staff</span>
-        </div>
-
-      </button>
-
-      <button class="sidebar-btn"
-              onclick="openTradeSummaryModal(); closeSidebar()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25"/>
-        </svg>
-        <div class="sidebar-btn-inner">
-          <span class="sb-label">Trade % Summary</span>
-          <span class="sb-desc">Compare staff/student/overall % side by side</span>
-        </div>
-      </button>
-    </div>
-        <!-- ================================
          REPORTS & ANALYTICS
     ================================= -->
     <div class="sidebar-section-label"
          onclick="toggleSection('sec-reports', this)"
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      Reports & Analytics <span class="sidebar-chevron">▾</span>
+      Reports &amp; Analytics <span class="sidebar-chevron">▸</span>
     </div>
-    <div id="sec-reports" class="sidebar-section-body">
+    <div id="sec-reports" class="sidebar-section-body" style="display:none;">
       <button id="btnProductivity"
               class="sidebar-btn"
               onclick="openProductivityModal(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75z"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Productivity Report</span>
@@ -256,81 +207,92 @@
         </div>
       </button>
 
-
-
-      <button class="sidebar-btn"
-              onclick="exportCSV(); closeSidebar()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
-        </svg>
-        <div class="sidebar-btn-inner">
-          <span class="sb-label">Export CSV</span>
-          <span class="sb-desc">Download the current filtered view</span>
-        </div>
-
-      </button>
-
       <button id="btnCreditReport"
               class="sidebar-btn"
               onclick="openCreditReportModal(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Weekly Credit Report</span>
           <span class="sb-desc">HS credit gains & hours by class, last Mon–Fri</span>
         </div>
       </button>
+
+      <button class="sidebar-btn"
+              onclick="openTradeSummaryModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9 17.25v1.007a3 3 0 01-.879 2.122L7.5 21h9l-.621-.621A3 3 0 0115 18.257V17.25"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Trade % Summary</span>
+          <span class="sb-desc">Compare staff/student/overall % side by side</span>
+        </div>
+      </button>
+
+      <button class="sidebar-btn"
+              onclick="exportCSV(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3 16.5v2.25A2.25 2.25 0 005.25 21h13.5A2.25 2.25 0 0021 18.75V16.5M16.5 12L12 16.5m0 0L7.5 12m4.5 4.5V3"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Export CSV</span>
+          <span class="sb-desc">Download the current filtered view</span>
+        </div>
+      </button>
     </div>
     <div class="sidebar-divider"></div>
 
 
-
     <!-- ================================
-         DASHBOARD
+         MAINTENANCE
     ================================= -->
     <div class="sidebar-section-label"
-         onclick="toggleSection('sec-dashboard', this)"
+         onclick="toggleSection('sec-maintenance', this)"
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
-      Dashboard <span class="sidebar-chevron">▸</span>
+      Maintenance <span class="sidebar-chevron">▸</span>
     </div>
 
-    <div id="sec-dashboard" class="sidebar-section-body">
+    <div id="sec-maintenance" class="sidebar-section-body" style="display:none;">
+      <button id="btnMergeProfiles"
+              class="sidebar-btn"
+              onclick="openMergeModal(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M7.5 21L3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Merge Profiles</span>
+          <span class="sb-desc">Combine duplicate student records</span>
+        </div>
+      </button>
+
       <button class="sidebar-btn"
               onclick="openHistoryPanel(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
         </svg>
-
         <div class="sidebar-btn-inner">
           <span class="sb-label">Change History</span>
           <span class="sb-desc">View and undo recent edits</span>
         </div>
-
       </button>
 
       <button id="lockModeBtn"
               class="sidebar-btn"
               onclick="toggleLockMode(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.5 10.5V6.75a4.5 4.5 0 10-9 0v3.75"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Lock Mode</span>
           <span class="sb-desc">Toggle view-only mode to prevent accidental edits</span>
         </div>
-
       </button>
 
       <button class="sidebar-btn"
               onclick="runClearAllCaches(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round"
-          d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992"/>
+          <path stroke-linecap="round" stroke-linejoin="round" d="M16.023 9.348h4.992v-.001M2.985 19.644v-4.992"/>
         </svg>
         <div class="sidebar-btn-inner">
           <span class="sb-label">Clear Caches</span>
@@ -340,6 +302,84 @@
     </div>
     <div class="sidebar-divider"></div>
 
+    <!-- ================================
+         COMMUNICATE
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-communicate', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Communicate <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-communicate" class="sidebar-section-body" style="display:none;">
+      <button id="btnSendDigest"
+              class="sidebar-btn"
+              onclick="triggerDigest(); closeSidebar()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M21.75 6.75v10.5a2.25 2.25 0 01-2.25 2.25h-15"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Email Intervention Summary</span>
+          <span class="sb-desc">Send high-risk digest to staff</span>
+        </div>
+      </button>
+    </div>
+    <div class="sidebar-divider"></div>
+
+    <!-- ================================
+         DISPLAY (always visible — not collapsible)
+    ================================= -->
+    <div class="sidebar-section-sublabel">Display</div>
+
+    <div class="sidebar-display-settings">
+      <div class="sidebar-role-wrap">
+        <label>Text size</label>
+        <div class="zoom-control" title="Text size" style="width:100%;">
+          <button data-zoom="sm" onclick="setZoomLevel('sm')" style="flex:1;">A−</button>
+          <button data-zoom="md" onclick="setZoomLevel('md')" class="active" style="flex:1;">A</button>
+          <button data-zoom="lg" onclick="setZoomLevel('lg')" style="flex:1;">A+</button>
+        </div>
+      </div>
+
+      <label class="sidebar-toggle-row">
+        <input type="checkbox" id="densityCheckbox" onchange="toggleDensity()">
+        <span>Compact row spacing</span>
+      </label>
+
+      <div class="sidebar-role-wrap">
+        <label>Table columns</label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-risk" checked onchange="setColumnVisibility('risk', this.checked)"> <span>Risk</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-status" checked onchange="setColumnVisibility('status', this.checked)"> <span>Status</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-academicPct" onchange="setColumnVisibility('academicPct', this.checked)"> <span>Academic %</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-tradeName" checked onchange="setColumnVisibility('tradeName', this.checked)"> <span>Trade</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-tradePct" onchange="setColumnVisibility('tradePct', this.checked)"> <span>Trade %</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-thisWeek" checked onchange="setColumnVisibility('thisWeek', this.checked)"> <span>This Week</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-etar" onchange="setColumnVisibility('etar', this.checked)"> <span>ETAR</span></label>
+        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-wir" checked onchange="setColumnVisibility('wir', this.checked)"> <span>WIR</span></label>
+      </div>
+
+      <div class="sidebar-divider" style="margin:12px 0;"></div>
+
+      <div class="sidebar-role-wrap">
+        <label>Custom theme</label>
+        <div class="custom-theme-base">
+          <button type="button" class="ct-base-btn active" id="ctBaseDark" onclick="setCustomThemeBase('dark')">Dark</button>
+          <button type="button" class="ct-base-btn" id="ctBaseLight" onclick="setCustomThemeBase('light')">Light</button>
+          <span class="custom-theme-swatch" id="ctSwatch"></span>
+        </div>
+        <div class="custom-theme-slider-row">
+          <span class="custom-theme-slider-label">Color</span>
+          <input type="range" id="ctHueSlider" min="0" max="360" value="210" oninput="updateCustomTheme()">
+        </div>
+        <div class="custom-theme-slider-row">
+          <span class="custom-theme-slider-label">Intensity</span>
+          <input type="range" id="ctSatSlider" min="25" max="85" value="60" oninput="updateCustomTheme()">
+        </div>
+        <button type="button" class="ct-apply-btn" onclick="applyCustomThemeNow()">Use this theme</button>
+      </div>
+    </div>
+    <div class="sidebar-divider"></div>
+
+    
     <!-- ================================
          HELP
     ================================= -->
@@ -365,11 +405,10 @@
       </button>
     </div>
 
-    <!-- ================================
+<!-- ================================
          ROLE SELECTOR
     ================================= -->
     <div class="sidebar-role-wrap">
-
       <label>Role preset</label>
       <select id="roleSelect"
               class="sidebar-role-select"
@@ -606,6 +645,7 @@
 
   <div class="result-bar">
     <span id="resultCount" class="result-count"></span>
+    <div id="activeFilterChips" class="active-filter-chips"></div>
   </div>
 
   <!-- Table view -->
@@ -615,14 +655,14 @@
         <tr>
           <th><input type="checkbox" id="selectAll" onchange="toggleSelectAll(this)" title="Select all"></th>
           <th>Student</th>
-          <th>Risk</th>
-          <th>Status</th>
+          <th class="col-risk">Risk</th>
+          <th class="col-status">Status</th>
           <th class="col-academic-pct col-expandable hidden-col">Academic %</th>
-          <th>Trade</th>
+          <th class="col-trade-name">Trade</th>
           <th class="col-trade-pct col-expandable hidden-col">Trade %</th>
-          <th>This Week</th>
+          <th class="col-thisweek">This Week</th>
           <th class="col-etar col-expandable hidden-col">ETAR</th>
-          <th>WIR</th>
+          <th class="col-wir">WIR</th>
           <th>
             <button class="btn-expand-cols" onclick="toggleExtraCols()" id="expandColsBtn" title="Show more columns">＋</button>
           </th>
@@ -697,15 +737,22 @@
         <div class="explainer-level unknown"><strong>No Data Yet</strong> — No academic, trades, or time data found.</div>
       </div>
       <div class="explainer-group">
+        <div class="explainer-item" style="font-style:italic;color:var(--text-muted);">
+          Academic Factors, each Trade's factors, and Weekly Intervention Report Factors are each capped at 45 points as a group — several checks in the same category often describe one real underlying problem, so one bad category alone gets a student close to "Needs Attention" but not there by itself. Crossing into "Needs Attention" generally means more than one category has real issues, or an individual factor already at or above 45 (e.g. CRITICAL admin priority) on its own.
+        </div>
+      </div>
+      <div class="explainer-group">
         <div class="explainer-group-title">Academic Factors</div>
         <div class="explainer-item"><span class="explainer-pts">+40</span> Student is flagged as at-risk pace in Edgenuity</div>
         <div class="explainer-item"><span class="explainer-pts">+30</span> Student is behind or slow on academic pace</div>
         <div class="explainer-item"><span class="explainer-pts">+25</span> Graduation deadline is within 30 days and less than 90% complete</div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> Academic completion is below 50%</div>
         <div class="explainer-item"><span class="explainer-pts">+15</span> No academic hours logged this week</div>
+        <div class="explainer-item"><span class="explainer-pts">+25</span> No hours logged this week, but periods were scheduled (used instead of the +15 above when schedule data exists)</div>
+        <div class="explainer-item"><span class="explainer-pts">+15</span> Logged less than half of scheduled academic periods this week</div>
       </div>
       <div class="explainer-group">
-        <div class="explainer-group-title">Trades Factors</div>
+        <div class="explainer-group-title">Trades Factors <span style="font-weight:400;color:var(--text-muted);">(capped per trade)</span></div>
         <div class="explainer-item"><span class="explainer-pts">+25</span> Very low trade progress (under 25%) with less than 60 days to ETAR</div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> Pace gap is more than 10% behind</div>
         <div class="explainer-item"><span class="explainer-pts">+15</span> Trade program status is inactive or withdrawn</div>
@@ -716,7 +763,7 @@
         <div class="explainer-item"><span class="explainer-pts">+10</span> Stalled or low gain AND overall completion still under 25%</div>
       </div>
       <div class="explainer-group">
-        <div class="explainer-group-title">Weekly Intervention Report Factors</div>
+        <div class="explainer-group-title">Weekly Intervention Report Factors <span style="font-weight:400;color:var(--text-muted);">(capped as a group)</span></div>
         <div class="explainer-item"><span class="explainer-pts">+40</span> Admin priority is CRITICAL this week</div>
         <div class="explainer-item"><span class="explainer-pts">+25</span> Admin priority is HIGH this week</div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> Urgency is IMMEDIATE</div>
@@ -857,8 +904,7 @@
       <select id="qeAcademicStatus" class="qe-select">
         <option value="">— No change —</option>
         <option value="HS">High School (HS)</option>
-        <option value="HISET">HiSET</option>
-        <option value="GED">GED</option>
+        <option value="HISET">HiSET / GED</option>
         <option value="HS_COMPLETE">Finished High School</option>
         <option value="NOT_STARTED">Not Started Yet</option>
       </select>
@@ -1044,8 +1090,24 @@ function toggleThemeDropdown() {
           ${t.key === current ? '<span style="margin-left:auto;font-size:10px;color:var(--accent);">✓</span>' : ''}
         </button>`).join('')}
     </div>
+    <button onclick="closeThemeDropdown();openSidebar();" style="
+      display:flex;align-items:center;gap:10px;
+      width:100%;padding:9px 14px;
+      background:none;border:none;border-top:2px solid var(--border);
+      color:${_isCustomThemeActive_() ? 'var(--accent)' : 'var(--text-soft)'};
+      font-family:var(--font);font-size:13px;font-weight:${_isCustomThemeActive_() ? '700' : '500'};
+      cursor:pointer;text-align:left;
+    " onmouseover="this.style.background='var(--bg4)'" onmouseout="this.style.background='none'">
+      <span style="width:12px;text-align:center;flex-shrink:0;">🎨</span>
+      Custom Theme…
+      ${_isCustomThemeActive_() ? '<span style="margin-left:auto;font-size:10px;color:var(--accent);">✓</span>' : ''}
+    </button>
   `;
   dropdown.style.display = 'block';
+}
+
+function _isCustomThemeActive_() {
+  try { return localStorage.getItem('dashTheme') === 'custom'; } catch(e) { return false; }
 }
 
 function closeThemeDropdown() {
@@ -1053,8 +1115,129 @@ function closeThemeDropdown() {
 }
 
 function applyTheme(key) {
+  _clearCustomThemeVars_();
   document.documentElement.setAttribute('data-theme', key);
-  try { localStorage.setItem('dashTheme', key); } catch(e) {}
+  try { localStorage.setItem('dashTheme', key); localStorage.removeItem('dashCustomTheme'); } catch(e) {}
+}
+
+// ── Custom theme ─────────────────────────────────────────────
+// Only the background/border/text/accent variables are ever
+// touched here — the risk-status colors (--high/--medium/--low/
+// --danger/--warn/--ok) are deliberately left alone, inherited
+// from whichever base (dark/light) is picked, so a custom theme
+// can never accidentally make "Needs Attention" stop being red.
+const CUSTOM_THEME_VARS = [
+  '--bg', '--bg2', '--bg3', '--bg4', '--bg-nav',
+  '--border', '--border-bright',
+  '--text', '--text-soft', '--text-muted',
+  '--accent', '--accent-mid', '--accent-dim', '--accent-glow',
+];
+
+function _clearCustomThemeVars_() {
+  CUSTOM_THEME_VARS.forEach(v => document.documentElement.style.removeProperty(v));
+}
+
+function _deriveCustomThemeVars_(base, hue, sat) {
+  const bgSat = 10; // kept low/subtle so backgrounds read as neutral, not tinted-weird
+  const isDark = base === 'dark';
+  const vars = {};
+
+  if (isDark) {
+    vars['--bg']            = `hsl(${hue}, ${bgSat}%, 10%)`;
+    vars['--bg2']           = `hsl(${hue}, ${bgSat}%, 13%)`;
+    vars['--bg3']           = `hsl(${hue}, ${bgSat}%, 16%)`;
+    vars['--bg4']           = `hsl(${hue}, ${bgSat}%, 20%)`;
+    vars['--bg-nav']        = `hsl(${hue}, ${bgSat}%, 8%)`;
+    vars['--border']        = `hsl(${hue}, ${bgSat}%, 24%)`;
+    vars['--border-bright'] = `hsl(${hue}, ${bgSat}%, 32%)`;
+    vars['--text']          = `hsl(${hue}, 12%, 93%)`;
+    vars['--text-soft']     = `hsl(${hue}, 12%, 78%)`;
+    vars['--text-muted']    = `hsl(${hue}, 8%, 56%)`;
+  } else {
+    vars['--bg']            = `hsl(${hue}, ${bgSat + 5}%, 95%)`;
+    vars['--bg2']           = `hsl(0, 0%, 100%)`;
+    vars['--bg3']           = `hsl(${hue}, ${bgSat + 5}%, 91%)`;
+    vars['--bg4']           = `hsl(${hue}, ${bgSat + 5}%, 86%)`;
+    vars['--bg-nav']        = `hsl(${hue}, 15%, 12%)`;
+    vars['--border']        = `hsl(${hue}, ${bgSat + 10}%, 78%)`;
+    vars['--border-bright'] = `hsl(${hue}, ${bgSat + 10}%, 65%)`;
+    vars['--text']          = `hsl(${hue}, 20%, 12%)`;
+    vars['--text-soft']     = `hsl(${hue}, 20%, 22%)`;
+    vars['--text-muted']    = `hsl(${hue}, 12%, 45%)`;
+  }
+
+  // Accent slightly darker in light mode so white text/badges stay readable on it.
+  const accentL = isDark ? 50 : 38;
+  vars['--accent']      = `hsl(${hue}, ${sat}%, ${accentL}%)`;
+  vars['--accent-mid']  = `hsl(${hue}, ${sat}%, ${accentL - 8}%)`;
+  vars['--accent-dim']  = `hsl(${hue}, ${sat}%, ${accentL - 20}%)`;
+  vars['--accent-glow'] = `hsla(${hue}, ${sat}%, ${accentL}%, ${isDark ? 0.10 : 0.12})`;
+
+  return vars;
+}
+
+function setCustomThemeBase(base) {
+  document.getElementById('ctBaseDark').classList.toggle('active', base === 'dark');
+  document.getElementById('ctBaseLight').classList.toggle('active', base === 'light');
+  updateCustomTheme();
+}
+
+// Live-updates on every slider drag — no "preview" step, no separate
+// apply-then-see-it. Moving the slider just is the preview.
+function updateCustomTheme() {
+  const base = document.getElementById('ctBaseLight').classList.contains('active') ? 'light' : 'dark';
+  const hue  = Number(document.getElementById('ctHueSlider').value);
+  const sat  = Number(document.getElementById('ctSatSlider').value);
+  const vars = _deriveCustomThemeVars_(base, hue, sat);
+
+  // data-theme=base first, so non-color tokens (font, spacing,
+  // shadows, and the risk-status colors) come from the matching
+  // preset — then the color overrides layer on top via inline
+  // style, which always wins over the attribute-selector CSS.
+  document.documentElement.setAttribute('data-theme', base);
+  Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
+
+  const swatch = document.getElementById('ctSwatch');
+  if (swatch) swatch.style.background = vars['--accent'];
+}
+
+function applyCustomThemeNow() {
+  updateCustomTheme();
+  const base = document.getElementById('ctBaseLight').classList.contains('active') ? 'light' : 'dark';
+  const hue  = Number(document.getElementById('ctHueSlider').value);
+  const sat  = Number(document.getElementById('ctSatSlider').value);
+  try {
+    localStorage.setItem('dashCustomTheme', JSON.stringify({ base, hue, sat }));
+    localStorage.setItem('dashTheme', 'custom');
+  } catch(e) {}
+  if (typeof showToast === 'function') showToast('✓ Custom theme saved');
+}
+
+function _restoreCustomTheme_() {
+  try {
+    if (localStorage.getItem('dashTheme') !== 'custom') return false;
+    const raw = localStorage.getItem('dashCustomTheme');
+    if (!raw) return false;
+    const cfg = JSON.parse(raw);
+    document.getElementById('ctHueSlider').value = cfg.hue;
+    document.getElementById('ctSatSlider').value = cfg.sat;
+    setCustomThemeBase(cfg.base); // also calls updateCustomTheme()
+    return true;
+  } catch(e) { return false; }
+}
+
+// Just previews the accent swatch color from the sliders' default
+// values — does NOT touch document colors, so it never clobbers
+// whatever preset theme someone's actually using if they haven't
+// saved a custom theme yet.
+function _initCustomThemeSwatch_() {
+  const swatch = document.getElementById('ctSwatch');
+  if (!swatch) return;
+  const hue = Number(document.getElementById('ctHueSlider').value);
+  const sat = Number(document.getElementById('ctSatSlider').value);
+  const isDark = document.getElementById('ctBaseDark').classList.contains('active');
+  const accentL = isDark ? 50 : 38;
+  swatch.style.background = `hsl(${hue}, ${sat}%, ${accentL}%)`;
 }
 
 document.addEventListener('click', function(e) {
@@ -1068,6 +1251,8 @@ document.addEventListener('click', function(e) {
 (function() {
   try {
     const saved = localStorage.getItem('dashTheme');
+    if (saved === 'custom' && _restoreCustomTheme_()) return;
+    _initCustomThemeSwatch_();
     const valid = THEMES.find(t => t.key === saved);
     if (valid) applyTheme(valid.key);
     else applyTheme('dark');
@@ -1395,6 +1580,46 @@ function closeSidebar() {
 
       <div id="academicCreditsUploadStatus" class="schedule-status" style="margin-top:12px;"></div>
       <div id="academicCreditsUploadLog" style="margin-top:8px;font-size:11.5px;color:var(--text-muted);white-space:pre-wrap;"></div>
+
+    </div>
+  </div>
+</div>
+
+<div id="tradeSnapshotUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeTradeSnapshotUpload()">
+  <div class="modal-box" style="max-width:520px;">
+    <div class="modal-header">
+      <h2>Generate Trade Snapshot</h2>
+      <button class="modal-close" onclick="closeTradeSnapshotUpload()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+        Pulls every active student's current trade completion percentage directly from Trade Overview
+        (kept current by ETAR uploads), compares it to their last recorded snapshot of the same type
+        and same trade, and writes today's numbers to Trade Snapshots. Run this on Fridays (weekly)
+        or the last day of the month (monthly).
+      </p>
+
+      <div style="display:flex;gap:8px;margin-bottom:14px;">
+        <button class="btn-override" id="tsCadenceWeeklyBtn" onclick="_setTradeSnapshotCadence('weekly')" style="flex:1;">Weekly</button>
+        <button class="btn-override" id="tsCadenceMonthlyBtn" onclick="_setTradeSnapshotCadence('monthly')" style="flex:1;opacity:0.5;">Monthly</button>
+      </div>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Snapshot Date (defaults to today)</label>
+        <input type="date" id="tradeSnapshotDateInput"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;">
+      </div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" id="tradeSnapshotUploadBtn" onclick="confirmGenerateTradeSnapshot()">Generate Snapshot</button>
+        <button class="btn-override danger" onclick="closeTradeSnapshotUpload()">Cancel</button>
+      </div>
+
+      <div id="tradeSnapshotUploadStatus" class="schedule-status" style="margin-top:12px;"></div>
+      <div id="tradeSnapshotUploadLog" style="margin-top:8px;font-size:11.5px;color:var(--text-muted);white-space:pre-wrap;"></div>
 
     </div>
   </div>
