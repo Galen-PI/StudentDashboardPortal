@@ -103,39 +103,44 @@ function saveTranscriptSettings(studentId, settings) {
   if (!id) return { success: false, error: 'Student ID is required.' };
 
   try {
-    const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
-    const lastRow = sheet.getLastRow();
-    const numCols = VAULT_STUDENT_PACING_HEADERS.length;
+    // Locked: read-row-index-then-write-or-append. Without a lock,
+    // Bulk Assign Hours (BulkPacing.gs) writing to this same sheet at
+    // the same time could shift/duplicate this student's row.
+    return _withLock(() => {
+      const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
+      const lastRow = sheet.getLastRow();
+      const numCols = VAULT_STUDENT_PACING_HEADERS.length;
 
-    let existingRowNum = null;
-    if (lastRow >= VAULT_DATA_START_ROW) {
-      const ids = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
-      for (let i = 0; i < ids.length; i++) {
-        if (String(ids[i][0] || '').trim() === id) { existingRowNum = VAULT_DATA_START_ROW + i; break; }
+      let existingRowNum = null;
+      if (lastRow >= VAULT_DATA_START_ROW) {
+        const ids = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
+        for (let i = 0; i < ids.length; i++) {
+          if (String(ids[i][0] || '').trim() === id) { existingRowNum = VAULT_DATA_START_ROW + i; break; }
+        }
       }
-    }
 
-    const weeklyHours = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
-    const weeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
-    const row = [
-      id, weeklyHours,
-      weeks.w1 === true, weeks.w2 === true, weeks.w3 === true, weeks.w4 === true,
-      new Date().toISOString(),
-    ];
+      const weeklyHours = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
+      const weeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
+      const row = [
+        id, weeklyHours,
+        weeks.w1 === true, weeks.w2 === true, weeks.w3 === true, weeks.w4 === true,
+        new Date().toISOString(),
+      ];
 
-    if (existingRowNum) {
-      sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
-    } else {
-      sheet.getRange(sheet.getLastRow() + 1, 1, 1, numCols).setValues([row]);
-    }
-    sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
+      if (existingRowNum) {
+        sheet.getRange(existingRowNum, 1, 1, numCols).setValues([row]);
+      } else {
+        sheet.getRange(sheet.getLastRow() + 1, 1, 1, numCols).setValues([row]);
+      }
+      sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
 
-    SpreadsheetApp.flush();
+      SpreadsheetApp.flush();
 
-    logTranscriptWriteVault_(id, 'pacing', 'SETTINGS_UPDATED',
-      `Student ${id}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`);
+      logTranscriptWriteVault_(id, 'pacing', 'SETTINGS_UPDATED',
+        `Student ${id}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`);
 
-    return { success: true, studentId: id };
+      return { success: true, studentId: id };
+    });
 
   } catch (err) {
     return { success: false, error: err.message };
@@ -158,32 +163,44 @@ function saveTranscriptRow(studentId, rowData) {
       return { success: false, error: 'rowId is required to save an existing row.' };
     }
 
-    const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
-    const lastRow = sheet.getLastRow();
-    if (lastRow < VAULT_DATA_START_ROW) {
-      return { success: false, error: 'Transcript Rows is empty.' };
-    }
+    // Locked: scans for the row index, then writes to it. Without a
+    // lock, a concurrent addTranscriptRow appending a row for the same
+    // student between the scan and the write is a low-probability but
+    // real race (row numbers found here would still point at the right
+    // row in that case, but locking keeps this consistent with every
+    // other transcript writer below).
+    return _withLock(() => {
+      const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
+      const lastRow = sheet.getLastRow();
+      if (lastRow < VAULT_DATA_START_ROW) {
+        return { success: false, error: 'Transcript Rows is empty.' };
+      }
 
-    const numRows = lastRow - VAULT_DATA_START_ROW + 1;
-    const data = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, VAULT_TRANSCRIPT_HEADERS.length).getValues();
+      const numRows = lastRow - VAULT_DATA_START_ROW + 1;
+      const data = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, VAULT_TRANSCRIPT_HEADERS.length).getValues();
 
-    const targetId = String(studentId).trim();
-    const targetRowId = String(rowData.rowId).trim();
+      const targetId = String(studentId).trim();
+      const targetRowId = String(rowData.rowId).trim();
 
-    for (let i = 0; i < data.length; i++) {
-      if (String(data[i][0]).trim() !== targetId) continue;
-      if (String(data[i][2]).trim() !== targetRowId) continue; // col index 2 = rowId (studentId, sourceTabName, rowId, ...)
+      for (let i = 0; i < data.length; i++) {
+        if (String(data[i][0]).trim() !== targetId) continue;
+        if (String(data[i][2]).trim() !== targetRowId) continue; // col index 2 = rowId (studentId, sourceTabName, rowId, ...)
 
-      const sheetRow = VAULT_DATA_START_ROW + i;
-      const values = buildVaultRowValues_(targetId, targetRowId, rowData);
-      sheet.getRange(sheetRow, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
+        const sheetRow = VAULT_DATA_START_ROW + i;
+        const values = buildVaultRowValues_(targetId, targetRowId, rowData);
+        sheet.getRange(sheetRow, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
+        // Same text-format guard as addTranscriptRow — prevents Sheets
+        // from silently auto-converting startDate/adjStart/targetDate
+        // into real Date cells on this update path too.
+        sheet.getRange(sheetRow, 11, 1, 3).setNumberFormat('@');
 
-      logTranscriptWriteVault_(targetId, targetRowId, 'UPDATED', rowData.courseName);
+        logTranscriptWriteVault_(targetId, targetRowId, 'UPDATED', rowData.courseName);
 
-      return { success: true, rowId: targetRowId, studentId: targetId };
-    }
+        return { success: true, rowId: targetRowId, studentId: targetId };
+      }
 
-    return { success: false, error: 'Row not found — studentId ' + targetId + ', rowId ' + targetRowId };
+      return { success: false, error: 'Row not found — studentId ' + targetId + ', rowId ' + targetRowId };
+    });
 
   } catch (err) {
     return { success: false, error: err.message };
@@ -203,19 +220,28 @@ function addTranscriptRow(studentId, rowData) {
   try {
     const targetId = String(studentId).trim();
     const newRowId = targetId + '_' + Utilities.getUuid();
-
-    const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
     const values = buildVaultRowValues_(targetId, newRowId, rowData);
 
-    sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
-    // Force text formatting on studentId/rowId — same guard used
-    // everywhere else in Vault against Sheets auto-converting
-    // ID-looking strings to numbers/dates.
-    sheet.getRange(sheet.getLastRow(), 1, 1, 2).setNumberFormat('@');
+    // Locked: plain append at getLastRow()+1 — two staff adding rows
+    // for different students at the same moment could otherwise target
+    // the same row number and one write silently overwrites the other.
+    return _withLock(() => {
+      const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
+      // Force text formatting on studentId/rowId — same guard used
+      // everywhere else in Vault against Sheets auto-converting
+      // ID-looking strings to numbers/dates.
+      sheet.getRange(sheet.getLastRow(), 1, 1, 2).setNumberFormat('@');
+      // Same guard for startDate/adjStart/targetDate (columns 11-13) —
+      // these are saved as plain 'yyyy-MM-dd' strings, and without this,
+      // Sheets can silently auto-convert a date-looking string into a
+      // real Date cell on write.
+      sheet.getRange(sheet.getLastRow(), 11, 1, 3).setNumberFormat('@');
 
-    logTranscriptWriteVault_(targetId, newRowId, 'ADDED', rowData.courseName);
+      logTranscriptWriteVault_(targetId, newRowId, 'ADDED', rowData.courseName);
 
-    return { success: true, rowId: newRowId, studentId: targetId };
+      return { success: true, rowId: newRowId, studentId: targetId };
+    });
 
   } catch (err) {
     return { success: false, error: err.message };
