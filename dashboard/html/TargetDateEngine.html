@@ -8,41 +8,25 @@ const COURSE_ID_PREFIX_MAP = {
   'SC': 'Science',
   'SS': 'Social Studies',
 };
-
 const TargetDateEngine = {
 
   // ── Main calculation ───────────────────────────────────────
-  // Returns a date string (YYYY-MM-DD) or null
-  //
-  // Parameters:
-  //   courseHours  {number}  — total hours for this course
-  //   startDateStr {string}  — 'YYYY-MM-DD' (adj start or start date)
-  //   settings     {object}  — { weeklyHours, activeWeeks: { w1, w2, w3, w4 } }
-  //   completed    {boolean} — if true, always returns null
-  //   transfer     {boolean} — if true, always returns null
-
   calculate(courseHours, startDateStr, settings, completed = false, transfer = false) {
     // Short-circuit conditions
     if (completed || transfer)        return null;
     if (!startDateStr)                return null;
     if (!courseHours || courseHours <= 0) return null;
-
     const startDate = new Date(startDateStr);
     if (isNaN(startDate.getTime())) return null;
-
     const weeklyHours  = settings.weeklyHours || 10;
     const activeWeeks  = settings.activeWeeks || { w1: true, w2: true, w3: true, w4: true };
-
     const hasActiveWeek = activeWeeks.w1 || activeWeeks.w2 ||
                           activeWeeks.w3 || activeWeeks.w4;
     if (!hasActiveWeek) return null;
-
     let remainingHours = courseHours;
     let cursor         = new Date(startDate);
     cursor.setHours(0, 0, 0, 0);
-
     let safety = 0;
-
     while (remainingHours > 0 && safety++ < 5000) {
       const dayOfMonth = cursor.getDate();
       const week       = dayOfMonth <= 7  ? 1
@@ -50,35 +34,28 @@ const TargetDateEngine = {
                        : dayOfMonth <= 21 ? 3 : 4;
       const isWeekday  = cursor.getDay() >= 1 && cursor.getDay() <= 5;
       const weekKey    = 'w' + week;
-
       if (isWeekday && activeWeeks[weekKey]) {
         const weekdaysInWeek = this._countWeekdaysInMonthWeek(cursor, week);
         if (weekdaysInWeek > 0) {
           remainingHours -= weeklyHours / weekdaysInWeek;
         }
       }
-
       if (remainingHours <= 0) break;
       cursor.setDate(cursor.getDate() + 1);
     }
-
     if (remainingHours > 0) return null;
-
     return this._formatDate(cursor);
   },
-
+  
   // ── Status classifier ─────────────────────────────────────
-
   getStatus(targetDateStr, completed, transfer) {
     if (completed) return 'completed';
     if (transfer)  return 'transfer';
     if (!targetDateStr) return 'no-date';
-
     const today  = new Date();
     today.setHours(0, 0, 0, 0);
     const target = new Date(targetDateStr);
     target.setHours(0, 0, 0, 0);
-
     return target < today ? 'overdue' : 'on-track';
   },
 
@@ -92,9 +69,7 @@ const TargetDateEngine = {
       month: 'short', day: 'numeric', year: 'numeric'
     });
   },
-
   // ── Recalculate all courses ────────────────────────────────
-
   recalculateAll(courses, settings) {
     return courses.map(course => {
       const startDate = course.adjStart || course.startDate;
@@ -105,14 +80,11 @@ const TargetDateEngine = {
         course.completed,
         course.transfer
       );
-
       return Object.assign({}, course, { targetDate: target });
     });
   },
 
   // ── Credit calculator ─────────────────────────────────────
-
-
   calculateCredits(courses, courseIdToCategory) {
     const maxCredits = {
       'English':       4,
@@ -123,7 +95,6 @@ const TargetDateEngine = {
       'Fine Arts':     1,
       'Electives':     8
     };
-
     const totals = {
       'English': 0, 'Math': 0, 'Science': 0,
       'Social Studies': 0, 'Language': 0,
@@ -133,14 +104,11 @@ const TargetDateEngine = {
     courses.forEach(course => {
       if (!course.completed && !course.transfer) return;
       const credit = Number(course.credit) || 0;
-
       let category = this._categoryFromCourseId(course.courseId);
       if (!category) {
         category = this._normalizeCategory(course.subject || '');
       }
-
       if (!totals.hasOwnProperty(category)) category = 'Electives';
-
       if (category === 'Electives') {
         totals['Electives'] += credit;
       } else {
@@ -209,6 +177,5 @@ const TargetDateEngine = {
     };
     return aliases[category.trim()] || 'Electives';
   }
-
 };
 </script>
