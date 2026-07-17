@@ -1,32 +1,14 @@
 // ============================================================
 // ProfilesVault.gs — Student profile assembly (Vault-native)
-// ------------------------------------------------------------
-// PERF FIX applied: startDateById is now read ONCE (Student Info
-// sheet, via Code.gs) and passed in, instead of calling
-// getStudentStartDate(studentId) once per student inside the
-// loop. The old version opened SS_VAULT and re-read the whole
-// Student Info sheet fresh for every single profile — for 165
-// students, that was 165 spreadsheet opens/reads for one column
-// of data. This was the majority of the ~20s rebuild time.
 // ============================================================
 
 // ── Main entry point ──────────────────────────────────────────
-// startDateById: { [studentId]: startDateStr } — built ONCE in
-// Code.gs from a single read of VAULT_SHEET_STUDENT_INFO, passed
-// in rather than looked up per-student here.
 function buildStudentProfilesFromVault(
   nameMap, courseDataById, tradeOverviewRows, tradeSnapshotRows,
   productivityRows, wirCombined, scheduleByStudentId, tabeById, overrides,
   startDateById, academicSnapshotRows
 ) {
   academicSnapshotRows = academicSnapshotRows || [];
-
-  // Group weekly Academic Snapshots by student -- current week's
-  // gain feeds thisWeekCredits, which was hardcoded null before.
-  // Snapshot weeks are Friday-anchored while Productivity Data
-  // weeks are Monday-anchored (same mismatch found and fixed in
-  // WIREngineV2.gs); mirror that same 4-day shift here so the two
-  // line up on the same calendar week.
   const weeklySnapshotsByStudent_ = {};
   academicSnapshotRows
     .filter(r => String(r.cadence || '').trim().toLowerCase() === 'weekly')
@@ -52,22 +34,17 @@ function buildStudentProfilesFromVault(
   tabeById             = tabeById             || {};
   overrides            = overrides            || [];
   startDateById        = startDateById        || {};
-
   const tradesByStudent = _indexByMulti(tradeOverviewRows, r => String(r.studentId || '').trim());
-
   const snapshotsByStudentTrade = {};
   tradeSnapshotRows.forEach(r => {
     const key = String(r.studentId || '').trim() + '||' + String(r.trade || '').trim();
     (snapshotsByStudentTrade[key] = snapshotsByStudentTrade[key] || []).push(r);
   });
-
   const productivityByStudent = _indexByMulti(productivityRows, r => String(r.studentId || '').trim());
-
   const wirByStudent = {};
   wirCombined.forEach(c => {
     if (c.report && c.report.studentId) wirByStudent[String(c.report.studentId).trim()] = c;
   });
-
   const tradeCompleteByStudent = {};
   tradeOverviewRows.forEach(r => {
     const pct = Number(r.overallPercent);
@@ -76,7 +53,6 @@ function buildStudentProfilesFromVault(
       (tradeCompleteByStudent[sid] = tradeCompleteByStudent[sid] || []).push(r.trade);
     }
   });
-
   const overridesByStudent = {};
   overrides.forEach(o => {
     (overridesByStudent[o.studentId] = overridesByStudent[o.studentId] || []).push(o);
@@ -85,37 +61,29 @@ function buildStudentProfilesFromVault(
   overrides.forEach(o => {
     if (o.type === 'merged_into' && o.value) mergeMap[o.studentId] = String(o.value).trim();
   });
-
   const profiles = [];
   nameMap.forEach(map => {
     const id = String(map.studentId || '').trim();
     if (!id) return;
-
     const isActive = map.active === true || String(map.active).trim().toUpperCase() === 'TRUE';
     if (!isActive) return;
-
     const displayName       = String(map.masterName || '').trim() || id;
     const hsComplete        = String(map.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
     const tradeCompleteFlag = String(map.tradeComplete || '').trim().toUpperCase() === 'COMPLETE';
     const examProgram       = String(map.examProgram || '').trim() || null;   // ← NEW
-
     const tradeRows   = tradesByStudent[id] || [];
     const productivity = productivityByStudent[id] || [];
     const wirEntry     = wirByStudent[id] || null;
     const tabe          = tabeById[id] || null;
     const scheduledAcademicHours = scheduleByStudentId[id] || null;
     const completedTrades = tradeCompleteByStudent[id] || [];
-
     const courseData = courseDataById[id] || null;
-
     const academic = _buildAcademicFromCourseData_(courseData, startDateById[id] || null, productivity, weeklySnapshotsByStudent_[id] || {}, map.examProgram);
-
     const trades       = tradeRows.length
       ? tradeRows.map(t => _buildTradeRowFromVault_(t, snapshotsByStudentTrade))
       : null;
     const time          = _buildTimeFromProductivity_(productivity);
     const intervention = wirEntry ? _buildInterventionFromWirEntry_(wirEntry) : null;
-
     const tradeComplete = tradeCompleteFlag || completedTrades.length > 0;
     const risk = _calcRisk(
       academic, trades, time, hsComplete, tradeComplete,
@@ -140,6 +108,7 @@ function buildStudentProfilesFromVault(
       isStale:                false,
       riskTrend:              null,
       staffNote:              null,
+      hsdOverride:            null,
       academicId:             id,
       tradesId:               id,
       academic, trades, time, intervention, risk,
@@ -186,6 +155,7 @@ function buildStudentProfilesFromVault(
     academic_status: 'academicStatusOverride',
     trade_status:    'tradeStatusOverride',
     trade_name:      'tradeNameOverride',
+    hsd_class:       'hsdOverride',
   };
 
   profiles.forEach(p => {
@@ -213,14 +183,16 @@ if (_overridesToAutoClear.length) {
 }
 function _writeAutoClearOverrides_(entries) {
   try {
-    const sheet = _ensureVaultOverridesSheet_();
-    entries.forEach(e => {
-      _deleteMatchingVaultRows_(sheet, e.studentId, e.type);
+    _withLock(() => {
+      const sheet = _ensureVaultOverridesSheet_();
+      entries.forEach(e => {
+        _deleteMatchingVaultRows_(sheet, e.studentId, e.type);
+      });
+      const auditRows = entries.map(e => [e.studentId, 'auto_clear_note', e.reason, '', 'system', new Date()]);
+      if (auditRows.length) {
+        sheet.getRange(sheet.getLastRow() + 1, 1, auditRows.length, 6).setValues(auditRows);
+      }
     });
-    const auditRows = entries.map(e => [e.studentId, 'auto_clear_note', e.reason, '', 'system', new Date()]);
-    if (auditRows.length) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, auditRows.length, 6).setValues(auditRows);
-    }
   } catch (e) {
     Logger.log('_writeAutoClearOverrides_ error: ' + e.message);
   }
@@ -229,54 +201,35 @@ function _writeAutoClearOverrides_(entries) {
 function _buildAcademicFromCourseData_(courseData, startDateStr, productivity, weeklySnapshotsForStudent, examProgram) {
   if (!courseData) return null;
   weeklySnapshotsForStudent = weeklySnapshotsForStudent || {};
-
   const graduation = _computeGraduationDate_(startDateStr, courseData.remainingCredits);
   const daysToGrad = graduation ? _daysUntil_(graduation) : null;
-
-  // Sorted newest-first (unchanged from before)
   const sortedWeeks = (productivity || [])
     .filter(p => p.weekLabel)
     .sort((a, b) => String(b.weekLabel).localeCompare(String(a.weekLabel)));
-
   const thisWeek = sortedWeeks[0] || null;
   const lastWeek = sortedWeeks[1] || null;
-
-  // thisWeekCredits -- was hardcoded null everywhere before. Now
-  // pulled from this week's Academic Snapshot gain, keyed by the
-  // same Monday-anchored week label as Productivity Data.
   const thisWeekCredits = thisWeek && weeklySnapshotsForStudent[thisWeek.weekLabel] !== undefined
     ? weeklySnapshotsForStudent[thisWeek.weekLabel]
     : null;
-
   const thisWeekHours = thisWeek
     ? (Number(thisWeek.assignedHours) === 0 ? 'NWH' : Number(thisWeek.actualWorkedTime) || 0)
     : null;
   const lastWeekHours = lastWeek ? (Number(lastWeek.actualWorkedTime) || 0) : null;
   const recentWeeks = sortedWeeks.filter(w => Number(w.assignedHours) > 0).slice(0, 4);
-
   const weeklyAvgHours = recentWeeks.length
     ? +(recentWeeks.reduce((s, w) => s + (Number(w.actualWorkedTime) || 0), 0) / recentWeeks.length).toFixed(1)
     : null;
-
   const monthWorked   = recentWeeks.reduce((s, w) => s + (Number(w.actualWorkedTime) || 0), 0);
   const monthAssigned = recentWeeks.reduce((s, w) => s + (Number(w.assignedHours) || 0), 0);
   const monthRatio     = recentWeeks.length && monthAssigned > 0 ? monthWorked / monthAssigned : null;
-
   const pace = monthRatio === null ? null
     : monthRatio < 0.50 ? 'Behind'
     : monthRatio < 0.75 ? 'At Risk'
     : 'On Track';
-
-  // academic.type used to be `graduation ? 'HS' : null` — a proxy based on
-  // whether a graduation date could be projected, not the student's actual
-  // exam program. That meant HiSET/GED could never show up automatically,
-  // only "HS" or blank. Now driven directly by Name Mapping's examProgram
-  // column (F), which already carries the real value for every student.
   const type = (String(examProgram || '').trim() || 'HS');
-
   return {
     type:              type,
-    pace,                                    // ← was hardcoded null
+    pace,                                    
     progress:          null,
     percent:           courseData.completionPct     ?? null,
     hours:             courseData.totalHours         ?? null,
@@ -284,15 +237,15 @@ function _buildAcademicFromCourseData_(courseData, startDateStr, productivity, w
     graduation:        graduation,
     daysToGrad:        daysToGrad,
     gCredits:          null,
-    credits:           courseData.remainingCredits   ?? null,  // FIXED — was totalCredits, showed whole-program total instead of what's left
+    credits:           courseData.remainingCredits   ?? null,  
     nextMilestone:     courseData.nextCourse         || null,
     targetDate:        courseData.nextCourseTarget   || null,
-    targetDaysLeft:    courseData.nextCourseTarget ? _daysUntil_(courseData.nextCourseTarget) : null,
+    targetDaysLeft:    courseData.nextCourseTarget ? _daysUntilMDY_(courseData.nextCourseTarget) : null,
     thisWeekHours,
     lastWeekHours,
     lastMonth:         null,
     lastMonthAssigned: null,
-    thisWeekCredits,                          // FIXED — was hardcoded null, now reads real Academic Snapshot gain
+    thisWeekCredits,                        
     worked:            null,
     weeklyAvgHours,
   };
@@ -301,18 +254,13 @@ function _buildAcademicFromCourseData_(courseData, startDateStr, productivity, w
 function _computeGraduationDate_(startDateStr, remainingCredits) {
   if (!startDateStr) return null;
   if (remainingCredits === null || remainingCredits === undefined) return null;
-
   const start = _parseLocalDate(String(startDateStr).slice(0, 10));
   if (!start) return null;
-
   const hardCap = _addMonths_(start, 24);
-
   const monthsByYearlyPace  = Math.ceil(remainingCredits / (23 / 12));
   const monthsByMonthlyPace = Math.ceil(remainingCredits / 20);
   const monthsNeeded = Math.max(monthsByYearlyPace, monthsByMonthlyPace);
-
   const paceProjected = _addMonths_(new Date(), monthsNeeded);
-
   const result = hardCap < paceProjected ? hardCap : paceProjected;
   return _toDateStr(result);
 }
@@ -331,18 +279,23 @@ function _daysUntil_(dateStr) {
   d.setHours(0, 0, 0, 0);
   return Math.round((d - today) / 86400000);
 }
+function _daysUntilMDY_(mdyStr) {
+  const d = new Date(mdyStr);
+  if (isNaN(d.getTime())) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  d.setHours(0, 0, 0, 0);
+  return Math.round((d - today) / 86400000);
+}
 
 function _buildTradeRowFromVault_(t, snapshotsByStudentTrade) {
   const sid = String(t.studentId || '').trim();
   const key = sid + '||' + String(t.trade || '').trim();
   const snapshots = snapshotsByStudentTrade[key] || [];
-
   const enrollmentStatus = String(t.enrollmentStatus || '').trim() || null;
-
   const paceMetrics = _computeTradePaceMetrics_(
     t.overallPercent, _toDateStr(t.tarBeginDate), t.trade, enrollmentStatus
   );
-
   return {
     tarName:          t.trade                          ?? null,
     paceGap:          paceMetrics.paceGap,
@@ -375,7 +328,6 @@ function _buildMonthlyProgressFromSnapshots_(snapshots) {
 
 function _buildTimeFromProductivity_(productivity) {
   if (!productivity || !productivity.length) return null;
-
   let totalHours = 0;
   const sheets = {};
   productivity.forEach(p => {
@@ -385,7 +337,6 @@ function _buildTimeFromProductivity_(productivity) {
     const label = String(p.weekLabel || '').trim();
     if (label) sheets[label] = (sheets[label] || 0) + hrs;
   });
-
   if (totalHours <= 0) return null;
   return {
     totalHours: +totalHours.toFixed(2),
