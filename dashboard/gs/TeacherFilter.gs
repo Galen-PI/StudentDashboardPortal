@@ -1,34 +1,25 @@
 // ============================================================
-// TeacherFilter.gs — "Filter by Teacher" (HS class) support
-
-
+// TeacherFilter.gs
 const TEACHER_HSD_CLASSES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
-
 function getStudentHSDAssignments() {
   if (USE_VAULT_SCHEDULE) return getStudentHSDAssignmentsFromVault_();
-
   try {
     const hubSS = SpreadsheetApp.openById(SS_VAULT);
     const schedSheet = hubSS.getSheetByName(SHEET_SCHEDULE);
     if (!schedSheet || schedSheet.getLastRow() < 2) {
       return { success: true, assignments: {} };
     }
-
     const schedValues = schedSheet.getDataRange().getValues();
     const assignments = {};
-
-    // Row 0 is header: Week, Student Name, Student ID, Schedule JSON
     for (let i = 1; i < schedValues.length; i++) {
       const studentId = String(schedValues[i][2] || '').trim();
       if (!studentId) continue;
-
       let schedule;
       try {
         schedule = JSON.parse(String(schedValues[i][3] || '{}'));
       } catch (e) {
         continue; // malformed schedule JSON — skip this student
       }
-
       const matchedClass = _findHSDClassInSchedule_(schedule);
       if (matchedClass) assignments[studentId] = matchedClass;
     }
@@ -42,10 +33,6 @@ function getStudentHSDAssignments() {
 }
 
 // ── VAULT PATH ────────────────────────────────────────────────
-// Only 'current' rows matter here — a stale 'last' schedule
-// shouldn't influence today's teacher-filter assignment. Column
-// order matches VAULT_SCHEDULE_HEADERS in VaultConfig.gs:
-//   studentId, weekLabel, slot, scheduleJson, lastUpdated
 function getStudentHSDAssignmentsFromVault_() {
   try {
     const rows = readVaultSheetAsObjects_(VAULT_SHEET_WEEKLY_SCHEDULE, VAULT_SCHEDULE_HEADERS);
