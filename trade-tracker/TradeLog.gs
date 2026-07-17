@@ -62,8 +62,16 @@ function uploadTradeETARData(rows, role) {
       ? countCompletedItemsFromBctRows_(rows)
       : countCompletedItemsFromRows_(rows);
 
-    _upsertTradeOverviewRow_(studentId, tarInfo.tarName, tarBeginDate, percentages);
-    const progressRowCount = _upsertTradeProgressRows_(studentId, tarInfo.tarName, parsed.counts, parsed.avgRatings);
+    // Locked: both upserts below call _deleteVaultRowsMatching_, which
+    // reads, clears, and rewrites the ENTIRE Trade Overview / Trade
+    // Progress data range. Without a lock, an overlapping ETAR upload
+    // (or a Time Log save touching the same underlying pattern) can
+    // clobber this one's write. Both upserts are locked together so
+    // one ETAR's Overview + Progress rows land atomically.
+    const progressRowCount = _withLock(() => {
+      _upsertTradeOverviewRow_(studentId, tarInfo.tarName, tarBeginDate, percentages);
+      return _upsertTradeProgressRows_(studentId, tarInfo.tarName, parsed.counts, parsed.avgRatings);
+    });
 
     _clearDashboardCache();
 
@@ -134,18 +142,24 @@ function _upsertTradeOverviewRow_(studentId, trade, tarBeginDate, percentages) {
 function setTradeEnrollmentStatus(studentId, trade, status, role) {
   _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
   const id = String(studentId).trim();
-  const sheet = getVaultSheet_(VAULT_SHEET_TRADE_OVERVIEW);
-  const rows = readVaultSheetAsObjects_(VAULT_SHEET_TRADE_OVERVIEW, VAULT_TRADE_OVERVIEW_HEADERS);
-  const rowIndex = rows.findIndex(row =>
-    String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade
-  );
-  if (rowIndex === -1) {
-    return { success: false, error: 'No Trade Overview row found for that student + trade.' };
-  }
-  const statusCol = VAULT_TRADE_OVERVIEW_HEADERS.indexOf('enrollmentStatus') + 1;
-  sheet.getRange(rowIndex + 2, statusCol).setValue(String(status || '').trim());
-  _clearDashboardCache();
-  return { success: true, studentId: id, trade: trade, enrollmentStatus: String(status || '').trim() };
+
+  // Locked: read-row-index-then-write. Without a lock, a concurrent
+  // ETAR upload for the same student/trade could shift or rewrite this
+  // row between the read and the write below.
+  return _withLock(() => {
+    const sheet = getVaultSheet_(VAULT_SHEET_TRADE_OVERVIEW);
+    const rows = readVaultSheetAsObjects_(VAULT_SHEET_TRADE_OVERVIEW, VAULT_TRADE_OVERVIEW_HEADERS);
+    const rowIndex = rows.findIndex(row =>
+      String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade
+    );
+    if (rowIndex === -1) {
+      return { success: false, error: 'No Trade Overview row found for that student + trade.' };
+    }
+    const statusCol = VAULT_TRADE_OVERVIEW_HEADERS.indexOf('enrollmentStatus') + 1;
+    sheet.getRange(rowIndex + 2, statusCol).setValue(String(status || '').trim());
+    _clearDashboardCache();
+    return { success: true, studentId: id, trade: trade, enrollmentStatus: String(status || '').trim() };
+  });
 }
 
 function _upsertTradeProgressRows_(studentId, trade, counts, avgRatings) {
@@ -546,14 +560,22 @@ function extractTarInfoFromRows_(rows) {
   const codeMatch = joined.match(/\b([A-Z]{3,6}-\d{3}-[A-Z]{3}-\d{2})\b/);
   if (codeMatch) result.tarCode = codeMatch[1];
 
+  // tarName must match the short codes used everywhere else in the app
+  // (the Quick Edit "Which trade?" dropdown, TRADE_NAME_OPTIONS in
+  // Scripts.html) — this is also the value written into Trade Overview's
+  // `trade` column and matched against on re-upload. A mismatch here
+  // means a re-uploaded ETAR can't find the existing row to overwrite
+  // and silently appends a duplicate "second program" instead. (Previously
+  // this used full descriptive names for BCT/CNA/Culinary, which didn't
+  // match the dropdown's short codes — see fix note.)
   if (/Building Construction Technology/i.test(joined) || /\bBCT\b/i.test(joined) || /Construction Technology/i.test(joined)) {
-    result.tarName = "Building Construction Technology"; result.tradeKey = "BCT";
+    result.tarName = "BCT"; result.tradeKey = "BCT";
   } else if (/Pharmacy Technician/i.test(joined) || /PHARM-100-OJC-19/i.test(joined)) {
     result.tarName = "Pharmacy Technician"; result.tradeKey = "PHARMACY";
   } else if (/Certified Nurse Assistant/i.test(joined) || /NURSE-100-OJC-15/i.test(joined)) {
-    result.tarName = "Certified Nurse Assistant"; result.tradeKey = "CNA";
+    result.tarName = "CNA"; result.tradeKey = "CNA";
   } else if (/Culinary Arts/i.test(joined) || /CULIN-100-OJC-19/i.test(joined)) {
-    result.tarName = "Culinary Arts"; result.tradeKey = "CULINARY";
+    result.tarName = "Culinary"; result.tradeKey = "CULINARY";
   } else if (/Security/i.test(joined) || /SECUR-100-OJC-13/i.test(joined)) {
     result.tarName = "Security"; result.tradeKey = "SECURITY";
   } else if (/Carpentry/i.test(joined) || /CARPT-100-UBC-18/i.test(joined)) {
