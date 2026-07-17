@@ -131,6 +131,15 @@ function _rebuildDashboardData() {
   const productivityRows  = readVaultSheetAsObjects_(VAULT_SHEET_PRODUCTIVITY, VAULT_PRODUCTIVITY_HEADERS);
   const academicSnapshotRows = readVaultSheetAsObjects_(VAULT_SHEET_ACADEMIC_SNAPSHOTS, VAULT_ACADEMIC_SNAPSHOT_HEADERS);
 
+  // Course data is now computed LIVE from Transcript Rows on every
+  // rebuild, instead of read from a separately-synced Student Course
+  // Data sheet. This removes an entire class of staleness bug — a
+  // student whose transcript just changed can no longer show old
+  // numbers until some future batch sync catches up, because there
+  // is no cached middle layer left to go stale. The existing
+  // dashboard cache (this whole function is only re-run on cache
+  // invalidation) is the only caching layer now, same as everything
+  // else on this page.
   const allTranscriptRows = readVaultSheetAsObjects_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS);
   const transcriptRowsByStudent = {};
   allTranscriptRows.forEach(row => {
@@ -153,7 +162,7 @@ function _rebuildDashboardData() {
   const startDateById = {};
   studentInfoRows.forEach(row => {
     const id = String(row.studentId || '').trim();
-    if (id) startDateById[id] = row.startDate || null;
+    if (id) startDateById[id] = _toDateStr(row.startDate) || null;
   });
 
   const tabeValues    = getVaultSheet_(VAULT_SHEET_TABE).getDataRange().getValues();
