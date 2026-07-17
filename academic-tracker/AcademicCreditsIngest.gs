@@ -15,6 +15,8 @@ const ACADEMIC_CREDITS_IGNORE_THRESHOLD = 5.0;
 function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
   try {
     if (cadence !== 'weekly' && cadence !== 'monthly') {
+      Logger.log('generateAcademicSnapshot: invalid or missing cadence ("' + cadence + '") — must be "weekly" or "monthly". ' +
+        'If you ran this directly from the editor with no arguments, use a debug wrapper with an explicit cadence instead.');
       return { success: false, error: 'Cadence must be "weekly" or "monthly".' };
     }
 
@@ -115,7 +117,12 @@ function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
     });
 
     if (rowsToWrite.length) {
-      appendVaultRows_(VAULT_SHEET_ACADEMIC_SNAPSHOTS, VAULT_ACADEMIC_SNAPSHOT_HEADERS, rowsToWrite);
+      // Locked: this runs off a cadence trigger (weekly/monthly) — an
+      // overlapping run for the same cadence could otherwise append
+      // duplicate snapshot rows for the same student+date.
+      _withLock(() => {
+        appendVaultRows_(VAULT_SHEET_ACADEMIC_SNAPSHOTS, VAULT_ACADEMIC_SNAPSHOT_HEADERS, rowsToWrite);
+      });
     }
 
     return {
