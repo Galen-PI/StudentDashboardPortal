@@ -21,39 +21,47 @@ function saveWeeklyTimeLog(studentId, weekLabel, rawLog, role) {
       ? Utilities.formatDate(weekDate, Session.getScriptTimeZone(), 'MMMM yyyy')
       : '';
 
-    const sheet = getVaultSheet_(VAULT_SHEET_PRODUCTIVITY);
-    _deleteVaultRowsMatching_(sheet, VAULT_PRODUCTIVITY_HEADERS, row =>
-      String(row.studentId || '').trim() === id && String(row.weekLabel || '').trim() === week
-    );
+    // Locked: _deleteVaultRowsMatching_ reads, clears, and rewrites the
+    // ENTIRE Productivity Data range. Without a lock, two concurrent
+    // saves (different staff, different students) can each read a stale
+    // snapshot and clobber each other's writes when they rewrite the
+    // sheet. See TradeUpload.gs for the other two callers of the same
+    // helper, locked the same way.
+    return _withLock(() => {
+      const sheet = getVaultSheet_(VAULT_SHEET_PRODUCTIVITY);
+      _deleteVaultRowsMatching_(sheet, VAULT_PRODUCTIVITY_HEADERS, row =>
+        String(row.studentId || '').trim() === id && String(row.weekLabel || '').trim() === week
+      );
 
-    let updatedBy = 'staff';
-    try { updatedBy = Session.getActiveUser().getEmail() || 'staff'; } catch (e) {}
+      let updatedBy = 'staff';
+      try { updatedBy = Session.getActiveUser().getEmail() || 'staff'; } catch (e) {}
 
-    const rowValues = [
-      id, monthLabel, week,
-      parsed.completedWork, parsed.idleTime, parsed.actualWorkedTime,
-      assigned.assignedHours, assigned.source, 'staff_paste',
-      new Date().toISOString(), updatedBy,
-    ];
-    sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_PRODUCTIVITY_HEADERS.length).setValues([rowValues]);
-    sheet.getRange(sheet.getLastRow(), 1, 1, 1).setNumberFormat('@'); // studentId stays text
+      const rowValues = [
+        id, monthLabel, week,
+        parsed.completedWork, parsed.idleTime, parsed.actualWorkedTime,
+        assigned.assignedHours, assigned.source, 'staff_paste',
+        new Date().toISOString(), updatedBy,
+      ];
+      sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_PRODUCTIVITY_HEADERS.length).setValues([rowValues]);
+      sheet.getRange(sheet.getLastRow(), 1, 1, 1).setNumberFormat('@'); // studentId stays text
 
-    _clearDashboardCache();
-    clearProductivityCache();
+      _clearDashboardCache();
+      clearProductivityCache();
 
-    return {
-      success:             true,
-      studentId:           id,
-      weekLabel:           week,
-      monthLabel:          monthLabel,
-      completedWork:       parsed.completedWork,
-      idleTime:            parsed.idleTime,
-      actualWorkedTime:    parsed.actualWorkedTime,
-      assignedHours:       assigned.assignedHours,
-      assignedHoursSource: assigned.source,
-      totalEntries:        parsed.totalEntries,
-      idleEntries:         parsed.idleEntries,
-    };
+      return {
+        success:             true,
+        studentId:           id,
+        weekLabel:           week,
+        monthLabel:          monthLabel,
+        completedWork:       parsed.completedWork,
+        idleTime:            parsed.idleTime,
+        actualWorkedTime:    parsed.actualWorkedTime,
+        assignedHours:       assigned.assignedHours,
+        assignedHoursSource: assigned.source,
+        totalEntries:        parsed.totalEntries,
+        idleEntries:         parsed.idleEntries,
+      };
+    });
 
   } catch (err) {
     return { success: false, error: err.message };
