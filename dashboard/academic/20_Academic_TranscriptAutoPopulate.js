@@ -46,6 +46,86 @@ const TRANSCRIPT_AUTO_POPULATE_COURSES_ = new Set([
   'Pathway Elective 3', 'Pathway Elective 4', 'Pathway Elective 5', 'Pathway Elective 6',
 ]);
 
+// ============================================================
+// Minimum/Maximum Hours Required (Academic Transcript overview)
+// ------------------------------------------------------------
+// Sums Master Schedule Hours' hours (max) column, plus a COMPUTED
+// minimum, across only the courses on a student's ACTUAL Academic
+// Transcript that are still incomplete — deliberately scoped to
+// the transcript itself (not the schedule, not the full course
+// catalogue) so this can't "spill" hours from courses the student
+// isn't really carrying. Matches by base course name + instance
+// (S1/S2), same split logic auto-populate already uses, since a
+// plain name match would miss every semester-specific course.
+//
+// Normalizes an instance value to a bare digit string so 'S1'/'S2'
+// (derived from splitting a Master Schedule Hours name) and '1'/'2'
+// (how the transcript actually stores it) compare equal. Without
+// this, every semester-split course silently failed to match.
+function _normalizeInstance_(instance) {
+  return String(instance || '').trim().replace(/^S/i, '');
+}
+
+function getHoursRequiredForTranscript(studentId) {
+  try {
+    const transcriptRows = readVaultRowsForStudent_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS, studentId);
+
+    const masterRows = readVaultSheetAsObjects_(VAULT_SHEET_CLASSES_ORDER, VAULT_CLASSES_ORDER_HEADERS);
+    const hoursMap = {};
+    masterRows.forEach(row => {
+      const { instance, base } = _splitMasterScheduleCourseName_(row.courseName);
+      if (!base) return;
+      if (base === 'Trade Completion') return; // excluded entirely, per instruction — doesn't count toward either total
+
+      const key = base + '|' + _normalizeInstance_(instance);
+      hoursMap[key] = {
+        hours:    Number(row.hours) || 0,
+        minHours: Number(row.minimumHours) || 0, // straight from Master Schedule Hours column E — hardcoded per course, no formula
+      };
+    });
+
+    let minRequired = 0;
+    let maxRequired = 0;
+    let matchedCount = 0;
+    const unmatchedCourses = [];
+
+    transcriptRows
+      .filter(r => r.completed !== true && r.transfer !== true)
+      .forEach(r => {
+        // Re-split the transcript's own courseName defensively — a
+        // manually-typed row can end up with the raw "S1 "/"S2 "
+        // prefix still attached (e.g. "S1 Trade Completion"), which
+        // an exact-string exclusion/match check would silently miss.
+        const split = _splitMasterScheduleCourseName_(r.courseName);
+        const baseName = split.base;
+        if (baseName === 'Trade Completion') return; // excluded entirely, same as above
+
+        const explicitInstance = _normalizeInstance_(r.instance);
+        const effectiveInstance = explicitInstance || _normalizeInstance_(split.instance); // fall back to whatever was embedded in the name itself, if the Instance field wasn't set
+
+        const key = baseName + '|' + effectiveInstance;
+        const entry = hoursMap[key] || hoursMap[baseName + '|']; // fall back to no-instance match
+        if (entry) {
+          minRequired += entry.minHours;
+          maxRequired += entry.hours;
+          matchedCount++;
+        } else {
+          unmatchedCourses.push(r.courseName);
+        }
+      });
+
+    return {
+      success: true,
+      minRequired: Math.round(minRequired * 100) / 100,
+      maxRequired: Math.round(maxRequired * 100) / 100,
+      matchedCount,
+      unmatchedCourses,
+    };
+  } catch (err) {
+    return { success: false, error: err.message };
+  }
+}
+
 function autoPopulateTranscript(studentId, employeeId, role) {
   const lock = LockService.getScriptLock();
   try {
@@ -94,7 +174,7 @@ function autoPopulateTranscript(studentId, employeeId, role) {
         instance,
         transfer: false,
         subject: catalogueMatch ? catalogueMatch.category : '',
-        credit: m.units || 0,
+        credit: 0.5,
         classHours: m.hours || 0,
         startDate: '',
         adjStart: '',
