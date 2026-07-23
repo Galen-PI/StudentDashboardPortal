@@ -10,8 +10,17 @@
 
 const ACADEMIC_CREDITS_IGNORE_THRESHOLD = 5.0;
 
-// cadence: 'weekly' | 'monthly'
-// dateOverride: optional 'yyyy-MM-dd' string — defaults to today (run this ON the actual Friday / last day of month)
+// ── Methodology cutover ──────────────────────────────────────
+// remainingCredits changed definition on this date (see CourseSync.gs
+// _computeCourseDataFromVaultRows_ — now anchored to the fixed
+// 23-credit graduation requirement instead of summing incomplete-
+// course credits). Any prior snapshot row dated BEFORE this date used
+// the old definition, so it isn't a valid thing to diff against —
+// comparing old-style vs. new-style numbers produces a meaningless
+// "gain" or "loss" that has nothing to do with actual progress.
+// Set this to the date you deploy this fix (today), then leave it
+// alone — it only matters for the one comparison spanning the change.
+const CREDITS_METHODOLOGY_CUTOVER_DATE = '2026-07-20';
 function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
   try {
     if (cadence !== 'weekly' && cadence !== 'monthly') {
@@ -30,10 +39,6 @@ function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
         .filter(m => m.active === true || String(m.active).trim().toUpperCase() === 'TRUE')
         .map(m => String(m.studentId || '').trim())
     );
-
-    // Course data is now computed LIVE from Transcript Rows,
-    // matching the same change made in Code.gs -- Student Course
-    // Data is no longer synced or read anywhere.
     const allTranscriptRows = readVaultSheetAsObjects_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS);
     const transcriptRowsByStudent = {};
     allTranscriptRows.forEach(row => {
@@ -52,7 +57,6 @@ function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
       .filter(r => String(r.cadence || '').trim().toLowerCase() === cadence)
       .map(r => Object.assign({}, r, { snapshotDate: _normVaultDateField_(r.snapshotDate, 'yyyy-MM-dd') }));
 
-    // Most recent PRIOR snapshot per student (strictly before today's target date)
     const priorByStudent = {};
     existingSnaps.forEach(r => {
       const id = String(r.studentId || '').trim();
@@ -62,31 +66,27 @@ function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
       }
     });
 
-    // Already-run guard: don't create a duplicate row if this cadence+date already exists for a student
     const alreadyDoneToday = new Set(
       existingSnaps.filter(r => r.snapshotDate === snapshotDate).map(r => String(r.studentId || '').trim())
     );
-
     const rowsToWrite = [];
     let skippedInactive = 0, skippedNoData = 0, skippedAlreadyDone = 0, newBaselines = 0;
-
     courseData.forEach(cd => {
       const id = String(cd.studentId || '').trim();
       if (!id) return;
       if (!activeIds.has(id)) { skippedInactive++; return; }
       if (alreadyDoneToday.has(id)) { skippedAlreadyDone++; return; }
-
       const remaining = cd.remainingCredits !== '' && cd.remainingCredits !== undefined && cd.remainingCredits !== null
         ? Number(cd.remainingCredits) : null;
       if (remaining === null || isNaN(remaining)) { skippedNoData++; return; }
-
       const prior = priorByStudent[id];
-
+      const priorPreCutover = prior && prior.snapshotDate < CREDITS_METHODOLOGY_CUTOVER_DATE;
       let gain = null;
       let status;
-
-      if (!prior) {
-        status = 'New';
+      if (!prior || priorPreCutover) {
+        status = priorPreCutover
+          ? 'New (methodology change — prior snapshot not comparable)'
+          : 'New';
         newBaselines++;
       } else {
         const priorRemaining = Number(prior.creditsRemaining);
