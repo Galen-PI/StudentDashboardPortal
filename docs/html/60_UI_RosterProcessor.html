@@ -1,0 +1,130 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <base target="_top">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js"></script>
+  <style>
+    body { font-family: Arial, sans-serif; font-size: 13px; padding: 12px; }
+    h3   { margin: 0 0 10px; }
+    input[type="file"] { width: 100%; margin-bottom: 10px; }
+    button { padding: 6px 14px; cursor: pointer; }
+    #status  { margin-top: 10px; color: #555; }
+    #log     { margin-top: 8px; max-height: 200px; overflow-y: auto; background: #f5f5f5; padding: 6px; font-size: 11px; border: 1px solid #ddd; border-radius: 3px; white-space: pre-wrap; }
+    #results { margin-top: 10px; font-weight: bold; color: green; }
+    .error   { color: red; }
+  </style>
+</head>
+<body>
+  <h3>Roster Processor</h3>
+  <input type="file" id="fileInput" accept=".xlsx,.xls" />
+  <button onclick="handleUpload()">Process File</button>
+  <div id="status"></div>
+  <div id="log"></div>
+  <div id="results"></div>
+  <script>
+    const TRADE_COURSES    = ["BCT","Carpentry","CNA","Culinary Arts","Pharmacy Tech", "Security& Protective","Security&Protect 2","OTP-MFR","OTP/ACT"];
+    const ACADEMIC_COURSES = ["HSE/HSD1","HSD 2","HSD3"];
+
+    function isMatch(courseName, list) {
+      const lower = courseName.toLowerCase();
+      return list.some(kw => lower.includes(kw.toLowerCase()));
+    }
+
+    function splitIntoBlocks(rows) {
+      const blocks = [];
+      let current = [];
+      rows.forEach(row => {
+        const isBlank = !row || row.every(c => c === null || c === undefined || String(c).trim() === "");
+        if (isBlank) {
+          if (current.length > 0) { blocks.push(current); current = []; }
+        } else {current.push(row);}
+      });
+      if (current.length > 0) blocks.push(current);
+      return blocks;
+    }
+
+    function parseStudentBlock(block) {
+      if (!block || block.length === 0) return null;
+      const headerCell = block[0][0] ? String(block[0][0]) : "";
+      const lines = headerCell.split("\n").map(l => l.trim()).filter(l => l !== "");
+      if (lines.length < 2) return null;
+      const studentName = lines[0].replace(/\s+/g, " ").trim();
+      const idMatch     = lines[1].match(/\d{5,}/);
+      if (!idMatch) return null;
+      const studentId   = idMatch[0];
+      const latestStatus = {};
+      block.slice(2).forEach(row => {
+        const courseName = row[1] ? String(row[1]).trim() : "";
+        const status     = row[6] ? String(row[6]).trim() : "";
+        if (!courseName || !status) return;
+        if (isMatch(courseName, TRADE_COURSES) || isMatch(courseName, ACADEMIC_COURSES)) {
+          latestStatus[courseName] = status;
+        }
+      });  
+      let tradeFound = false, tradeComplete = true;
+      let academicFound = false, academicComplete = true;
+      Object.entries(latestStatus).forEach(([courseName, status]) => {
+        const inProgress = status === "Currently Enrolled";
+        if (isMatch(courseName, TRADE_COURSES)) {
+          tradeFound = true;
+          if (inProgress) tradeComplete = false;
+        }
+        if (isMatch(courseName, ACADEMIC_COURSES)) {
+          academicFound = true;
+          if (inProgress) academicComplete = false;
+        }
+      });
+      return {
+        id:               studentId,
+        name:             studentName,
+        tradeComplete:    (tradeFound    && tradeComplete)    ? "Complete" : "",
+        academicComplete: (academicFound && academicComplete) ? "Complete" : ""
+      };
+    }
+    function handleUpload() {
+      const file = document.getElementById("fileInput").files[0];
+      if (!file) { setStatus("Please select an Excel file.", true); return; }
+      setStatus("Reading file…");
+      clearLog();
+      const reader = new FileReader();
+      reader.onerror = () => setStatus("FileReader failed.", true);
+      reader.onload = function(e) {
+        try {
+          const data     = new Uint8Array(e.target.result);
+          const workbook = XLSX.read(data, { type: "array", cellDates: false });
+          const sheet    = workbook.Sheets[workbook.SheetNames[0]];
+          const rows = XLSX.utils.sheet_to_json(sheet, {header: 1, defval: null, blankrows: true});
+          const dataRows = rows.slice(5);
+          const blocks   = splitIntoBlocks(dataRows);
+          const results  = [];
+          blocks.forEach((block, i) => {
+            const student = parseStudentBlock(block);
+            if (student) {results.push(student); appendLog(`✓ ${student.name} | Trade: ${student.tradeComplete || '—'} | Academic: ${student.academicComplete || '—'}`);}
+          });
+          setStatus(`Parsed ${results.length} students. Writing to sheet…`);
+          google.script.run
+            .withSuccessHandler((result) => {setStatus(`:) Done! ${result.added} added, ${result.updated} updated.`);})
+            .withFailureHandler(err => {setStatus("Apps Script error: " + err.message, true); appendLog("FAILURE: " + err.message);})
+            .writeResults(results);
+        } 
+        catch(err) {setStatus("Error: " + err.message, true); appendLog("Exception: " + err.stack);}
+      };
+      reader.readAsArrayBuffer(file);
+    }
+
+    function setStatus(msg, isError) {
+      const el = document.getElementById("status");
+      el.textContent = msg;
+      el.className = isError ? "error" : "";
+    }
+    function appendLog(line) {
+      const el = document.getElementById("log");
+      el.textContent += line + "\n";
+      el.scrollTop = el.scrollHeight;
+    }
+    function clearLog() {
+      document.getElementById("log").textContent = "";
+    }
+  </script>
+</body>
+</html>
