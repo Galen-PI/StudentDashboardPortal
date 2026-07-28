@@ -1,11 +1,27 @@
 // ============================================================
 // Transcripts.gs — Read/write student transcript data
+// ------------------------------------------------------------
+// Vault-only. The legacy per-student-tab path (SS_ACADEMIC,
+// rowIndex/block-based positional writes, findNextEmptyRow_,
+// buildRowValues_) has been removed along with the
+// USE_VAULT_TRANSCRIPTS dispatch flag — there was no live
+// scenario left where the flag would ever be false, and keeping
+// a permanently-true toggle around read like a real decision
+// point when it wasn't one anymore.
+//
+// getStudentNameById_, seedHubSettings, and
+// auditTranscriptCategories were also removed: all three
+// referenced either SS_ACADEMIC (no longer a defined constant)
+// or a Name Mapping column layout that predates the simplified
+// Vault schema, and would have thrown or silently misread data
+// if ever actually invoked.
 // ============================================================
 
 const SETTINGS_DEFAULTS = {
   weeklyHours: 10,
   activeWeeks: { w1: true, w2: true, w3: true, w4: true }
 };
+
 
 // ============================================================
 // SECTION 1 — READ
@@ -18,6 +34,7 @@ function getStudentTranscript(studentId) {
       VAULT_TRANSCRIPT_HEADERS,
       studentId
     );
+
     const courses = rows.map(row => ({
       rowId:         row.rowId,
       block:         Number(row.block) || 1,   // rows with no value default to Year 1
@@ -36,6 +53,7 @@ function getStudentTranscript(studentId) {
     }));
 
     const settings = getTranscriptSettings_(studentId);
+
     return {
       success:        true,
       studentId:      String(studentId).trim(),
@@ -43,6 +61,7 @@ function getStudentTranscript(studentId) {
       settings:       settings,
       settingsSource: USE_HUB_SETTINGS ? 'hub' : 'academic_tracker'
     };
+
   } catch (err) {
     return { success: false, error: err.message };
   }
@@ -52,14 +71,18 @@ function getStudentTranscript(studentId) {
 // ============================================================
 // SECTION 2 — SETTINGS
 // ============================================================
+
 function getTranscriptSettings_(studentId) {
   const id = String(studentId || '').trim();
   if (!id) return SETTINGS_DEFAULTS;
+
   try {
     const rows = readVaultRowsForStudent_(VAULT_SHEET_STUDENT_PACING, VAULT_STUDENT_PACING_HEADERS, id);
     if (!rows.length) return SETTINGS_DEFAULTS;
+
     const row = rows[0];
     const hours = Number(row.weeklyHours);
+
     return {
       weeklyHours: isFinite(hours) && hours > 0 ? hours : SETTINGS_DEFAULTS.weeklyHours,
       activeWeeks: {
@@ -80,10 +103,14 @@ function saveTranscriptSettings(studentId, settings) {
   if (!id) return { success: false, error: 'Student ID is required.' };
 
   try {
+    // Locked: read-row-index-then-write-or-append. Without a lock,
+    // Bulk Assign Hours (BulkPacing.gs) writing to this same sheet at
+    // the same time could shift/duplicate this student's row.
     return _withLock(() => {
       const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
       const lastRow = sheet.getLastRow();
       const numCols = VAULT_STUDENT_PACING_HEADERS.length;
+
       let existingRowNum = null;
       if (lastRow >= VAULT_DATA_START_ROW) {
         const ids = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
@@ -91,6 +118,7 @@ function saveTranscriptSettings(studentId, settings) {
           if (String(ids[i][0] || '').trim() === id) { existingRowNum = VAULT_DATA_START_ROW + i; break; }
         }
       }
+
       const weeklyHours = settings.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
       const weeks = settings.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
       const row = [
@@ -105,7 +133,9 @@ function saveTranscriptSettings(studentId, settings) {
         sheet.getRange(sheet.getLastRow() + 1, 1, 1, numCols).setValues([row]);
       }
       sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
+
       SpreadsheetApp.flush();
+
       logTranscriptWriteVault_(id, 'pacing', 'SETTINGS_UPDATED',
         `Student ${id}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`);
 
@@ -120,6 +150,11 @@ function saveTranscriptSettings(studentId, settings) {
 
 // ============================================================
 // SECTION 3 — SAVE EXISTING ROW
+// ------------------------------------------------------------
+// Identifies the row by rowId — Vault rows aren't positional.
+// Finds the matching studentId+rowId row and overwrites it in
+// place. No cell coloring (Vault is pure data; nobody opens
+// this sheet directly).
 // ============================================================
 
 function saveTranscriptRow(studentId, rowData) {
@@ -127,28 +162,43 @@ function saveTranscriptRow(studentId, rowData) {
     if (!rowData.rowId) {
       return { success: false, error: 'rowId is required to save an existing row.' };
     }
+
+    // Locked: scans for the row index, then writes to it. Without a
+    // lock, a concurrent addTranscriptRow appending a row for the same
+    // student between the scan and the write is a low-probability but
+    // real race (row numbers found here would still point at the right
+    // row in that case, but locking keeps this consistent with every
+    // other transcript writer below).
     return _withLock(() => {
       const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
       const lastRow = sheet.getLastRow();
       if (lastRow < VAULT_DATA_START_ROW) {
         return { success: false, error: 'Transcript Rows is empty.' };
       }
+
       const numRows = lastRow - VAULT_DATA_START_ROW + 1;
       const data = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, VAULT_TRANSCRIPT_HEADERS.length).getValues();
+
       const targetId = String(studentId).trim();
       const targetRowId = String(rowData.rowId).trim();
+
       for (let i = 0; i < data.length; i++) {
         if (String(data[i][0]).trim() !== targetId) continue;
         if (String(data[i][2]).trim() !== targetRowId) continue; // col index 2 = rowId (studentId, sourceTabName, rowId, ...)
+
         const sheetRow = VAULT_DATA_START_ROW + i;
         const values = buildVaultRowValues_(targetId, targetRowId, rowData);
         sheet.getRange(sheetRow, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
+        // Same text-format guard as addTranscriptRow — prevents Sheets
+        // from silently auto-converting startDate/adjStart/targetDate
+        // into real Date cells on this update path too.
         sheet.getRange(sheetRow, 11, 1, 3).setNumberFormat('@');
 
         logTranscriptWriteVault_(targetId, targetRowId, 'UPDATED', rowData.courseName);
 
         return { success: true, rowId: targetRowId, studentId: targetId };
       }
+
       return { success: false, error: 'Row not found — studentId ' + targetId + ', rowId ' + targetRowId };
     });
 
@@ -156,20 +206,32 @@ function saveTranscriptRow(studentId, rowData) {
     return { success: false, error: err.message };
   }
 }
+
+// Bulk version of saveTranscriptRow — for going through a batch of
+// already-existing rows (e.g. right after auto-populate) and correcting
+// several at once instead of expand/edit/save/collapse one at a time.
+// Reads the sheet ONCE and holds ONE lock for the whole batch, instead
+// of a separate lock + full-sheet read per row like calling
+// saveTranscriptRow in a loop would do. Row writes themselves are still
+// one setValues() call per row (edited rows are rarely contiguous in
+// the sheet), but the lock/read cost — the expensive part — is paid once.
 function saveTranscriptRows(studentId, rowsArray) {
   try {
     if (!Array.isArray(rowsArray) || !rowsArray.length) {
       return { success: false, error: 'No rows to save.' };
     }
+
     return _withLock(() => {
       const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
       const lastRow = sheet.getLastRow();
       if (lastRow < VAULT_DATA_START_ROW) {
         return { success: false, error: 'Transcript Rows is empty.' };
       }
+
       const numRows = lastRow - VAULT_DATA_START_ROW + 1;
       const data = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, VAULT_TRANSCRIPT_HEADERS.length).getValues();
       const targetId = String(studentId).trim();
+
       const results = rowsArray.map(rowData => {
         const targetRowId = String(rowData.rowId || '').trim();
         if (!targetRowId) return { success: false, rowId: null, error: 'rowId is required.' };
@@ -206,6 +268,10 @@ function saveTranscriptRows(studentId, rowsArray) {
 
 // ============================================================
 // SECTION 4 — ADD NEW ROW
+// ------------------------------------------------------------
+// Vault rows are just appended. rowId generated fresh via
+// Utilities.getUuid() (collision-proof, after the earlier
+// Date.now()+random collision bug).
 // ============================================================
 
 function addTranscriptRow(studentId, rowData) {
@@ -213,10 +279,21 @@ function addTranscriptRow(studentId, rowData) {
     const targetId = String(studentId).trim();
     const newRowId = targetId + '_' + Utilities.getUuid();
     const values = buildVaultRowValues_(targetId, newRowId, rowData);
+
+    // Locked: plain append at getLastRow()+1 — two staff adding rows
+    // for different students at the same moment could otherwise target
+    // the same row number and one write silently overwrites the other.
     return _withLock(() => {
       const sheet = getVaultSheet_(VAULT_SHEET_TRANSCRIPT_ROWS);
       sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_TRANSCRIPT_HEADERS.length).setValues([values]);
+      // Force text formatting on studentId/rowId — same guard used
+      // everywhere else in Vault against Sheets auto-converting
+      // ID-looking strings to numbers/dates.
       sheet.getRange(sheet.getLastRow(), 1, 1, 2).setNumberFormat('@');
+      // Same guard for startDate/adjStart/targetDate (columns 11-13) —
+      // these are saved as plain 'yyyy-MM-dd' strings, and without this,
+      // Sheets can silently auto-convert a date-looking string into a
+      // real Date cell on write.
       sheet.getRange(sheet.getLastRow(), 11, 1, 3).setNumberFormat('@');
 
       logTranscriptWriteVault_(targetId, newRowId, 'ADDED', rowData.courseName);
@@ -228,6 +305,13 @@ function addTranscriptRow(studentId, rowData) {
     return { success: false, error: err.message };
   }
 }
+
+// Bulk version of addTranscriptRow — writes every row in rowsArray in
+// ONE lock acquisition and ONE setValues() call, instead of looping
+// addTranscriptRow per class. Built for bulk transcript entry (adding
+// a whole semester's worth of classes at once) where re-locking and
+// re-appending one row at a time was the actual bottleneck, not
+// network latency alone.
 function addTranscriptRows(studentId, rowsArray) {
   try {
     const targetId = String(studentId).trim();
@@ -263,6 +347,7 @@ function addTranscriptRows(studentId, rowsArray) {
 
 // ============================================================
 // SECTION 5 — COURSE CATALOGUE READER
+// (Used by dashboard to populate course dropdowns)
 // ============================================================
 
 function getCourseCatalogue() {
@@ -296,7 +381,8 @@ function getCourseCatalogue() {
 
 
 // ============================================================
-// SECTION 6 — MASTER SCHEDULE HOURS READEr
+// SECTION 6 — MASTER SCHEDULE HOURS READER
+// (Pulls standard hours per course for auto-fill)
 // ============================================================
 
 function getMasterScheduleHours() {
@@ -336,6 +422,12 @@ function getMasterScheduleHours() {
 // ============================================================
 // SECTION 7 — HELPERS
 // ============================================================
+
+// Vault row builder — matches VAULT_TRANSCRIPT_HEADERS column
+// order exactly: studentId, sourceTabName, rowId, courseId,
+// courseName, instance, transfer, subject, credit, classHours,
+// startDate, adjStart, targetDate, completed, lastModified,
+// block. Dates stored as ISO strings, not Date objects.
 function buildVaultRowValues_(studentId, rowId, rowData) {
   return [
     studentId,
