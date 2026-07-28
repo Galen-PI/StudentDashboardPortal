@@ -1,5 +1,5 @@
 // ============================================================
-// CourseSync.gs
+// CourseSync.gs — DEPRECATED as a sync job (2026-07-15 redesign)
 // ============================================================
 
 function removeCourseSyncTriggerOneTime() {
