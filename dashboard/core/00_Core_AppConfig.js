@@ -1,6 +1,9 @@
 // ============================================================
-// Config.gs — Single source of truth for all constants
+// Config.js — Single source of truth for all constants
 // ============================================================
+
+// ── App version ────────────────────────────────────────────.
+const APP_VERSION = 'v278';
 
 // ── Spreadsheet IDs ──────────────────────────────────────────
 const SS_ADMIN    = '1EIAtya9M3sVedSYYwvv81aQWUbPUsrdVoUrwyDtWTO0';
@@ -14,6 +17,15 @@ const ADMIN_TOKEN = 'MS4245';
 
 // ── Periods ───────────────────────────────────
 const SCHEDULE_ACADEMIC_NAMES = ['HSD 2', 'HSD3', 'HSE/HSD1'];
+
+// "In Trades."
+const SCHEDULE_TRADE_NAMES = [
+  'CNA', 'Culinary Arts', 'BCT', 'Carpentry',
+  'Security& Protective', 'Security&Protect 2',
+  'Pharmacy Tech', 'OTP/ACT', 'OTP-MFR',
+  'Trade Shadow - Sec', 'Trade Shadow - Carp', 'Trade Shadow - Pharm', 'Trade Shadow Culinar',
+  'Off Center WBL', 'Work Experience',
+];
 const SCHEDULE_VALID_PERIODS  = {
   M:  [1, 2, 3, 5, 6],
   T:  [1, 2, 3, 5, 6, 7],
@@ -85,7 +97,7 @@ const TABE_PREDICTIONS_HEADERS = [
 // ── TABE EFL score thresholds ────────────────────────────────
 const TABE_THRESHOLDS = {
   Reading: [
-    [300, 441], // Level 1 — Beginning ABE Literacy
+    [300, 441], // Level 1 — Beginning TABE Literacy
     [442, 478], // Level 2 — Beginning Basic Education
     [479, 517], // Level 3 — Low Intermediate Basic Ed
     [518, 559], // Level 4 — High Intermediate Basic Ed
@@ -101,5 +113,6 @@ const TABE_THRESHOLDS = {
     [658, 800],
   ],
 };
+
 // ── Migration flags ───────────────────────────────────────────
 const USE_HUB_SETTINGS = true;
