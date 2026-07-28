@@ -17,8 +17,8 @@
     const SERVER_NAME        = <?!= JSON.stringify(userName); ?>;
     const SERVER_EMPLOYEE_ID = <?!= JSON.stringify(employeeId); ?>;
   </script>
-  <?!= include('Themes'); ?>
-  <?!= include('Styles'); ?>
+  <?!= include('60_UI_Themes'); ?>
+  <?!= include('60_UI_Styles'); ?>
  <script src="https://cdnjs.cloudflare.com/ajax/libs/Chart.js/4.4.1/chart.umd.min.js"></script>
 </head>
 <body>
@@ -28,8 +28,22 @@
 
     <div class="sv-login-brand">
       <div class="sv-login-logo">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/>
+        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 120" width="36" height="36">
+          <defs>
+            <clipPath id="tjcShieldClipLogin">
+              <path d="M10,5 Q10,0 15,0 L85,0 Q90,0 90,5 L90,78 Q90,94 74,99 L50,119 L26,99 Q10,94 10,78 Z"/>
+            </clipPath>
+          </defs>
+          <g clip-path="url(#tjcShieldClipLogin)">
+            <rect x="0" y="0" width="100" height="120" fill="var(--accent)"/>
+            <rect x="14" y="0" width="10" height="120" fill="var(--bg2)"/>
+            <rect x="30" y="0" width="10" height="120" fill="var(--bg2)"/>
+            <rect x="60" y="0" width="10" height="120" fill="var(--bg2)"/>
+            <rect x="76" y="0" width="10" height="120" fill="var(--bg2)"/>
+            <path d="M50,32 L67,57 L58,57 L58,96 L42,96 L42,57 L33,57 Z" fill="var(--high)"/>
+          </g>
+          <path d="M10,5 Q10,0 15,0 L85,0 Q90,0 90,5 L90,78 Q90,94 74,99 L50,119 L26,99 Q10,94 10,78 Z"
+            fill="none" stroke="var(--border-bright)" stroke-width="2"/>
         </svg>
       </div>
       <div class="sv-login-org">Tulsa Job Corps</div>
@@ -37,7 +51,7 @@
       <div class="sv-login-subtitle">Enter your Employee ID to continue.</div>
     </div>
     <div id="loginAnnouncements" class="sv-login-message"> Loading announcements...</div>
-      
+
     <div class="sv-login-divider"></div>
 
     <label class="sv-login-label" for="employeeIdInput">Employee ID</label>
@@ -88,7 +102,7 @@
       Data Imports <span class="sidebar-chevron">▸</span>
     </div>
 
-    <div id="sec-data_imports" class="sidebar-section-body" style="display:none;">
+    <div id="sec-data_imports" class="sidebar-section-body hidden">
 
       <button class="sidebar-btn" onclick="openRosterUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
@@ -139,7 +153,7 @@
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       Generate &amp; Snapshots <span class="sidebar-chevron">▸</span>
     </div>
-    <div id="sec-generate" class="sidebar-section-body" style="display:none;">
+    <div id="sec-generate" class="sidebar-section-body hidden">
       <button class="sidebar-btn" onclick="openAcademicCreditsUpload(); closeSidebar()">
         <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
           <path stroke-linecap="round" stroke-linejoin="round" d="M12 6.75a5.25 5.25 0 016.775-5.025.75.75 0 01.313 1.248l-3.32 3.319c.063.475.276.934.641 1.299"/>
@@ -172,17 +186,6 @@
         </div>
       </button>
 
-      <button id="btnBulkPacing"
-              class="sidebar-btn"
-              onclick="openBulkPacingModal(); closeSidebar()">
-        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
-          <path stroke-linecap="round" stroke-linejoin="round" d="M12 6v6h4.5m4.5 0a9 9 0 11-18 0 9 9 0 0118 0z"/>
-        </svg>
-        <div class="sidebar-btn-inner">
-          <span class="sb-label">Assign Student Hours</span>
-          <span class="sb-desc">Bulk-set weekly pacing from detected schedules</span>
-        </div>
-      </button>
     </div>
 
 
@@ -194,7 +197,7 @@
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       Reports &amp; Analytics <span class="sidebar-chevron">▸</span>
     </div>
-    <div id="sec-reports" class="sidebar-section-body" style="display:none;">
+    <div id="sec-reports" class="sidebar-section-body hidden">
       <button id="btnProductivity"
               class="sidebar-btn"
               onclick="openProductivityModal(); closeSidebar()">
@@ -253,7 +256,7 @@
       Maintenance <span class="sidebar-chevron">▸</span>
     </div>
 
-    <div id="sec-maintenance" class="sidebar-section-body" style="display:none;">
+    <div id="sec-maintenance" class="sidebar-section-body hidden">
       <button id="btnMergeProfiles"
               class="sidebar-btn"
               onclick="openMergeModal(); closeSidebar()">
@@ -310,7 +313,7 @@
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       Communicate <span class="sidebar-chevron">▸</span>
     </div>
-    <div id="sec-communicate" class="sidebar-section-body" style="display:none;">
+    <div id="sec-communicate" class="sidebar-section-body hidden">
       <button id="btnSendDigest"
               class="sidebar-btn"
               onclick="triggerDigest(); closeSidebar()">
@@ -325,70 +328,143 @@
     </div>
     <div class="sidebar-divider"></div>
 
-    <!-- ================================
-         DISPLAY (always visible — not collapsible)
-    ================================= -->
-    <div class="sidebar-section-sublabel">Display</div>
-
-    <div class="sidebar-display-settings">
-      <div class="sidebar-role-wrap">
-        <label>Text size</label>
-        <div class="zoom-control" title="Text size" style="width:100%;">
-          <button data-zoom="sm" onclick="setZoomLevel('sm')" style="flex:1;">A−</button>
-          <button data-zoom="md" onclick="setZoomLevel('md')" class="active" style="flex:1;">A</button>
-          <button data-zoom="lg" onclick="setZoomLevel('lg')" style="flex:1;">A+</button>
-        </div>
-      </div>
-
-      <label class="sidebar-toggle-row">
-        <input type="checkbox" id="densityCheckbox" onchange="toggleDensity()">
-        <span>Compact row spacing</span>
-      </label>
-
-      <div class="sidebar-role-wrap">
-        <label>Table columns</label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-risk" checked onchange="setColumnVisibility('risk', this.checked)"> <span>Risk</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-status" checked onchange="setColumnVisibility('status', this.checked)"> <span>Status</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-academicPct" onchange="setColumnVisibility('academicPct', this.checked)"> <span>Academic %</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-tradeName" checked onchange="setColumnVisibility('tradeName', this.checked)"> <span>Trade</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-tradePct" onchange="setColumnVisibility('tradePct', this.checked)"> <span>Trade %</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-thisWeek" checked onchange="setColumnVisibility('thisWeek', this.checked)"> <span>This Week</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-etar" onchange="setColumnVisibility('etar', this.checked)"> <span>ETAR</span></label>
-        <label class="sidebar-toggle-row"><input type="checkbox" id="colToggle-wir" checked onchange="setColumnVisibility('wir', this.checked)"> <span>WIR</span></label>
-      </div>
-
-      <div class="sidebar-divider" style="margin:12px 0;"></div>
-
-      <div class="sidebar-role-wrap">
+  <div class="sidebar-role-wrap">
         <label>Custom theme</label>
         <div class="custom-theme-base">
           <button type="button" class="ct-base-btn active" id="ctBaseDark" onclick="setCustomThemeBase('dark')">Dark</button>
           <button type="button" class="ct-base-btn" id="ctBaseLight" onclick="setCustomThemeBase('light')">Light</button>
-          <span class="custom-theme-swatch" id="ctSwatch"></span>
         </div>
-        <div class="custom-theme-slider-row">
-          <span class="custom-theme-slider-label">Color</span>
-          <input type="range" id="ctHueSlider" min="0" max="360" value="210" oninput="updateCustomTheme()">
+
+        <div class="ct-color-grid">
+          <div class="ct-color-row">
+            <label>Banner / Nav Bar</label>
+            <input type="color" id="ctColorBgNav" value="#161614" oninput="updateCustomTheme()">
+          </div>
+          <div class="ct-color-row">
+            <label>Accent Color</label>
+            <input type="color" id="ctColorAccent" value="#C4622E" oninput="updateCustomTheme()">
+          </div>
+          <div class="ct-color-row">
+            <label>Page Background</label>
+            <input type="color" id="ctColorBg" value="#1A1A18" oninput="updateCustomTheme()">
+          </div>
+          <div class="ct-color-row">
+            <label>Card Background</label>
+            <input type="color" id="ctColorBg2" value="#222220" oninput="updateCustomTheme()">
+          </div>
+          <div class="ct-color-row">
+            <label>Text Color</label>
+            <input type="color" id="ctColorText" value="#F0E8DC" oninput="updateCustomTheme()">
+          </div>
         </div>
-        <div class="custom-theme-slider-row">
-          <span class="custom-theme-slider-label">Intensity</span>
-          <input type="range" id="ctSatSlider" min="25" max="85" value="60" oninput="updateCustomTheme()">
+
+        <div class="ct-font-row">
+          <label>Font</label>
+          <select id="ctFontSelect" onchange="updateCustomTheme()">
+            <option value="'Figtree', system-ui, sans-serif">Figtree (default)</option>
+            <option value="'Georgia', serif">Georgia</option>
+            <option value="'Trebuchet MS', sans-serif">Trebuchet MS</option>
+            <option value="'Palatino Linotype', 'Book Antiqua', serif">Palatino</option>
+          </select>
         </div>
+
         <button type="button" class="ct-apply-btn" onclick="applyCustomThemeNow()">Use this theme</button>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:8px;line-height:1.5;">
+          Status colors (On Track / Watch / Needs Attention) always stay tied to Dark or Light — they never change with your custom picks, so risk indicators stay reliable everywhere.
+        </div>
+
       </div>
-    </div>
+
     <div class="sidebar-divider"></div>
 
-    
+    <!-- ================================
+         PRESENTATION
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-presentation', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Presentation <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-presentation" class="sidebar-section-body hidden">
+      <button class="sidebar-btn" onclick="enableDemoMode(40)">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M15 8.25a3 3 0 013 3v6a3 3 0 01-3 3H9a3 3 0 01-3-3v-6a3 3 0 013-3M15 8.25v-1.5a3 3 0 00-3-3v0a3 3 0 00-3 3v1.5m6 0H9"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Enter Demo Mode</span>
+          <span class="sb-desc">Swap in fake students for showing the system off — no real data is touched</span>
+        </div>
+      </button>
+    </div>
+
+    <!-- ================================
+         TESTING
+    ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-testing', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      Testing <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-testing" class="sidebar-section-body hidden">
+      <button class="sidebar-btn" onclick="enableStressTestMode()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M3.75 3v11.25A2.25 2.25 0 006 16.5h2.25M3.75 3h-1.5m1.5 0h16.5m0 0h1.5m-1.5 0v11.25A2.25 2.25 0 0118 16.5h-2.25m-7.5 0h7.5m-7.5 0l-1 3m8.5-3l1 3m-9.5 0h10.5"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Stress Test</span>
+          <span class="sb-desc">Load a large number of fake students to check filtering/sorting/rendering stay responsive at scale</span>
+        </div>
+      </button>
+      <button class="sidebar-btn" onclick="enableEdgeCaseMode()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor">
+          <path stroke-linecap="round" stroke-linejoin="round" d="M9.75 9.75l-2 2 2 2m4.5-4l2 2-2 2M6 20.25h12A2.25 2.25 0 0020.25 18V6A2.25 2.25 0 0018 3.75H6A2.25 2.25 0 003.75 6v12A2.25 2.25 0 006 20.25z"/>
+        </svg>
+        <div class="sidebar-btn-inner">
+          <span class="sb-label">Edge Case Test</span>
+          <span class="sb-desc">Load a curated set of deliberately extreme/boundary profiles — risk score boundaries, missing data, long names, and more</span>
+        </div>
+      </button>
+    </div>
+
     <!-- ================================
          HELP
     ================================= -->
+    <div class="sidebar-section-label"
+         onclick="toggleSection('sec-view', this)"
+         style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
+      View <span class="sidebar-chevron">▸</span>
+    </div>
+    <div id="sec-view" class="sidebar-section-body" style="display:none;padding:4px 16px 12px;">
+
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;">Text Size</div>
+      <div class="zoom-control" style="display:flex;gap:6px;margin-bottom:16px;">
+        <button data-zoom="sm" onclick="setZoomLevel('sm')" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg4);cursor:pointer;font-size:11px;">A</button>
+        <button data-zoom="md" onclick="setZoomLevel('md')" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg4);cursor:pointer;font-size:14px;">A</button>
+        <button data-zoom="lg" onclick="setZoomLevel('lg')" style="flex:1;padding:6px;border:1px solid var(--border);border-radius:6px;background:var(--bg4);cursor:pointer;font-size:17px;">A</button>
+      </div>
+
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:16px;cursor:pointer;font-size:13px;">
+        <input type="checkbox" id="densityCheckbox" onchange="toggleDensity()">
+        Compact row spacing
+      </label>
+
+      <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;margin-bottom:6px;">Table Columns</div>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-risk" onchange="setColumnVisibility('risk', this.checked)"> Risk</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-status" onchange="setColumnVisibility('status', this.checked)"> Status</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-academicPct" onchange="setColumnVisibility('academicPct', this.checked)"> Academic %</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-tradeName" onchange="setColumnVisibility('tradeName', this.checked)"> Trade</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-tradePct" onchange="setColumnVisibility('tradePct', this.checked)"> Trade %</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-thisWeek" onchange="setColumnVisibility('thisWeek', this.checked)"> This Week</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-etar" onchange="setColumnVisibility('etar', this.checked)"> ETAR</label>
+      <label style="display:flex;align-items:center;gap:8px;margin-bottom:6px;cursor:pointer;font-size:13px;"><input type="checkbox" id="colToggle-wir" onchange="setColumnVisibility('wir', this.checked)"> WIR</label>
+    </div>
+
     <div class="sidebar-section-label"
          onclick="toggleSection('sec-help', this)"
          style="cursor:pointer;display:flex;align-items:center;justify-content:space-between;">
       Help <span class="sidebar-chevron">▸</span>
     </div>
-    <div id="sec-help" class="sidebar-section-body" style="display:none;">
+    <div id="sec-help" class="sidebar-section-body hidden">
       <button class="sidebar-btn"
               onclick="showRiskExplainer(); closeSidebar()">
         <div class="sidebar-btn-inner">
@@ -405,10 +481,30 @@
       </button>
     </div>
 
+    <div style="padding:10px 16px 4px;text-align:center;font-size:10px;color:var(--text-muted);opacity:0.6;user-select:text;">
+      <?= appVersion ?>
+    </div>
+
+<!-- ================================
+         CROSS-REFERENCE VIEW TOGGLE
+         (Academic Manager / CTT Manager only — shown/populated
+         by applyRoleViewConfig() in 60_UI_RoleViews.html. Lets a
+         manager glance at the other manager role's card/sidebar
+         layout for reference — permissions never change, only
+         what's displayed.)
+    ================================= -->
+    <div id="crossReferenceToggleWrap" class="sidebar-role-wrap" style="display:none; order:999;">
+      <label>Viewing</label>
+      <select id="crossReferenceSelect"
+              class="sidebar-role-select"
+              onchange="switchDashboardView(this.value)">
+      </select>
+    </div>
+
 <!-- ================================
          ROLE SELECTOR
     ================================= -->
-    <div class="sidebar-role-wrap">
+    <div class="sidebar-role-wrap" style="order:1000;">
       <label>Role preset</label>
       <select id="roleSelect"
               class="sidebar-role-select"
@@ -425,8 +521,24 @@
 <!-- ── TOP NAV ──────────────────────────────────────────── -->
 <nav class="topnav">
   <div class="nav-brand">
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="22" height="22">
-      <path stroke-linecap="round" stroke-linejoin="round" d="M4.26 10.147a60.438 60.438 0 00-.491 6.347A48.627 48.627 0 0112 20.904a48.627 48.627 0 018.232-4.41 60.46 60.46 0 00-.491-6.347m-15.482 0a50.57 50.57 0 00-2.658-.813A59.905 59.905 0 0112 3.493a59.902 59.902 0 0110.399 5.84c-.896.248-1.783.52-2.658.814m-15.482 0A50.697 50.697 0 0112 13.489a50.702 50.702 0 017.74-3.342M6.75 15a.75.75 0 100-1.5.75.75 0 000 1.5zm0 0v-3.675A55.378 55.378 0 0112 8.443m-7.007 11.55A5.981 5.981 0 006.75 15.75v-1.5"/>
+    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 100 150" width="28" height="42" class="nav-brand-badge">
+      <defs>
+        <clipPath id="tjcShieldClip">
+          <path d="M10,35 Q10,30 15,30 L85,30 Q90,30 90,35 L90,108 Q90,124 74,129 L50,149 L26,129 Q10,124 10,108 Z"/>
+        </clipPath>
+      </defs>
+      <text x="50" y="10" text-anchor="middle" font-family="var(--font)" font-weight="800" font-size="10" letter-spacing="0.5" fill="var(--text)">TULSA</text>
+      <text x="50" y="22" text-anchor="middle" font-family="var(--font)" font-weight="800" font-size="10" letter-spacing="0.5" fill="var(--text)">JOB CORPS</text>
+      <g clip-path="url(#tjcShieldClip)">
+        <rect x="0" y="30" width="100" height="120" fill="var(--accent)"/>
+        <rect x="14" y="30" width="10" height="120" fill="var(--bg2)"/>
+        <rect x="30" y="30" width="10" height="120" fill="var(--bg2)"/>
+        <rect x="60" y="30" width="10" height="120" fill="var(--bg2)"/>
+        <rect x="76" y="30" width="10" height="120" fill="var(--bg2)"/>
+        <path d="M50,62 L67,87 L58,87 L58,126 L42,126 L42,87 L33,87 Z" fill="var(--high)"/>
+      </g>
+      <path d="M10,35 Q10,30 15,30 L85,30 Q90,30 90,35 L90,108 Q90,124 74,129 L50,149 L26,129 Q10,124 10,108 Z"
+        fill="none" stroke="var(--border-bright)" stroke-width="2"/>
     </svg>
     <div>
       <div class="nav-title">Tulsa Job Corps</div>
@@ -436,6 +548,9 @@
 
   <div class="nav-actions">
     <span id="wirWeekLabel" class="wir-week-nav"></span>
+    <button class="btn btn-nav" onclick="staffLogout()" title="Sign out and sign back in with a different Employee ID">
+      Not you?
+    </button>
     <span id="lastUpdated" class="last-updated"></span>
 
     <button class="btn btn-nav" id="refreshBtn" onclick="refreshData()">
@@ -446,6 +561,7 @@
     <div style="position:relative;">
       <button class="btn-theme" onclick="toggleThemeDropdown()" id="themeToggle" title="Change theme">
         <svg id="iconTheme" xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M4.098 19.902a3.75 3.75 0 005.304 0l6.401-6.402M6.75 21A3.75 3.75 0 013 17.25V4.125C3 3.504 3.504 3 4.125 3h5.25c.621 0 1.125.504 1.125 1.125v4.072M6.75 21a3.75 3.75 0 003.75-3.75V8.197M6.75 21h13.125c.621 0 1.125-.504 1.125-1.125v-5.25c0-.621-.504-1.125-1.125-1.125h-4.072M10.5 8.197l2.88-2.88c.438-.439 1.15-.439 1.59 0l3.712 3.713c.44.44.44 1.152 0 1.59l-2.879 2.88M6.75 17.25h.008v.008H6.75v-.008z"/></svg>
+        <span>Theme</span>
       </button>
       <div id="themeDropdown" style="
         display:none;
@@ -467,6 +583,7 @@
     </div>
     <button class="btn-tools" onclick="openSidebar()" title="Menu">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M3.75 6.75h16.5M3.75 12h16.5m-16.5 5.25h16.5"/></svg>
+      <span>Menu</span>
     </button>
   </div>
 </nav>
@@ -483,7 +600,7 @@
     <div class="error-icon">
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor" width="40" height="40"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>
     </div>
-    <p id="errorMsg">Something went wrong.</p>
+    <p id="errorMsg">Couldn't load student data. Nothing's been changed — give it another try.</p>
     <button class="btn btn-primary" onclick="loadData()">Try again</button>
   </div>
 
@@ -510,22 +627,31 @@
       <input type="text" id="searchInput" class="search-input" placeholder="Search student…" oninput="applyFilters()">
     </div>
 
-    <div class="filter-chips">
-      <button class="chip active"       data-risk="ALL"     onclick="setRiskFilter(this)">All</button>
-      <button class="chip chip-high"    data-risk="HIGH"    onclick="setRiskFilter(this)">Needs Attention</button>
-      <button class="chip chip-medium"  data-risk="MEDIUM"  onclick="setRiskFilter(this)">Watch Closely</button>
-      <button class="chip chip-low"     data-risk="LOW"     onclick="setRiskFilter(this)">On Track</button>
-      <button class="chip chip-unknown" data-risk="UNKNOWN" onclick="setRiskFilter(this)">No Data Yet</button>
-    </div>
+    <button class="chip chip-secondary" onclick="openBulkSearch()" title="Search a whole list of IDs or names at once" style="margin-left:6px;">
+      Bulk Search
+    </button>
+
+    <div class="filter-divider"></div>
 
     <div class="filter-chips">
-      <button class="chip active"            data-type="ALL"            onclick="setTypeFilter(this)">All Types</button>
-      <button class="chip"                   data-type="HS"             onclick="setTypeFilter(this)">High School</button>
-      <button class="chip"                   data-type="HISET"          onclick="setTypeFilter(this)">HiSET / GED</button>
-      <button class="chip"                   data-type="TRADES"         onclick="setTypeFilter(this)">Trades Only</button>
-      <button class="chip chip-complete"     data-type="TRADE_COMPLETE" onclick="setTypeFilter(this)">Trade Complete</button>
-      <button class="chip chip-intervention" data-type="INTERVENTION"   onclick="setTypeFilter(this)">WIR</button>
-      <button class="chip chip-unmapped"     data-type="UNMAPPED"       onclick="setTypeFilter(this)">Not Set Up</button>
+      <button class="chip active"       data-risk="ALL"     onclick="setRiskFilter(this)">All</button>
+      <button class="chip chip-high"    data-risk="HIGH"    onclick="setRiskFilter(this)">&#9888; Needs Attention</button>
+      <button class="chip chip-medium"  data-risk="MEDIUM"  onclick="setRiskFilter(this)">&#9679; Watch Closely</button>
+      <button class="chip chip-low"     data-risk="LOW"     onclick="setRiskFilter(this)">&#10003; On Track</button>
+      <button class="chip chip-unknown" data-risk="UNKNOWN" onclick="setRiskFilter(this)">No Data Yet</button>
+      <button class="chip chip-unknown" data-risk="NOT_STARTED" onclick="setRiskFilter(this)">Not Started Yet</button>
+    </div>
+
+    <div class="filter-divider"></div>
+
+    <div class="filter-chips filter-chips-secondary">
+      <button class="chip chip-secondary active" data-type="ALL"            onclick="setTypeFilter(this)">All Types</button>
+      <button class="chip chip-secondary"         data-type="HS"             onclick="setTypeFilter(this)">High School</button>
+      <button class="chip chip-secondary"         data-type="HISET"          onclick="setTypeFilter(this)">HiSET</button>
+      <button class="chip chip-secondary"         data-type="GED"            onclick="setTypeFilter(this)">GED</button>
+      <button class="chip chip-secondary"         data-type="TRADES"         onclick="cycleTradeFilter(this)" title="Click to cycle through each trade">Trades</button>
+      <button class="chip chip-secondary chip-complete"     data-type="TRADE_COMPLETE" onclick="setTypeFilter(this)">Trade Complete</button>
+      <button class="chip chip-secondary chip-unmapped"     data-type="UNMAPPED"       onclick="setTypeFilter(this)">No Data</button>
     </div>
 
     <div class="filter-footer">
@@ -535,7 +661,7 @@
           <option value="">Presets…</option>
           <optgroup label="Built-in">
             <option value="__high_risk">Needs Attention</option>
-            <option value="__unmapped">Not Set Up</option>
+            <option value="__unmapped">No Data</option>
             <option value="__has_wir">Weekly Intervention Report</option>
             <option value="__trade_complete">Trade Complete</option>
             <option value="__high_risk_trades">Needs Attention + Trades</option>
@@ -576,7 +702,16 @@
           </svg>
           Action
         </button>
+        <button class="btn-view-toggle" id="btnProductivityView" onclick="setView('productivity')" title="Productivity view" style="display:none;">
+          <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" d="M3 13.125C3 12.504 3.504 12 4.125 12h2.25c.621 0 1.125.504 1.125 1.125v6.75C7.5 20.496 6.996 21 6.375 21h-2.25A1.125 1.125 0 013 19.875v-6.75zM9.75 8.625c0-.621.504-1.125 1.125-1.125h2.25c.621 0 1.125.504 1.125 1.125v11.25c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V8.625zM16.5 4.125c0-.621.504-1.125 1.125-1.125h2.25C20.496 3 21 3.504 21 4.125v15.75c0 .621-.504 1.125-1.125 1.125h-2.25a1.125 1.125 0 01-1.125-1.125V4.125z"/>
+          </svg>
+          Productivity
+        </button>
       </div>
+
+      <div class="filter-divider"></div>
+
         <div id="counselorFilterBar" class="roster-filter-row">
           <span class="roster-filter-label">Filter by Counselor:</span>
           <select id="counselorSelect" onchange="applyCounselorFilter()">
@@ -626,6 +761,46 @@
     .roster-filter-row .roster-filter-active {
       font-size: 12px; color: var(--text-muted); font-style: italic;
     }
+    /* ── Demo Mode ────────────────────────────────────────────── */
+    #demoModeBanner {
+      position: sticky;
+      top: 0;
+      z-index: 200;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 16px;
+      background: repeating-linear-gradient(
+        45deg, var(--accent), var(--accent) 12px, var(--accent-mid) 12px, var(--accent-mid) 24px
+      );
+      color: #1a1410;
+      font-weight: 800;
+      font-size: 13px;
+      padding: 10px 16px;
+      text-align: center;
+    }
+    #demoModeBanner button {
+      background: #1a1410;
+      color: #fff;
+      border: none;
+      border-radius: 6px;
+      padding: 6px 14px;
+      font-weight: 700;
+      font-size: 12px;
+      cursor: pointer;
+      white-space: nowrap;
+    }
+    #demoModeBanner button:hover { opacity: 0.85; }
+
+    /* Disable anything that would try to write data while faking it.
+      These selectors target the same buttons already in the DOM —
+      no changes needed to renderTable/renderCards themselves. */
+    body.demo-mode-active .btn-quick-edit,
+    body.demo-mode-active .btn-bulk,
+    body.demo-mode-active .pin-btn {
+      pointer-events: none;
+      opacity: 0.4;
+    }
   </style>
 
   <!-- Card view -->
@@ -642,6 +817,15 @@
     </div>
     <div class="action-view" id="actionGroups"></div>
   </div>
+
+  <!-- Productivity view (inline, Admin/Program Manager only).
+       Empty by default — its actual content (#productivityBody,
+       moved from 60_UI_ProductivityModal.html) gets appended here
+       by _showProductivityInline() in Scripts.html when this view
+       is active, and returned to the modal when leaving it, so
+       the same markup/JS serves both the modal (sidebar entry,
+       other roles) and this inline view without duplication. -->
+  <div id="productivityViewContainer" class="hidden"></div>
 
   <div class="result-bar">
     <span id="resultCount" class="result-count"></span>
@@ -665,6 +849,9 @@
           <th class="col-wir">WIR</th>
           <th>
             <button class="btn-expand-cols" onclick="toggleExtraCols()" id="expandColsBtn" title="Show more columns">＋</button>
+          </th>
+          <th id="lastHeaderCell" style="width:32px;">
+            <button class="btn-expand-cols" onclick="promptAddCustomColumn()" title="Add a custom column">+Col</button>
           </th>
         </tr>
       </thead>
@@ -738,7 +925,7 @@
       </div>
       <div class="explainer-group">
         <div class="explainer-item" style="font-style:italic;color:var(--text-muted);">
-          Academic Factors, each Trade's factors, and Weekly Intervention Report Factors are each capped at 45 points as a group — several checks in the same category often describe one real underlying problem, so one bad category alone gets a student close to "Needs Attention" but not there by itself. Crossing into "Needs Attention" generally means more than one category has real issues, or an individual factor already at or above 45 (e.g. CRITICAL admin priority) on its own.
+          Academic Factors and Weekly Intervention Report Factors share ONE capped group (WIR is strictly an academic signal — it carries no weight toward Trades). Each Trade's own factors are capped separately per trade. Every category is capped at 45 points as a group — several checks in the same category often describe one real underlying problem, so one bad category alone gets a student close to "Needs Attention" but not there by itself. Crossing into "Needs Attention" generally means more than one category has real issues, or an individual factor already at or above 45 (e.g. CRITICAL admin priority) on its own. Hover over a student's score to see exactly which factors added up to it.
         </div>
       </div>
       <div class="explainer-group">
@@ -763,7 +950,7 @@
         <div class="explainer-item"><span class="explainer-pts">+10</span> Stalled or low gain AND overall completion still under 25%</div>
       </div>
       <div class="explainer-group">
-        <div class="explainer-group-title">Weekly Intervention Report Factors <span style="font-weight:400;color:var(--text-muted);">(capped as a group)</span></div>
+        <div class="explainer-group-title">Weekly Intervention Report Factors <span style="font-weight:400;color:var(--text-muted);">(academic only — shares the Academic Factors cap above, no weight toward Trades)</span></div>
         <div class="explainer-item"><span class="explainer-pts">+40</span> Admin priority is CRITICAL this week</div>
         <div class="explainer-item"><span class="explainer-pts">+25</span> Admin priority is HIGH this week</div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> Urgency is IMMEDIATE</div>
@@ -771,10 +958,10 @@
         <div class="explainer-item"><span class="explainer-pts">+10</span> Admin priority is MEDIUM / urgency is URGENT</div>
       </div>
       <div class="explainer-group">
-        <div class="explainer-group-title">Time &amp; Data Factors</div>
+        <div class="explainer-group-title">Time &amp; Data Factors <span style="font-weight:400;color:var(--text-muted);">(only one of these three ever applies)</span></div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> Less than 1 total hour logged</div>
         <div class="explainer-item"><span class="explainer-pts">+20</span> No academic or trades data found at all</div>
-        <div class="explainer-item"><span class="explainer-pts">+10</span> No time data found</div>
+        <div class="explainer-item"><span class="explainer-pts">+10</span> No time data found (but other data exists)</div>
       </div>
       <p class="explainer-note">Trade Complete students are excluded from trades risk flags. BCT uses a lower monthly gain threshold (1.5%). A score of 0 with real data on file is still On Track — No Data Yet means no data exists at all. Max score is 100.</p>
     </div>
@@ -947,7 +1134,7 @@
     </div>
 
   </div>
-  <button class="btn-override danger" onclick="archiveFromQuickEdit()" style="margin-top:8px;">Archive Student</button>
+  <button class="btn-override danger" onclick="archiveFromQuickEdit()" style="margin-top:8px; flex:none;">Archive Student</button>
   <div class="qe-footer">
     <button class="qe-save" id="qeSaveBtn" onclick="saveQuickEdit()">Save Changes</button>
     <div id="qeStatus" class="qe-status"></div>
@@ -979,7 +1166,7 @@
     </div>
   </div>
 </div>
-<!--- Archive Modal--->
+<!-- ── ARCHIVE MODAL ──────────────────────────────────────── -->
 <div id="archivedModal" class="modal-overlay hidden" onclick="closeArchivedModal(event)">
   <div class="modal-box" style="max-width:480px;">
     <div class="modal-header">
@@ -1027,10 +1214,270 @@ const ICONS = {
   trophy:      '<svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="1.5" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M16.5 18.75h-9a.75.75 0 01-.75-.75v-1.5a.75.75 0 01.75-.75h9a.75.75 0 01.75.75v1.5a.75.75 0 01-.75.75zM7.5 3.75h9v6a4.5 4.5 0 01-9 0v-6zM7.5 5.25H4.875A1.875 1.875 0 003 7.125v.75a3.375 3.375 0 003.375 3.375H7.5M16.5 5.25h2.625A1.875 1.875 0 0121 7.125v.75a3.375 3.375 0 01-3.375 3.375H16.5M12 15.75v2.25"/></svg>',
 };
 </script>
-<?!= include('TargetDateEngine'); ?>
-<?!= include('Scripts'); ?>
+<?!= include('60_UI_TargetDateEngine'); ?>
+<?!= include('60_UI_RoleViews'); ?>
+<?!= include('60_UI_Scripts'); ?>
 
 <script>
+/* ============================================================
+   DEMO / PRESENTATION MODE
+   ------------------------------------------------------------
+   Generates fake student profiles in the exact same shape
+   buildStudentProfilesFromVault() produces server-side, then
+   swaps them into the SAME `allProfiles` global your real data
+   already lives in. Every existing render path (renderTable,
+   renderCards, renderActionView, filters, sorting, the metric
+   cards) runs completely unmodified — it has no idea the data
+   is fake, because the shape is identical.
+
+   Real data is stashed in _realProfilesBackup and restored
+   exactly when demo mode is turned off. Nothing is ever written
+   back to the server while in demo mode — save/edit actions are
+   disabled at the UI level as a safety net.
+   ============================================================ */
+
+let _demoModeActive = false;
+let _realProfilesBackup = null;
+
+const DEMO_FIRST_NAMES = ['Jordan','Aaliyah','Mason','Kayla','Elijah','Brianna','Tyler','Destiny',
+  'Marcus','Jasmine','Noah','Alexis','Isaiah','Trinity','Xavier','Kiara','Dominic','Aniyah',
+  'Jaxon','Serenity','Malik','Nevaeh','Cole','Amara','Brayden','Journee'];
+const DEMO_LAST_NAMES = ['Reed','Sanders','Osei','Nguyen','Rivera','Blackwood','Contreras','Pham',
+  'Whitfield','Delgado','Okafor','Marsh','Villareal','Booker','Hayes','Torres','Lindqvist','Abara'];
+const DEMO_TRADES = ['Culinary Arts','CNA','Security','Facilities Maintenance','Welding',
+  'Office Administration','Electrical Wiring','HVAC','Automotive Technology'];
+
+function _demoRandomFrom(arr) { return arr[Math.floor(Math.random() * arr.length)]; }
+function _demoRandomInt(min, max) { return Math.floor(Math.random() * (max - min + 1)) + min; }
+
+function _generateFakeProfile(i) {
+  const first = _demoRandomFrom(DEMO_FIRST_NAMES);
+  const last  = _demoRandomFrom(DEMO_LAST_NAMES);
+  const id    = 'DEMO' + (9000 + i);
+
+  const riskRoll = Math.random();
+  const riskLevel = riskRoll < 0.55 ? 'LOW' : riskRoll < 0.85 ? 'MEDIUM' : 'HIGH';
+  const riskScore = riskLevel === 'LOW' ? _demoRandomInt(0, 59)
+    : riskLevel === 'MEDIUM' ? _demoRandomInt(60, 119) : _demoRandomInt(120, 190);
+
+  const hasTranscript = Math.random() > 0.05;
+  const remainingCredits = hasTranscript ? +(Math.random() * 23).toFixed(1) : null;
+  const completionPct = hasTranscript ? +((1 - remainingCredits / 23) * 100).toFixed(1) : null;
+  const hsComplete = hasTranscript && remainingCredits === 0;
+
+  const hasTrade = Math.random() > 0.08;
+  const tradePct = hasTrade ? _demoRandomInt(0, 100) : null;
+  const tradeComplete = hasTrade && tradePct === 100;
+
+  const hasWir = Math.random() < 0.35;
+
+  const notesCount = Math.random() < 0.4 ? _demoRandomInt(1, 3) : 0;
+
+  return {
+    id, academicId: id, tradesId: id,
+    displayName: `${last}, ${first}`,
+    hsComplete, tradeComplete,
+    mappingMissing: false,
+    statusTag: Math.random() < 0.06 ? 'New' : null,
+    isStale: Math.random() < 0.04,
+    notes: Array.from({ length: notesCount }, (_, n) => ({
+      text: n === 0 && Math.random() < 0.3 ? '[Student] Keep up the great work this week!' : 'Checked in with student — doing well, on pace.',
+      date: new Date(Date.now() - _demoRandomInt(1, 20) * 86400000).toISOString(),
+    })),
+    academic: hasTranscript ? {
+      type: _demoRandomFrom(['HS', 'HiSET', 'GED']),
+      pace: _demoRandomFrom(['On Track', 'At Risk', 'Behind']),
+      percent: completionPct,
+      hours: _demoRandomInt(20, 400),
+      start: new Date(Date.now() - _demoRandomInt(30, 300) * 86400000).toISOString().slice(0, 10),
+      graduation: new Date(Date.now() + _demoRandomInt(10, 200) * 86400000).toISOString().slice(0, 10),
+      daysToGrad: _demoRandomInt(10, 200),
+      credits: remainingCredits,
+      nextMilestone: _demoRandomFrom(['English 3', 'Algebra 2', 'US History', 'Biology', null]),
+      targetDate: null,
+      thisWeekHours: _demoRandomInt(0, 20),
+      thisWeekLogged: true,
+      lastWeekHours: _demoRandomInt(0, 20),
+      weeklyAvgHours: _demoRandomInt(3, 15),
+      thisWeekCredits: +(Math.random() * 1.5).toFixed(2),
+    } : null,
+    trades: hasTrade ? [{
+      tarName: _demoRandomFrom(DEMO_TRADES),
+      overallPct: tradePct,
+      status: tradeComplete ? 'Complete' : 'Enrolled',
+      etarProjectedEnd: new Date(Date.now() + _demoRandomInt(20, 150) * 86400000).toISOString().slice(0, 10),
+      daysToETAR: _demoRandomInt(20, 150),
+    }] : [],
+    time: { totalHours: _demoRandomInt(20, 500) },
+    intervention: hasWir ? {
+      adminPriority: riskLevel,
+      streak: _demoRandomFrom(['+2', '+1', '-1', null]),
+      trajectory: _demoRandomFrom(['improving', 'stable', 'declining']),
+    } : null,
+    risk: { level: riskLevel, score: riskScore },
+  };
+}
+
+function enableDemoMode(count) {
+  if (_demoModeActive) return;
+  count = count || 40;
+
+  _realProfilesBackup = allProfiles;
+  allProfiles = Array.from({ length: count }, (_, i) => _generateFakeProfile(i));
+  _demoModeActive = true;
+
+  document.body.classList.add('demo-mode-active');
+  _showDemoBanner();
+  applyFilters();
+  if (typeof refreshMetrics === 'function') refreshMetrics();
+}
+
+function disableDemoMode() {
+  if (!_demoModeActive) return;
+  allProfiles = _realProfilesBackup;
+  _realProfilesBackup = null;
+  _demoModeActive = false;
+
+  document.body.classList.remove('demo-mode-active');
+  _hideDemoBanner();
+  applyFilters();
+  if (typeof refreshMetrics === 'function') refreshMetrics();
+}
+
+function _showDemoBanner(message) {
+  if (document.getElementById('demoModeBanner')) return;
+  const banner = document.createElement('div');
+  banner.id = 'demoModeBanner';
+  banner.innerHTML = `
+    <span>${message || '🎭 DEMO MODE — All names and data on screen are randomly generated. No real student data is shown.'}</span>
+    <button onclick="disableDemoMode()">Exit</button>`;
+  document.body.prepend(banner);
+}
+
+function _hideDemoBanner() {
+  const el = document.getElementById('demoModeBanner');
+  if (el) el.remove();
+}
+
+// ── Stress test ──────────────────────────────────────────────
+// Same generator as Demo Mode, just a much larger count — for
+// checking that filtering, sorting, search, and rendering all still
+// feel responsive with far more students than the program actually
+// has. Prompts for a count rather than a fixed number since "how
+// much is enough to notice a slowdown" depends on what you're
+// checking.
+function enableStressTestMode() {
+  if (_demoModeActive) return;
+  const input = prompt('How many fake students to generate? (e.g. 500, 1000, 2000)', '1000');
+  if (!input) return;
+  const count = parseInt(input, 10);
+  if (isNaN(count) || count < 1) { alert('Enter a positive number.'); return; }
+
+  _realProfilesBackup = allProfiles;
+  const t0 = performance.now();
+  allProfiles = Array.from({ length: count }, (_, i) => _generateFakeProfile(i));
+  const genMs = (performance.now() - t0).toFixed(0);
+  _demoModeActive = true;
+
+  document.body.classList.add('demo-mode-active');
+  _showDemoBanner(`🧪 STRESS TEST — ${count} randomly generated students on screen (generated in ${genMs}ms). No real student data is shown.`);
+  const t1 = performance.now();
+  applyFilters();
+  const renderMs = (performance.now() - t1).toFixed(0);
+  if (typeof refreshMetrics === 'function') refreshMetrics();
+  console.log(`Stress test: ${count} profiles — generation ${genMs}ms, first render ${renderMs}ms.`);
+}
+
+// ── Edge case test ───────────────────────────────────────────
+// A curated set of deliberately extreme/boundary profiles — each one
+// targets a specific thing the app needs to handle correctly (a risk
+// score sitting exactly on a level boundary, a student with no data
+// at all, a name long enough to test overflow, etc.) rather than
+// random data that may or may not happen to hit an edge case.
+// displayName on each doubles as a label so the specific scenario is
+// easy to find and check in the table.
+function _generateEdgeCaseProfiles() {
+  const base = (overrides) => Object.assign({
+    id: 'EDGE_' + Math.random().toString(36).slice(2, 9),
+    academicId: null, tradesId: null,
+    displayName: 'Edge Case', hsComplete: false, tradeComplete: false,
+    mappingMissing: false, statusTag: null, isStale: false, notes: [],
+    academic: null, trades: [], time: null, intervention: null,
+    completedTrades: [], academicStatusOverride: null, tradeStatusOverride: null,
+    thisWeekAssignedHours: null, thisWeekSource: null, thisWeekWorkedHours: null, thisWeekHasTrade: false,
+    hasAcademic: false, hasTrades: false, hasIntervention: false, examProgram: null,
+    risk: { level: 'UNKNOWN', score: 0, flags: [], flagsDetailed: [] },
+  }, overrides);
+
+  return [
+    base({ displayName: 'EDGE: Risk score 0 (absolute floor)', hasAcademic: true,
+      academic: { type: 'HS', pace: 'On Track', percent: 90, hours: 200, thisWeekHours: 15 },
+      risk: { level: 'LOW', score: 0, flags: [], flagsDetailed: [] } }),
+    base({ displayName: 'EDGE: Risk score 59 (just under MEDIUM)', hasAcademic: true,
+      academic: { type: 'HS', percent: 50 },
+      risk: { level: 'LOW', score: 59, flags: ['Test flag'], flagsDetailed: [{ label: 'Test flag', points: 59 }] } }),
+    base({ displayName: 'EDGE: Risk score 60 (MEDIUM floor, exact boundary)', hasAcademic: true,
+      academic: { type: 'HS', percent: 50 },
+      risk: { level: 'MEDIUM', score: 60, flags: ['Test flag'], flagsDetailed: [{ label: 'Test flag', points: 60 }] } }),
+    base({ displayName: 'EDGE: Risk score 119 (just under HIGH)', hasAcademic: true,
+      academic: { type: 'HS', percent: 30 },
+      risk: { level: 'MEDIUM', score: 119, flags: ['Test flag'], flagsDetailed: [{ label: 'Test flag', points: 119 }] } }),
+    base({ displayName: 'EDGE: Risk score 120 (HIGH floor, exact boundary)', hasAcademic: true,
+      academic: { type: 'HS', percent: 20 },
+      risk: { level: 'HIGH', score: 120, flags: ['Test flag'], flagsDetailed: [{ label: 'Test flag', points: 120 }] } }),
+    base({ displayName: 'EDGE: Risk score 200 (absolute max, multiple flags)', hasAcademic: true,
+      academic: { type: 'HS', percent: 5 },
+      risk: { level: 'HIGH', score: 200, flags: ['Flag A', 'Flag B', 'Flag C'],
+        flagsDetailed: [{ label: 'Flag A', points: 100 }, { label: 'Flag B', points: 60 }, { label: 'Flag C', points: 40 }] } }),
+    base({ displayName: 'EDGE: Completely empty profile (no academic, no trades, no time)' }),
+    base({ displayName: 'EDGE: Academic % is exactly 0', hasAcademic: true,
+      academic: { type: 'HS', percent: 0, pace: 'Behind', hours: 0, thisWeekHours: 0 } }),
+    base({ displayName: 'EDGE: Academic % is exactly 100 but hsComplete is still false', hasAcademic: true,
+      academic: { type: 'HS', percent: 100, pace: 'On Track' }, hsComplete: false }),
+    base({ displayName: 'EDGE: HS Complete AND Trade Complete at once (Program Complete)',
+      hsComplete: true, tradeComplete: true, completedTrades: ['BCT'] }),
+    base({ displayName: 'EDGE: Extremely long name — aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa' }),
+    base({ displayName: 'EDGE: Missing academic/trades ID (mappingMissing)', mappingMissing: true }),
+    base({ displayName: 'EDGE: isStale true, otherwise unremarkable', isStale: true, hasAcademic: true,
+      academic: { type: 'HS', percent: 50 } }),
+    base({ displayName: 'EDGE: 20 staff notes (badge overflow test)',
+      notes: Array.from({ length: 20 }, (_, n) => ({ text: 'Note number ' + (n + 1), date: new Date(Date.now() - n * 86400000).toISOString() })) }),
+    base({ displayName: 'EDGE: hasTrades true but trades array is empty (data inconsistency)',
+      hasTrades: true, trades: [] }),
+    base({ displayName: 'EDGE: Trade name "Undecided/Shadow/New" (should be excluded from pace scoring)',
+      hasTrades: true, trades: [{ tarName: 'Undecided/Shadow/New', overallPct: 0, paceGap: null, status: 'Enrolled' }] }),
+    base({ displayName: 'EDGE: Intervention with PROGRAM_DEADLINE_CRITICAL flag tag', hasAcademic: true,
+      academic: { type: 'HS', percent: 40 }, hasIntervention: true,
+      intervention: { adminPriority: 'HIGH', issueTags: 'PROGRAM_DEADLINE_CRITICAL', gradGap: '⛔ 5d over limit',
+        followUp: new Date(Date.now() - 86400000).toISOString() } }),
+    base({ displayName: 'EDGE: Negative days to graduation (past the deadline)', hasAcademic: true,
+      academic: { type: 'HS', percent: 60, daysToGrad: -15 } }),
+    base({ displayName: 'EDGE: thisWeekSource is "uncertain" (Pacing Needs Review test)',
+      thisWeekSource: 'uncertain', thisWeekHasTrade: false, hasAcademic: true,
+      academic: { type: 'HS', percent: 50 } }),
+    base({ displayName: 'EDGE: thisWeekSource is "fallback_pattern" (Pacing From Pattern test)',
+      thisWeekSource: 'fallback_pattern', thisWeekHasTrade: false, hasAcademic: true,
+      academic: { type: 'HS', percent: 50 } }),
+    base({ displayName: 'EDGE: MyPace trade only, no HSD (Not Started Yet test)',
+      hasTrades: true, trades: [{ tarName: 'MyPace 1', overallPct: 0, status: 'Enrolled' }] }),
+    base({ displayName: 'EDGE: Explicitly marked Not Started (academicStatusOverride)',
+      academicStatusOverride: 'NOT_STARTED' }),
+    base({ displayName: 'EDGE: examProgram is HiSET but academic.type says HS (mismatch test)',
+      examProgram: 'HiSET', hasAcademic: true, academic: { type: 'HS', percent: 40 } }),
+  ];
+}
+
+function enableEdgeCaseMode() {
+  if (_demoModeActive) return;
+  _realProfilesBackup = allProfiles;
+  allProfiles = _generateEdgeCaseProfiles();
+  _demoModeActive = true;
+
+  document.body.classList.add('demo-mode-active');
+  _showDemoBanner(`🧪 EDGE CASE TEST — ${allProfiles.length} deliberately extreme/boundary profiles on screen, each testing one specific scenario (see each student's name). No real student data is shown.`);
+  applyFilters();
+  if (typeof refreshMetrics === 'function') refreshMetrics();
+}
 // ── Theme toggle ─────────────────────────────────────────
 const THEMES = [
   { key: 'dark',      label: 'Rust Dark',   dot: '#C4622E' },
@@ -1120,6 +1567,24 @@ function applyTheme(key) {
   try { localStorage.setItem('dashTheme', key); localStorage.removeItem('dashCustomTheme'); } catch(e) {}
 }
 
+// Called once on page load (see DOMContentLoaded in
+// 60_UI_Scripts.html) to actually apply whatever was last saved.
+// Presets go through applyTheme(); the custom case reuses
+// _restoreCustomTheme_() further down, which also re-populates the
+// color pickers so the Custom Theme panel shows the right values
+// if the person opens it again.
+function _restoreSavedTheme_() {
+  try {
+    const saved = localStorage.getItem('dashTheme');
+    if (!saved) return; // nothing saved — leave the hardcoded default alone
+    if (saved === 'custom') {
+      _restoreCustomTheme_();
+    } else {
+      applyTheme(saved);
+    }
+  } catch(e) {}
+}
+
 // ── Custom theme ─────────────────────────────────────────────
 // Only the background/border/text/accent variables are ever
 // touched here — the risk-status colors (--high/--medium/--low/
@@ -1131,47 +1596,41 @@ const CUSTOM_THEME_VARS = [
   '--border', '--border-bright',
   '--text', '--text-soft', '--text-muted',
   '--accent', '--accent-mid', '--accent-dim', '--accent-glow',
+  '--font',
 ];
 
 function _clearCustomThemeVars_() {
   CUSTOM_THEME_VARS.forEach(v => document.documentElement.style.removeProperty(v));
 }
 
-function _deriveCustomThemeVars_(base, hue, sat) {
-  const bgSat = 10; // kept low/subtle so backgrounds read as neutral, not tinted-weird
-  const isDark = base === 'dark';
+// Five colors are picked directly (bg-nav, accent, bg, bg2, text);
+// everything else (bg3/bg4, borders, text-soft/text-muted, the
+// accent shades, and the glow) is derived from those five so the
+// whole theme stays coherent without needing 14 separate pickers.
+function _deriveFullThemeVars_(picks, isDark) {
   const vars = {};
 
-  if (isDark) {
-    vars['--bg']            = `hsl(${hue}, ${bgSat}%, 10%)`;
-    vars['--bg2']           = `hsl(${hue}, ${bgSat}%, 13%)`;
-    vars['--bg3']           = `hsl(${hue}, ${bgSat}%, 16%)`;
-    vars['--bg4']           = `hsl(${hue}, ${bgSat}%, 20%)`;
-    vars['--bg-nav']        = `hsl(${hue}, ${bgSat}%, 8%)`;
-    vars['--border']        = `hsl(${hue}, ${bgSat}%, 24%)`;
-    vars['--border-bright'] = `hsl(${hue}, ${bgSat}%, 32%)`;
-    vars['--text']          = `hsl(${hue}, 12%, 93%)`;
-    vars['--text-soft']     = `hsl(${hue}, 12%, 78%)`;
-    vars['--text-muted']    = `hsl(${hue}, 8%, 56%)`;
-  } else {
-    vars['--bg']            = `hsl(${hue}, ${bgSat + 5}%, 95%)`;
-    vars['--bg2']           = `hsl(0, 0%, 100%)`;
-    vars['--bg3']           = `hsl(${hue}, ${bgSat + 5}%, 91%)`;
-    vars['--bg4']           = `hsl(${hue}, ${bgSat + 5}%, 86%)`;
-    vars['--bg-nav']        = `hsl(${hue}, 15%, 12%)`;
-    vars['--border']        = `hsl(${hue}, ${bgSat + 10}%, 78%)`;
-    vars['--border-bright'] = `hsl(${hue}, ${bgSat + 10}%, 65%)`;
-    vars['--text']          = `hsl(${hue}, 20%, 12%)`;
-    vars['--text-soft']     = `hsl(${hue}, 20%, 22%)`;
-    vars['--text-muted']    = `hsl(${hue}, 12%, 45%)`;
-  }
+  vars['--bg']     = picks.bg;
+  vars['--bg2']    = picks.bg2;
+  vars['--bg-nav'] = picks.bgNav;
+  vars['--text']   = picks.text;
+  vars['--accent'] = picks.accent;
 
-  // Accent slightly darker in light mode so white text/badges stay readable on it.
-  const accentL = isDark ? 50 : 38;
-  vars['--accent']      = `hsl(${hue}, ${sat}%, ${accentL}%)`;
-  vars['--accent-mid']  = `hsl(${hue}, ${sat}%, ${accentL - 8}%)`;
-  vars['--accent-dim']  = `hsl(${hue}, ${sat}%, ${accentL - 20}%)`;
-  vars['--accent-glow'] = `hsla(${hue}, ${sat}%, ${accentL}%, ${isDark ? 0.10 : 0.12})`;
+  const shift = isDark ? 1 : -1;
+  vars['--bg3'] = _shiftHexLightness(picks.bg2, shift * 8);
+  vars['--bg4'] = _shiftHexLightness(picks.bg2, shift * 16);
+
+  vars['--border']        = _shiftHexLightness(picks.bg2, shift * 24);
+  vars['--border-bright'] = _shiftHexLightness(picks.bg2, shift * 36);
+
+  vars['--text-soft']  = _mixHex(picks.text, picks.bg2, 0.18);
+  vars['--text-muted'] = _mixHex(picks.text, picks.bg2, 0.42);
+
+  vars['--accent-mid'] = _shiftHexLightness(picks.accent, -14);
+  vars['--accent-dim'] = _shiftHexLightness(picks.accent, -30);
+  vars['--accent-glow'] = _hexToRgba(picks.accent, isDark ? 0.10 : 0.12);
+
+  if (picks.font) vars['--font'] = picks.font;
 
   return vars;
 }
@@ -1182,32 +1641,43 @@ function setCustomThemeBase(base) {
   updateCustomTheme();
 }
 
-// Live-updates on every slider drag — no "preview" step, no separate
-// apply-then-see-it. Moving the slider just is the preview.
+// Live-updates on every color pick — no separate preview step,
+// picking a color just is the preview.
 function updateCustomTheme() {
   const base = document.getElementById('ctBaseLight').classList.contains('active') ? 'light' : 'dark';
-  const hue  = Number(document.getElementById('ctHueSlider').value);
-  const sat  = Number(document.getElementById('ctSatSlider').value);
-  const vars = _deriveCustomThemeVars_(base, hue, sat);
+  const isDark = base === 'dark';
 
-  // data-theme=base first, so non-color tokens (font, spacing,
-  // shadows, and the risk-status colors) come from the matching
-  // preset — then the color overrides layer on top via inline
-  // style, which always wins over the attribute-selector CSS.
+  const picks = {
+    bgNav:  document.getElementById('ctColorBgNav').value,
+    accent: document.getElementById('ctColorAccent').value,
+    bg:     document.getElementById('ctColorBg').value,
+    bg2:    document.getElementById('ctColorBg2').value,
+    text:   document.getElementById('ctColorText').value,
+    font:   document.getElementById('ctFontSelect').value,
+  };
+  const vars = _deriveFullThemeVars_(picks, isDark);
+
+  // data-theme=base first, so non-color tokens (spacing, shadows,
+  // and the risk-status colors) come from the matching preset —
+  // then the color overrides layer on top via inline style, which
+  // always wins over the attribute-selector CSS.
   document.documentElement.setAttribute('data-theme', base);
   Object.entries(vars).forEach(([k, v]) => document.documentElement.style.setProperty(k, v));
-
-  const swatch = document.getElementById('ctSwatch');
-  if (swatch) swatch.style.background = vars['--accent'];
 }
 
 function applyCustomThemeNow() {
   updateCustomTheme();
   const base = document.getElementById('ctBaseLight').classList.contains('active') ? 'light' : 'dark';
-  const hue  = Number(document.getElementById('ctHueSlider').value);
-  const sat  = Number(document.getElementById('ctSatSlider').value);
+  const picks = {
+    bgNav:  document.getElementById('ctColorBgNav').value,
+    accent: document.getElementById('ctColorAccent').value,
+    bg:     document.getElementById('ctColorBg').value,
+    bg2:    document.getElementById('ctColorBg2').value,
+    text:   document.getElementById('ctColorText').value,
+    font:   document.getElementById('ctFontSelect').value,
+  };
   try {
-    localStorage.setItem('dashCustomTheme', JSON.stringify({ base, hue, sat }));
+    localStorage.setItem('dashCustomTheme', JSON.stringify({ base, picks }));
     localStorage.setItem('dashTheme', 'custom');
   } catch(e) {}
   if (typeof showToast === 'function') showToast('✓ Custom theme saved');
@@ -1219,45 +1689,43 @@ function _restoreCustomTheme_() {
     const raw = localStorage.getItem('dashCustomTheme');
     if (!raw) return false;
     const cfg = JSON.parse(raw);
-    document.getElementById('ctHueSlider').value = cfg.hue;
-    document.getElementById('ctSatSlider').value = cfg.sat;
+    document.getElementById('ctColorBgNav').value  = cfg.picks.bgNav;
+    document.getElementById('ctColorAccent').value = cfg.picks.accent;
+    document.getElementById('ctColorBg').value     = cfg.picks.bg;
+    document.getElementById('ctColorBg2').value    = cfg.picks.bg2;
+    document.getElementById('ctColorText').value   = cfg.picks.text;
+    if (cfg.picks.font) document.getElementById('ctFontSelect').value = cfg.picks.font;
     setCustomThemeBase(cfg.base); // also calls updateCustomTheme()
     return true;
   } catch(e) { return false; }
 }
 
-// Just previews the accent swatch color from the sliders' default
-// values — does NOT touch document colors, so it never clobbers
-// whatever preset theme someone's actually using if they haven't
-// saved a custom theme yet.
-function _initCustomThemeSwatch_() {
-  const swatch = document.getElementById('ctSwatch');
-  if (!swatch) return;
-  const hue = Number(document.getElementById('ctHueSlider').value);
-  const sat = Number(document.getElementById('ctSatSlider').value);
-  const isDark = document.getElementById('ctBaseDark').classList.contains('active');
-  const accentL = isDark ? 50 : 38;
-  swatch.style.background = `hsl(${hue}, ${sat}%, ${accentL}%)`;
+// ── Small color-math helpers (no library — plain hex math) ─────
+function _shiftHexLightness(hex, amount) {
+  const h = hex.replace('#', '');
+  const r = Math.min(255, Math.max(0, parseInt(h.substring(0,2),16) + amount));
+  const g = Math.min(255, Math.max(0, parseInt(h.substring(2,4),16) + amount));
+  const b = Math.min(255, Math.max(0, parseInt(h.substring(4,6),16) + amount));
+  return '#' + [r,g,b].map(n => Math.round(n).toString(16).padStart(2,'0')).join('');
 }
 
-document.addEventListener('click', function(e) {
-  const dropdown = document.getElementById('themeDropdown');
-  const toggle   = document.getElementById('themeToggle');
-  if (dropdown && !dropdown.contains(e.target) && !toggle.contains(e.target)) {
-    dropdown.style.display = 'none';
-  }
-});
+function _mixHex(hexA, hexB, weightOfB) {
+  const a = hexA.replace('#',''), b = hexB.replace('#','');
+  const mix = (i) => {
+    const av = parseInt(a.substring(i,i+2),16);
+    const bv = parseInt(b.substring(i,i+2),16);
+    return Math.round(av + (bv - av) * weightOfB).toString(16).padStart(2,'0');
+  };
+  return '#' + mix(0) + mix(2) + mix(4);
+}
 
-(function() {
-  try {
-    const saved = localStorage.getItem('dashTheme');
-    if (saved === 'custom' && _restoreCustomTheme_()) return;
-    _initCustomThemeSwatch_();
-    const valid = THEMES.find(t => t.key === saved);
-    if (valid) applyTheme(valid.key);
-    else applyTheme('dark');
-  } catch(e) { applyTheme('dark'); }
-})();
+function _hexToRgba(hex, alpha) {
+  const h = hex.replace('#', '');
+  const r = parseInt(h.substring(0,2),16);
+  const g = parseInt(h.substring(2,4),16);
+  const b = parseInt(h.substring(4,6),16);
+  return `rgba(${r},${g},${b},${alpha})`;
+}
 
 // ── Sidebar ──────────────────────────────────────────────
 function openSidebar() {
@@ -1313,6 +1781,17 @@ function closeSidebar() {
       </p>
 
       <div class="override-row" style="margin-bottom:14px;">
+        <label>Week</label>
+        <input
+          type="date"
+          id="scheduleWeekPicker"
+          onchange="onScheduleWeekPicked(this)"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;"
+        >
+        <div id="scheduleWeekLabel" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+      </div>
+
+      <div class="override-row" style="margin-bottom:14px;">
         <label>Schedule file (.xls)</label>
         <input
           type="file"
@@ -1333,6 +1812,147 @@ function closeSidebar() {
           Upload Schedule
         </button>
         <button class="btn-override danger" onclick="closeScheduleUpload()">Cancel</button>
+      </div>
+
+      <div style="margin-top:16px;padding-top:14px;border-top:1px solid var(--border);text-align:center;">
+        <button class="btn-override" style="background:none;border:1px solid var(--border);" onclick="closeScheduleUpload();openBulkScheduleUpload();">
+          Backfilling multiple weeks? Upload several files at once →
+        </button>
+      </div>
+
+      <div style="margin-top:8px;text-align:center;">
+        <button class="btn-override" style="background:none;border:1px solid var(--border);" onclick="closeScheduleUpload();openManualScheduleEntry();">
+          One student, no export file? Enter a schedule manually →
+        </button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Bulk search — paste a list of IDs or names (one per line, or
+     comma-separated) and filter the table down to just those matches.
+     Matching happens entirely client-side against the already-loaded
+     profiles, no server round-trip needed. -->
+<div id="bulkSearchModal" class="modal-overlay hidden" onclick="if(event.target===this)closeBulkSearch()">
+  <div class="modal-box" style="max-width:520px;">
+    <div class="modal-header">
+      <h2>Bulk Search</h2>
+      <button class="modal-close" onclick="closeBulkSearch()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:14px;line-height:1.6;">
+        Paste a list of student IDs or names — one per line, or comma-separated. The table will filter down to just the matches.
+      </p>
+
+      <textarea id="bulkSearchInput" rows="8" placeholder="2073780&#10;2037298&#10;Adams, Mya"
+        style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:10px;box-sizing:border-box;resize:vertical;"></textarea>
+
+      <div id="bulkSearchStatus" style="font-size:12px;color:var(--text-muted);margin-top:8px;"></div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" onclick="confirmBulkSearch()">Filter to These Students</button>
+        <button class="btn-override danger" onclick="clearBulkSearch()">Clear Bulk Search</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Manual single-student schedule entry — for the occasional case
+     where a student has no schedule export to upload, or the export
+     was wrong for just them. Uses the exact same trusted save path
+     (saveManualStudentSchedule -> _writeWeeklyScheduleToVault_) as
+     file-based uploads. -->
+<div id="manualScheduleModal" class="modal-overlay hidden" onclick="if(event.target===this)closeManualScheduleEntry()">
+  <div class="modal-box" style="max-width:640px;">
+    <div class="modal-header">
+      <h2>Enter Schedule Manually</h2>
+      <button class="modal-close" onclick="closeManualScheduleEntry()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;max-height:75vh;overflow-y:auto;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+        For a single student who has no schedule export, or whose export needs correcting. Leave a cell blank for no class that period.
+      </p>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Student</label>
+        <select id="manualScheduleStudent" style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;"></select>
+      </div>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Week</label>
+        <input
+          type="date"
+          id="manualScheduleWeekPicker"
+          onchange="onManualScheduleWeekPicked(this)"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;"
+        >
+        <div id="manualScheduleWeekLabel" style="font-size:12px;color:var(--text-muted);margin-top:6px;"></div>
+      </div>
+
+      <div id="manualScheduleGrid" style="margin-bottom:14px;"></div>
+
+      <div id="manualScheduleStatus" class="schedule-status"></div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" id="manualScheduleSaveBtn" onclick="confirmManualScheduleSave()">
+          Save Schedule
+        </button>
+        <button class="btn-override danger" onclick="closeManualScheduleEntry()">Cancel</button>
+      </div>
+
+    </div>
+  </div>
+</div>
+
+<!-- Bulk backlog upload — same underlying save logic as the single-file
+     modal above (saveWeeklySchedulesBulk just calls saveWeeklySchedule
+     once per file), but lets you pick several files in one go and
+     assign each its own week instead of repeating the single-file flow
+     N times by hand. -->
+<div id="bulkScheduleUploadModal" class="modal-overlay hidden" onclick="if(event.target===this)closeBulkScheduleUpload()">
+  <div class="modal-box" style="max-width:560px;">
+    <div class="modal-header">
+      <h2>Bulk Upload Weekly Schedules</h2>
+      <button class="modal-close" onclick="closeBulkScheduleUpload()">
+        <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" stroke-width="2" stroke="currentColor"><path stroke-linecap="round" stroke-linejoin="round" d="M6 18L18 6M6 6l12 12"/></svg>
+      </button>
+    </div>
+    <div class="modal-body" style="padding:22px;">
+
+      <p style="font-size:13px;color:var(--text-muted);margin-bottom:18px;line-height:1.6;">
+        Select multiple <strong style="color:var(--text);">.xlsx</strong> schedule files at once — one file per week. Each file needs its own week picked below; there's no reliable way to guess which historical week an arbitrary file belongs to, so this won't guess for you.
+      </p>
+
+      <div class="override-row" style="margin-bottom:14px;">
+        <label>Schedule files (.xls)</label>
+        <input
+          type="file"
+          id="bulkScheduleFileInput"
+          accept=".xls,.xlsx"
+          multiple
+          onchange="onBulkScheduleFilesSelected(this)"
+          style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:13px;padding:7px 10px;width:100%;cursor:pointer;"
+        >
+      </div>
+
+      <div id="bulkSchedulePreviewList" style="display:flex;flex-direction:column;gap:8px;margin-bottom:14px;max-height:320px;overflow-y:auto;">
+      </div>
+
+      <div id="bulkScheduleUploadStatus" class="schedule-status"></div>
+
+      <div class="override-actions" style="margin-top:14px;">
+        <button class="btn-override" id="bulkScheduleUploadBtn" onclick="confirmBulkScheduleUpload()" disabled>
+          Upload All
+        </button>
+        <button class="btn-override danger" onclick="closeBulkScheduleUpload()">Cancel</button>
       </div>
 
     </div>
@@ -1658,8 +2278,8 @@ function closeSidebar() {
     </div>
   </div>
 </div>
-<?!= include('ProductivityModal') ?>
-<?!= include('ProductivityScripts') ?>
-<?!= include('TradeETARUpload'); ?>
+<?!= include('60_UI_ProductivityModal') ?>
+<?!= include('60_UI_ProductivityScripts') ?>
+<?!= include('60_UI_TradeETARUpload'); ?>
 </body>
 </html>
