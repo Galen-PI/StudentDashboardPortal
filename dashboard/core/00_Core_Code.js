@@ -5,8 +5,9 @@
 // ── Web App Entry Point ───────────────────────────────────────
 function doGet(e) {
   if (e && e.parameter && e.parameter.view === 'student') {
-    return HtmlService
-      .createTemplateFromFile('StudentView')
+    const studentTemplate = HtmlService.createTemplateFromFile('60_UI_StudentView');
+    studentTemplate.appVersion = APP_VERSION;
+    return studentTemplate
       .evaluate()
       .setTitle('My Progress — Tulsa Job Corps')
       .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -21,6 +22,11 @@ function doGet(e) {
   if (e && e.parameter && e.parameter.scheduleId) {
     return ContentService
       .createTextOutput(JSON.stringify(getStudentSchedule(e.parameter.scheduleId)))
+      .setMimeType(ContentService.MimeType.JSON);
+  }
+  if (e && e.parameter && e.parameter.hoursRequiredId) {
+    return ContentService
+      .createTextOutput(JSON.stringify(getHoursRequiredForTranscript(e.parameter.hoursRequiredId)))
       .setMimeType(ContentService.MimeType.JSON);
   }
 
@@ -43,10 +49,11 @@ function doGet(e) {
       .addMetaTag('viewport', 'width=device-width, initial-scale=1');
   }
 
-  const template = HtmlService.createTemplateFromFile('Dashboard');
+  const template = HtmlService.createTemplateFromFile('60_UI_Dashboard');
   template.userRole   = '';
   template.userName   = '';
   template.employeeId = '';
+  template.appVersion = APP_VERSION;
   return template.evaluate()
     .setTitle('Student Dashboard')
     .addMetaTag('viewport', 'width=device-width, initial-scale=1')
@@ -116,6 +123,7 @@ function getStudentProfile(studentId) {
     Logger.log('getStudentProfile error: ' + e.message);
     return { error: 'Something went wrong. Please try again.' };
   }
+  
 }
 
 // ============================================================
@@ -131,6 +139,7 @@ function _rebuildDashboardData() {
   const productivityRows  = readVaultSheetAsObjects_(VAULT_SHEET_PRODUCTIVITY, VAULT_PRODUCTIVITY_HEADERS);
   const academicSnapshotRows = readVaultSheetAsObjects_(VAULT_SHEET_ACADEMIC_SNAPSHOTS, VAULT_ACADEMIC_SNAPSHOT_HEADERS);
   const allTranscriptRows = readVaultSheetAsObjects_(VAULT_SHEET_TRANSCRIPT_ROWS, VAULT_TRANSCRIPT_HEADERS);
+
   const transcriptRowsByStudent = {};
   allTranscriptRows.forEach(row => {
     const id = String(row.studentId || '').trim();
@@ -154,19 +163,41 @@ function _rebuildDashboardData() {
     const id = String(row.studentId || '').trim();
     if (id) startDateById[id] = _toDateStr(row.startDate) || null;
   });
+
   const tabeValues    = getVaultSheet_(VAULT_SHEET_TABE).getDataRange().getValues();
   const tabeData       = parseTABESheet(tabeValues);
-  const scheduleValues       = getVaultSheet_(VAULT_SHEET_WEEKLY_SCHEDULE).getDataRange().getValues();
+
+  const scheduleValues      = getVaultSheet_(VAULT_SHEET_WEEKLY_SCHEDULE).getDataRange().getValues();
   const scheduleByStudentId = parseVaultScheduleSheet(scheduleValues);
+
   const overridesValues = _ensureVaultOverridesSheet_().getDataRange().getValues();
   const overrides        = parseOverridesSheet(overridesValues);
+
+  // Read once for the whole rebuild, grouped by student in memory —
+  // ProfilesVault.gs uses this + _resolveAssignedHours_ (TimeLog.gs)
+  // to compute "This Week" LIVE for every student, instead of trusting
+  // whatever assignedHours/source got frozen into a Productivity Data
+  // row at whatever moment that student's time log happened to get
+  // pasted (which could be before that week's schedule even existed
+  // yet — the actual root of the stale "This Week" labeling).
+  const weeklyHoursHistoryRows = readVaultSheetAsObjects_(VAULT_SHEET_WEEKLY_HOURS_HISTORY, VAULT_WEEKLY_HOURS_HISTORY_HEADERS);
+  const weeklyHoursHistoryByStudentId = {};
+  weeklyHoursHistoryRows.forEach(row => {
+    const id = String(row.studentId || '').trim();
+    if (!id) return;
+    if (!weeklyHoursHistoryByStudentId[id]) weeklyHoursHistoryByStudentId[id] = [];
+    weeklyHoursHistoryByStudentId[id].push(row);
+  });
+
   Logger.log('Vault sheet reads complete: ' + (Date.now() - t0) + 'ms');
+
   const wirCombined = getAllStudentInterventions();
   Logger.log('WIR read complete: ' + (Date.now() - t0) + 'ms');
+
   const profiles = buildStudentProfilesFromVault(
     nameMap, courseDataById, tradeOverviewRows, tradeSnapshotRows,
     productivityRows, wirCombined, scheduleByStudentId, tabeData, overrides,
-    startDateById, academicSnapshotRows
+    startDateById, academicSnapshotRows, weeklyHoursHistoryByStudentId
   );
   Logger.log('Profile build complete: ' + (Date.now() - t0) + 'ms');
 
@@ -177,6 +208,7 @@ function _rebuildDashboardData() {
   const hsMonthlyCohort    = hsMonthlyResult.cohort;
   const tradeMonthlyCohort = getTradeMonthlyCohortSummaryFromVault_(tradeSnapshotRows, nameMap);
   const tabeCohort         = getTABECohortSummary(tabeData);
+
   const result = {
     profiles,
     metrics,
@@ -198,6 +230,7 @@ function _rebuildDashboardData() {
   try { writeProgressSnapshots(profiles, null); } catch(e) {
     Logger.log('Snapshot write failed (non-fatal): ' + e.message);
   }
+
   Logger.log('Total rebuild time: ' + (Date.now() - t0) + 'ms');
   return result;
 }
@@ -265,7 +298,9 @@ function getDashboardAnnouncements() {
       message: row[3],
       date: row[4] ? row[4].toString() : ""
     }));
+
   Logger.log(results);
+
   return results;
 }
 // ── Trigger management ────────────────────────────────────────
