@@ -21,6 +21,16 @@ const ACADEMIC_CREDITS_IGNORE_THRESHOLD = 5.0;
 // Set this to the date you deploy this fix (today), then leave it
 // alone — it only matters for the one comparison spanning the change.
 const CREDITS_METHODOLOGY_CUTOVER_DATE = '2026-07-20';
+
+// Core entry point — one call handles either cadence. Skips a
+// student already snapshotted today (idempotent, safe to re-run),
+// skips inactive students, skips anyone with no remainingCredits data
+// yet. First snapshot for a student (or first snapshot after the
+// cutover date above) is a baseline — 'New' status, no gain computed.
+// A single-run change bigger than ACADEMIC_CREDITS_IGNORE_THRESHOLD
+// is treated as a data anomaly and ignored rather than recorded as a
+// real gain/loss (catches things like a mid-week transcript re-sync
+// that temporarily shows a wildly different number).
 function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
   try {
     if (cadence !== 'weekly' && cadence !== 'monthly') {
@@ -141,12 +151,19 @@ function generateAcademicSnapshot(cadence, dateOverride, employeeId) {
   }
 }
 
+// Trigger handler functions — thin wrappers so the trigger's
+// registered handler name stays stable even if generateAcademicSnapshot's
+// signature changes.
 function _runWeeklyAcademicSnapshot_() {
   generateAcademicSnapshot('weekly', null, 'trigger');
 }
 function _runMonthlyAcademicSnapshot_() {
   generateAcademicSnapshot('monthly', null, 'trigger');
 }
+
+// One-time setup — run manually from the editor. Safe to re-run:
+// always clears existing triggers with these handler names first, so
+// re-running can't create duplicates that'd double-write snapshots.
 function installAcademicSnapshotTriggers() {
   removeAcademicSnapshotTriggers();
   ScriptApp.newTrigger('_runWeeklyAcademicSnapshot_')
