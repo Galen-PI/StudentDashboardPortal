@@ -1,26 +1,5 @@
 // ============================================================
 // TradeUpload.gs — ETAR upload -> Vault
-// ------------------------------------------------------------
-// Replaces the old "TAR Tools" sidebar with a dashboard upload
-// modal. Extraction logic below is a direct port of the legacy
-// script - student ID, trade detection, percentages, begin
-// date, and per-code proficiency counts are parsed exactly the
-// same way, since that part already worked correctly.
-//
-// Difference: the legacy script matched a detected student NAME
-// to a per-student tab and wrote counts into tracker cells.
-// Vault has no per-student tabs - every ETAR already carries the
-// real studentId (F5/G5 merged cell), so name matching is only
-// a fallback for the rare ETAR with a blank/unreadable ID cell.
-//
-// Writes go to:
-//   - VAULT_SHEET_TRADE_OVERVIEW (studentId+trade -> tarBeginDate,
-//     staffPercent, studentPercent, overallPercent)
-//   - VAULT_SHEET_TRADE_PROGRESS (studentId+trade+code ->
-//     completedCount, avgRating)
-// Both are upserts - existing rows for that studentId+trade are
-// removed first, so a re-upload reflects the latest ETAR instead
-// of accumulating stale rows.
 // ============================================================
 
 function uploadTradeETARData(rows, role) {
@@ -62,12 +41,12 @@ function uploadTradeETARData(rows, role) {
       ? countCompletedItemsFromBctRows_(rows)
       : countCompletedItemsFromRows_(rows);
 
-    // Locked: both upserts below call _deleteVaultRowsMatching_, which
-    // reads, clears, and rewrites the ENTIRE Trade Overview / Trade
-    // Progress data range. Without a lock, an overlapping ETAR upload
-    // (or a Time Log save touching the same underlying pattern) can
-    // clobber this one's write. Both upserts are locked together so
-    // one ETAR's Overview + Progress rows land atomically.
+    // Locked: still needed even though both upserts below now do
+    // targeted, scoped clearing instead of a full-sheet operation —
+    // two concurrent ETAR uploads for the exact same student+trade
+    // could otherwise both see 'no existing row' and both append,
+    // leaving a duplicate. Both upserts are locked together so one
+    // ETAR's Overview + Progress rows land atomically.
     const progressRowCount = _withLock(() => {
       _upsertTradeOverviewRow_(studentId, tarInfo.tarName, tarBeginDate, percentages);
       return _upsertTradeProgressRows_(studentId, tarInfo.tarName, parsed.counts, parsed.avgRatings);
@@ -96,17 +75,28 @@ function uploadTradeETARData(rows, role) {
 function _upsertTradeOverviewRow_(studentId, trade, tarBeginDate, percentages) {
   const sheet = getVaultSheet_(VAULT_SHEET_TRADE_OVERVIEW);
   const id    = String(studentId).trim();
+  const numCols = VAULT_TRADE_OVERVIEW_HEADERS.length;
 
-  // Preserve any manually-set enrollmentStatus (see setTradeEnrollmentStatus
-  // below) — the ETAR upload itself doesn't supply this field, so an
-  // upsert here must not silently wipe out a value staff already set.
-  const existingRows = readVaultSheetAsObjects_(VAULT_SHEET_TRADE_OVERVIEW, VAULT_TRADE_OVERVIEW_HEADERS)
-    .filter(row => String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade);
-  const preservedStatus = existingRows.length ? (existingRows[0].enrollmentStatus || '') : '';
-
-  _deleteVaultRowsMatching_(sheet, VAULT_TRADE_OVERVIEW_HEADERS, row =>
-    String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade
-  );
+  // Find this student's existing row, if any — matched by studentId
+  // ALONE, not studentId+trade. A student should only ever have one
+  // CURRENT Trade Overview row (completed trades are tracked
+  // separately, in Trade Monthly history) — matching on exact trade
+  // name too meant a changed name (inconsistent formatting between
+  // ETAR uploads, or a genuine trade switch) silently created a
+  // second row instead of updating the first, leaving a stale
+  // duplicate behind and making it look like the upload "didn't
+  // update" anything when it actually just wrote to a new row.
+  const lastRow = sheet.getLastRow();
+  let existingRowNum = null;
+  if (lastRow >= VAULT_DATA_START_ROW) {
+    const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
+    for (let i = 0; i < data.length; i++) {
+      if (String(data[i][0] || '').trim() === id) {
+        existingRowNum = VAULT_DATA_START_ROW + i;
+        break;
+      }
+    }
+  }
 
   const rowValues = [
     id,
@@ -115,10 +105,21 @@ function _upsertTradeOverviewRow_(studentId, trade, tarBeginDate, percentages) {
     percentStringToNumber_(percentages.staff),
     percentStringToNumber_(percentages.student),
     percentStringToNumber_(percentages.overall),
-    preservedStatus,
+    new Date().toISOString(),
   ];
-  sheet.getRange(sheet.getLastRow() + 1, 1, 1, VAULT_TRADE_OVERVIEW_HEADERS.length).setValues([rowValues]);
-  sheet.getRange(sheet.getLastRow(), 1, 1, 1).setNumberFormat('@');
+
+  // Update in place if this student+trade already has a row —
+  // never clears/rewrites the rest of the sheet, so a concurrent
+  // ETAR upload for a DIFFERENT student never has to wait on this
+  // one. Only genuinely new student+trade combinations append.
+  if (existingRowNum) {
+    sheet.getRange(existingRowNum, 1, 1, numCols).setValues([rowValues]);
+    sheet.getRange(existingRowNum, 1, 1, 1).setNumberFormat('@');
+  } else {
+    const newRow = sheet.getLastRow() + 1;
+    sheet.getRange(newRow, 1, 1, numCols).setValues([rowValues]);
+    sheet.getRange(newRow, 1, 1, 1).setNumberFormat('@');
+  }
 }
 
 // Manual staff-set trade enrollment status. No reliable way to
@@ -139,68 +140,130 @@ function _upsertTradeOverviewRow_(studentId, trade, tarBeginDate, percentages) {
 //                     string, so either of these two words (or
 //                     any string containing them) will trigger it.
 //   '' / null     -> normal/active, no override either way.
-function setTradeEnrollmentStatus(studentId, trade, status, role) {
-  _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
-  const id = String(studentId).trim();
-
-  // Locked: read-row-index-then-write. Without a lock, a concurrent
-  // ETAR upload for the same student/trade could shift or rewrite this
-  // row between the read and the write below.
+// One-time cleanup for existing duplicate rows created by the
+// studentId+trade matching bug fixed above in
+// _upsertTradeOverviewRow_/_upsertTradeProgressRows_ — those
+// functions now correctly update in place going forward, but this
+// doesn't retroactively fix any duplicates already sitting in the
+// sheets from before the fix.
+//
+// For any student with more than one Trade Overview row, keeps the
+// LAST one (furthest down the sheet) and clears the rest — since
+// duplicates only ever got APPENDED, never replaced, the bottom-most
+// row for a student is reliably the most recently uploaded one.
+// Trade Progress then gets the same treatment: a row survives only
+// if it matches both the student AND whichever trade name won in
+// Trade Overview.
+function cleanupDuplicateTradeRows() {
   return _withLock(() => {
-    const sheet = getVaultSheet_(VAULT_SHEET_TRADE_OVERVIEW);
-    const rows = readVaultSheetAsObjects_(VAULT_SHEET_TRADE_OVERVIEW, VAULT_TRADE_OVERVIEW_HEADERS);
-    const rowIndex = rows.findIndex(row =>
-      String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade
-    );
-    if (rowIndex === -1) {
-      return { success: false, error: 'No Trade Overview row found for that student + trade.' };
+    const overviewSheet   = getVaultSheet_(VAULT_SHEET_TRADE_OVERVIEW);
+    const progressSheet   = getVaultSheet_(VAULT_SHEET_TRADE_PROGRESS);
+    const numColsOverview = VAULT_TRADE_OVERVIEW_HEADERS.length;
+    const numColsProgress = VAULT_TRADE_PROGRESS_HEADERS.length;
+
+    const lastRowOv = overviewSheet.getLastRow();
+    if (lastRowOv < VAULT_DATA_START_ROW) {
+      Logger.log('Trade Overview is empty — nothing to clean up.');
+      return { studentsFixed: 0, overviewRowsCleared: 0, progressRowsCleared: 0 };
     }
-    const statusCol = VAULT_TRADE_OVERVIEW_HEADERS.indexOf('enrollmentStatus') + 1;
-    sheet.getRange(rowIndex + 2, statusCol).setValue(String(status || '').trim());
+
+    const ovData = overviewSheet.getRange(VAULT_DATA_START_ROW, 1, lastRowOv - VAULT_DATA_START_ROW + 1, numColsOverview).getValues();
+
+    // Group row positions by studentId, in sheet order — later index
+    // in this array means written later (further down the sheet).
+    const rowsByStudent = {};
+    ovData.forEach((row, i) => {
+      const sid = String(row[0] || '').trim();
+      if (!sid) return;
+      if (!rowsByStudent[sid]) rowsByStudent[sid] = [];
+      rowsByStudent[sid].push({ rowNum: VAULT_DATA_START_ROW + i, trade: String(row[1] || '').trim() });
+    });
+
+    let studentsFixed = 0;
+    let overviewRowsCleared = 0;
+    const keepTradeByStudent = {}; // studentId -> the one trade name kept
+
+    Object.keys(rowsByStudent).forEach(sid => {
+      const rows = rowsByStudent[sid];
+      if (rows.length <= 1) {
+        if (rows.length === 1) keepTradeByStudent[sid] = rows[0].trade;
+        return;
+      }
+      const keeper = rows[rows.length - 1];
+      keepTradeByStudent[sid] = keeper.trade;
+      rows.slice(0, -1).forEach(r => {
+        overviewSheet.getRange(r.rowNum, 1, 1, numColsOverview).clearContent();
+        overviewRowsCleared++;
+      });
+      studentsFixed++;
+      Logger.log('Student ' + sid + ': kept trade "' + keeper.trade + '" (row ' + keeper.rowNum + '), cleared ' + (rows.length - 1) + ' older row(s).');
+    });
+
+    // Trade Progress: a row survives only if its trade matches
+    // whichever one won for that student above. If a student had NO
+    // Trade Overview row at all (shouldn't normally happen), their
+    // Progress rows are left untouched — no clear signal to clean up
+    // against, so better to leave the data than guess.
+    const lastRowPr = progressSheet.getLastRow();
+    let progressRowsCleared = 0;
+    if (lastRowPr >= VAULT_DATA_START_ROW) {
+      const prData = progressSheet.getRange(VAULT_DATA_START_ROW, 1, lastRowPr - VAULT_DATA_START_ROW + 1, numColsProgress).getValues();
+      prData.forEach((row, i) => {
+        const sid = String(row[0] || '').trim();
+        const trade = String(row[1] || '').trim();
+        if (!sid) return;
+        const keptTrade = keepTradeByStudent[sid];
+        if (keptTrade === undefined) return;
+        if (trade !== keptTrade) {
+          progressSheet.getRange(VAULT_DATA_START_ROW + i, 1, 1, numColsProgress).clearContent();
+          progressRowsCleared++;
+        }
+      });
+    }
+
+    Logger.log('Cleanup complete: ' + studentsFixed + ' student(s) had duplicate Trade Overview rows, ' +
+      overviewRowsCleared + ' old Overview row(s) cleared, ' + progressRowsCleared + ' stale Progress row(s) cleared.');
+
     _clearDashboardCache();
-    return { success: true, studentId: id, trade: trade, enrollmentStatus: String(status || '').trim() };
+    return { studentsFixed, overviewRowsCleared, progressRowsCleared };
   });
 }
 
 function _upsertTradeProgressRows_(studentId, trade, counts, avgRatings) {
   const sheet = getVaultSheet_(VAULT_SHEET_TRADE_PROGRESS);
   const id    = String(studentId).trim();
+  const numCols = VAULT_TRADE_PROGRESS_HEADERS.length;
 
-  _deleteVaultRowsMatching_(sheet, VAULT_TRADE_PROGRESS_HEADERS, row =>
-    String(row.studentId || '').trim() === id && String(row.trade || '').trim() === trade
-  );
+  // Clear THIS student's existing rows in place, regardless of trade
+  // name — same reasoning as _upsertTradeOverviewRow_ above. Matching
+  // on studentId+trade meant a changed trade name (inconsistent
+  // formatting between uploads, or a genuine trade switch) left the
+  // old trade's proficiency-code rows behind untouched while adding
+  // a second set under the new name, instead of replacing them.
+  const lastRow = sheet.getLastRow();
+  if (lastRow >= VAULT_DATA_START_ROW) {
+    const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues();
+    data.forEach((row, i) => {
+      if (String(row[0] || '').trim() === id) {
+        sheet.getRange(VAULT_DATA_START_ROW + i, 1, 1, numCols).clearContent();
+      }
+    });
+  }
 
   const codes = Object.keys(counts || {}).sort(sortTarCodes_);
   if (!codes.length) return 0;
 
+  const now = new Date().toISOString();
   const rows = codes.map(code => [
     id, trade, code,
     counts[code] || 0,
     avgRatings && avgRatings[code] !== undefined ? avgRatings[code] : '',
+    now,
   ]);
-  sheet.getRange(sheet.getLastRow() + 1, 1, rows.length, VAULT_TRADE_PROGRESS_HEADERS.length).setValues(rows);
-  sheet.getRange(sheet.getLastRow() - rows.length + 1, 1, rows.length, 1).setNumberFormat('@');
+  const startRow = sheet.getLastRow() + 1;
+  sheet.getRange(startRow, 1, rows.length, numCols).setValues(rows);
+  sheet.getRange(startRow, 1, rows.length, 1).setNumberFormat('@');
   return rows.length;
-}
-
-function _deleteVaultRowsMatching_(sheet, headers, predicateFn) {
-  const lastRow = sheet.getLastRow();
-  if (lastRow < VAULT_DATA_START_ROW) return;
-
-  const numRows = lastRow - VAULT_DATA_START_ROW + 1;
-  const values  = sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, headers.length).getValues();
-
-  const keepRows = [];
-  values.forEach(row => {
-    const obj = {};
-    headers.forEach((key, i) => { obj[key] = row[i]; });
-    if (!predicateFn(obj)) keepRows.push(row);
-  });
-
-  sheet.getRange(VAULT_DATA_START_ROW, 1, numRows, headers.length).clearContent();
-  if (keepRows.length) {
-    sheet.getRange(VAULT_DATA_START_ROW, 1, keepRows.length, headers.length).setValues(keepRows);
-  }
 }
 
 function _matchStudentByName_(rawName) {
