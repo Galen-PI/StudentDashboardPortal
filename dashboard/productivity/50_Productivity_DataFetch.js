@@ -1,8 +1,24 @@
-// ==============
+// ============================================================
 // DataFetch.gs — Runtime spreadsheet I/O
-
+// ------------------------------------------------------------
+// Owns: staff auth, WIR data shaping, override/notes writes
+// (single/bulk/revert/merge), archive/restore, schedule upload,
+// progress snapshots, email digest.
+//
+// - Every write to Overrides And Notes goes through _withLock()
+//   (Helpers.gs) — shared sheet, unlocked write = lost data. Wrap
+//   any new write path to it too.
+// - Student ID is the only safe join key — see mergeStudents for
+//   what broke when a previous version violated that.
+// - Coerce sheet reads to string/number before sending to client —
+//   raw Date objects silently become null over google.script.run.
+// ============================================================
 
 // ── Authentication ────────────────────────────────────────────
+
+// Login entry point, re-checked every session (permissions can
+// change). ADMIN_TOKEN bypasses Staff Roles lookup entirely.
+// Cached 10 min/employee so a busy morning doesn't hammer the sheet.
 function getRoleByEmployeeId(employeeId) {
   try {
     employeeId = String(employeeId || '').trim();
@@ -50,6 +66,8 @@ function getRoleByEmployeeId(employeeId) {
   }
 }
 
+// Feeds the counselor/instructor filter dropdowns — active staff
+// with at least one trade listed only; empty trades = not shown.
 function getCounselorList() {
   try {
     const sheet = SpreadsheetApp.openById(SS_ADMIN).getSheetByName(SHEET_STAFF_ROLES);
@@ -87,10 +105,16 @@ function getCounselorList() {
 // ============================================================
 // ── WIR Data ─────────────────────────────────────────────────
 // ============================================================
+
+// Thin wrapper — only one storage path now, same pattern as
+// getStudentSchedule below. Change here if a second path is added.
 function getWIRData() {
   return getWIRDataFromVault_();
 }
 
+// Reshapes getAllStudentInterventions()'s report+case data into the
+// flat rows the WIR tab expects. Every field stringified/trimmed —
+// crosses the google.script.run boundary, see file header re: Dates.
 function getWIRDataFromVault_() {
   try {
     const combined = getAllStudentInterventions(); // [{ report, caseData }]
@@ -151,28 +175,36 @@ function appendToWIRLog(wirData, hubSS) {
 // ============================================================
 // ── Overrides ────────────────────────────────────────────────
 // ============================================================
+
+// Client-facing entry point for every override type (status, risk
+// level, note, flags, HSD class, etc). See _applyOverrides in
+// Profiles.gs for how these get read back at render time.
 function setOverride(studentId, type, value, note, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
   return setOverrideVault_(studentId, type, value, note, setBy);
 }
 
+// Undoes one override row. rowIndex must match getRecentChanges'
+// last output — see revertChangeVault_'s staleness check below.
 function revertChange(studentId, type, rowIndex, role) {
   _requirePermission(role || ROLES.ADMIN, 'revert_changes');
   return revertChangeVault_(studentId, type, rowIndex);
 }
 
+// Feeds "Recent Changes" — most recent 10 overrides, noisy/internal
+// types filtered out.
 function getRecentChanges() {
   return getRecentChangesVault_();
 }
 
 // ── Overrides — VAULT PATH ──────────────────────────────────────
-// Same six-column shape and row-per-change model as the legacy
-// Hub Overrides sheet — Overrides And Notes is a direct port, not
-// a redesign. There's no rowId column here (unlike Transcript
-// Rows), so row position is still how a specific row gets located
-// for revert/delete, same rowIndex contract as before, just against
-// VAULT_SHEET_OVERRIDES_NOTES instead of the Hub sheet.
+// Direct port of the legacy Hub Overrides sheet, same 6-col shape.
+// No rowId column, so row position is still how revert/delete finds
+// a specific row — same rowIndex contract, just against
+// VAULT_SHEET_OVERRIDES_NOTES now.
 
+// Gets-or-creates the sheet — defensive, so a fresh Vault copy
+// doesn't need manual setup before overrides work.
 function _ensureVaultOverridesSheet_() {
   const ss = getVaultSpreadsheet_();
   let sheet = ss.getSheetByName(VAULT_SHEET_OVERRIDES_NOTES);
@@ -184,30 +216,89 @@ function _ensureVaultOverridesSheet_() {
   return sheet;
 }
 
-function _deleteMatchingVaultRows_(sheet, studentId, type) {
+// Finds the existing row (1-based sheet row number) for one
+// student+type combination, or null if none exists. Read-only, no
+// mutation — safe to call without a lock on its own.
+function _findVaultOverrideRow_(sheet, studentId, type) {
   const lastRow = sheet.getLastRow();
-  if (lastRow < VAULT_DATA_START_ROW) return;
+  if (lastRow < VAULT_DATA_START_ROW) return null;
   const data = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues();
-  const toDelete = data
-    .map((row, i) => (String(row[0]).trim() === String(studentId).trim() && String(row[1]).trim() === type) ? i + VAULT_DATA_START_ROW : null)
-    .filter(Boolean);
-  toDelete.sort((a, b) => b - a).forEach(rowIdx => sheet.deleteRow(rowIdx));
+  const targetId = String(studentId).trim();
+  for (let i = 0; i < data.length; i++) {
+    if (String(data[i][0]).trim() === targetId && String(data[i][1]).trim() === type) {
+      return i + VAULT_DATA_START_ROW;
+    }
+  }
+  return null;
 }
 
+// Clears (blanks in place, does NOT delete/shift) the existing row
+// for one student+type, if any exists. Every consumer of this sheet
+// already skips rows with an empty studentId/type (see
+// parseOverridesSheet), so a blanked row is completely safe to leave
+// sitting there — the whole point of not deleting it is that
+// deleteRow() physically shifts every row below it up by one, which
+// is exactly what made two concurrent writers to DIFFERENT students
+// able to corrupt each other's row positions. In-place clearing never
+// moves anything else, so that collision can't happen anymore.
+function _deleteMatchingVaultRows_(sheet, studentId, type) {
+  const row = _findVaultOverrideRow_(sheet, studentId, type);
+  if (row) sheet.getRange(row, 1, 1, VAULT_OVERRIDES_NOTES_HEADERS.length).clearContent();
+}
+
+// Stamps "last modified" as its own override row — the single
+// source for "when was this student last touched," regardless of
+// which override type actually changed. Called from nearly every
+// write path below (not from setOverrideVault_ writing last_modified
+// itself — that'd be circular). Updates the existing last_modified
+// row in place if this student already has one, instead of clearing
+// it and appending a fresh row every single touch — that old pattern
+// meant the sheet grew by one row on literally every write to any
+// override type for any student, forever.
 function _touchLastModifiedVault_(studentId, setBy) {
   const sheet = _ensureVaultOverridesSheet_();
-  _deleteMatchingVaultRows_(sheet, studentId, 'last_modified');
-  sheet.appendRow([studentId, 'last_modified', new Date().toISOString(), '', setBy || '', new Date()]);
-}
-
-function _setOverrideRawVault_(studentId, type, value, note, setBy) {
-  const sheet = _ensureVaultOverridesSheet_();
-  _deleteMatchingVaultRows_(sheet, studentId, type);
-  if (value !== '' && value !== null && value !== undefined) {
-    sheet.appendRow([studentId, type, value, note || '', setBy || '', new Date()]);
+  const rowValues = [studentId, 'last_modified', new Date().toISOString(), '', setBy || '', new Date()];
+  const existingRow = _findVaultOverrideRow_(sheet, studentId, 'last_modified');
+  if (existingRow) {
+    sheet.getRange(existingRow, 1, 1, VAULT_OVERRIDES_NOTES_HEADERS.length).setValues([rowValues]);
+  } else {
+    sheet.appendRow(rowValues);
   }
 }
 
+// Low-level single-row write, no locking of its own — callers wrap
+// this in _withLock. Empty/null/undefined value clears the override
+// instead of storing an empty row. Updates the existing row in place
+// if one exists for this student+type, rather than clearing it and
+// appending a new row at the end of the sheet — same reasoning as
+// _touchLastModifiedVault_ above.
+function _setOverrideRawVault_(studentId, type, value, note, setBy) {
+  const sheet = _ensureVaultOverridesSheet_();
+  const clearing = (value === '' || value === null || value === undefined);
+  const existingRow = _findVaultOverrideRow_(sheet, studentId, type);
+
+  if (clearing) {
+    if (existingRow) sheet.getRange(existingRow, 1, 1, VAULT_OVERRIDES_NOTES_HEADERS.length).clearContent();
+    return;
+  }
+
+  const rowValues = [studentId, type, value, note || '', setBy || '', new Date()];
+  if (existingRow) {
+    sheet.getRange(existingRow, 1, 1, VAULT_OVERRIDES_NOTES_HEADERS.length).setValues([rowValues]);
+  } else {
+    sheet.appendRow(rowValues);
+  }
+}
+
+// Locked, client-facing single-override write. Re-stamps
+// last_modified on every type except last_modified itself. Still
+// locked — two writes to the exact same student+type at the exact
+// same instant could otherwise both see "no existing row" and both
+// append, leaving a duplicate — but each locked operation is now a
+// single-row find-and-update instead of a full-sheet clear+rewrite,
+// so the lock is held for milliseconds, not however long a whole-
+// sheet operation takes. That's what actually shrinks how long any
+// other user's unrelated write has to wait.
 function setOverrideVault_(studentId, type, value, note, setBy) {
   return _withLock(() => {
     _setOverrideRawVault_(studentId, type, value, note, setBy);
@@ -217,6 +308,13 @@ function setOverrideVault_(studentId, type, value, note, setBy) {
   });
 }
 
+// Clears (does not delete/shift) one override row by position, but
+// only after confirming it still matches the studentId+type the
+// client expects — protects against reverting the wrong row if the
+// sheet shifted between the client loading Recent Changes and
+// clicking revert. Uses clearContent() instead of deleteRow() for the
+// same reason as _deleteMatchingVaultRows_ above — no row shifting,
+// no collision risk with a concurrent write elsewhere in the sheet.
 function revertChangeVault_(studentId, type, rowIndex) {
   return _withLock(() => {
     const sheet = _ensureVaultOverridesSheet_();
@@ -228,12 +326,15 @@ function revertChangeVault_(studentId, type, rowIndex) {
     if (String(check[0]).trim() !== String(studentId).trim() || String(check[1]).trim() !== type) {
       throw new Error('Row has changed since the history was loaded — please refresh.');
     }
-    sheet.deleteRow(rowIndex);
+    sheet.getRange(rowIndex, 1, 1, VAULT_OVERRIDES_NOTES_HEADERS.length).clearContent();
     _clearDashboardCache();
     return { success: true };
   });
 }
 
+// Most recent 10 override rows across ALL students, newest first.
+// Internal bookkeeping types (progress_snapshot, last_modified,
+// merged_into) filtered out — not things staff would "revert."
 function getRecentChangesVault_() {
   try {
     const sheet = _ensureVaultOverridesSheet_();
@@ -308,6 +409,10 @@ function setStudentActive(studentId, isActive, employeeId, role) {
     return { success: true, studentId, active: isActive };
   });
 }
+// Tracks when the roster (Name Mapping active/inactive state) was
+// last touched — surfaced in the UI as a "data current as of" label.
+// Property-based rather than a sheet cell so it doesn't need its own
+// row/column anywhere.
 function _setRosterLastUpdated_(isoString) {
   PropertiesService.getScriptProperties().setProperty('RosterLastUpdated', isoString);
 }
@@ -340,6 +445,10 @@ function getArchivedStudents() {
 // ============================================================
 // ── Notes ────────────────────────────────────────────────────
 // ============================================================
+
+// Appends a single staff note. Unlike most override types, notes are
+// NOT "last write wins" — every call adds a new row rather than
+// replacing one, since a student can have many notes over time.
 function addStudentNote(studentId, noteText, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'add_note');
   studentId = String(studentId || '').trim();
@@ -355,6 +464,9 @@ function addStudentNote(studentId, noteText, setBy, role) {
   });
 }
 
+// Deletes exactly one note by matching studentId + its stored
+// timestamp — searched newest-first since a delete request usually
+// targets a note the staff member just saw at the top of the list.
 function deleteStudentNote(studentId, noteTimestamp, role) {
   _requirePermission(role || ROLES.ADMIN, 'delete_note');
   studentId     = String(studentId     || '').trim();
@@ -369,7 +481,7 @@ function deleteStudentNote(studentId, noteTimestamp, role) {
     for (let i = data.length - 1; i >= 0; i--) {
       if (String(data[i][0] || '').trim() === studentId && String(data[i][1] || '').trim() === 'note') {
         const rowDate = data[i][5] instanceof Date ? data[i][5].toISOString() : String(data[i][5]);
-        if (rowDate === noteTimestamp) { sheet.deleteRow(i + VAULT_DATA_START_ROW); break; }
+        if (rowDate === noteTimestamp) { sheet.getRange(i + VAULT_DATA_START_ROW, 1, 1, 6).clearContent(); break; }
       }
     }
     _clearDashboardCache();
@@ -380,6 +492,10 @@ function deleteStudentNote(studentId, noteTimestamp, role) {
 // ============================================================
 // ── Bulk operations ──────────────────────────────────────────
 // ============================================================
+
+// Same note-append as addStudentNote, but for a whole selected list
+// at once — one batched write instead of one appendRow per student,
+// same read-once/write-once pattern used throughout this file.
 function bulkAddNote(studentIds, noteText, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'add_note');
   studentIds = (studentIds || []).map(id => String(id).trim()).filter(Boolean);
@@ -387,19 +503,43 @@ function bulkAddNote(studentIds, noteText, setBy, role) {
   if (!studentIds.length || !noteText) throw new Error('Student IDs and note text are required.');
 
   return _withLock(() => {
-    const sheet = _ensureVaultOverridesSheet_();
-    const now   = new Date();
-    const noteRows  = studentIds.map(id => [id, 'note',          noteText,             '', setBy || 'staff', now]);
-    const stampRows = studentIds.map(id => [id, 'last_modified', now.toISOString(), '', setBy || '',       now]);
-    const allRows   = [...noteRows, ...stampRows];
-    if (allRows.length) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, allRows.length, 6).setValues(allRows);
+    const sheet   = _ensureVaultOverridesSheet_();
+    const now     = new Date();
+    const idSet   = new Set(studentIds);
+    const lastRow = sheet.getLastRow();
+
+    const lastModifiedRowById = {};
+    if (lastRow >= VAULT_DATA_START_ROW) {
+      const existing = sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues();
+      existing.forEach((row, i) => {
+        const rowId   = String(row[0] || '').trim();
+        const rowType = String(row[1] || '').trim();
+        if (idSet.has(rowId) && rowType === 'last_modified') lastModifiedRowById[rowId] = i + VAULT_DATA_START_ROW;
+      });
     }
+
+    const noteRows = studentIds.map(id => [id, 'note', noteText, '', setBy || 'staff', now]);
+    sheet.getRange(sheet.getLastRow() + 1, 1, noteRows.length, 6).setValues(noteRows);
+
+    studentIds.forEach(id => {
+      const rowValues = [id, 'last_modified', now.toISOString(), '', setBy || '', now];
+      const existingRow = lastModifiedRowById[id];
+      if (existingRow) {
+        sheet.getRange(existingRow, 1, 1, 6).setValues([rowValues]);
+      } else {
+        sheet.appendRow(rowValues);
+      }
+    });
+
     _clearDashboardCache();
     return { success: true, count: studentIds.length };
   });
 }
 
+// Sets academic_status and/or trade_status for a whole selected list
+// at once — reads the sheet once, clears any existing status rows
+// for just these students/types, then writes everything (new status
+// rows + last_modified stamps) in a single range write.
 function bulkSetStatus(studentIds, academicStatus, tradeStatus, setBy, role) {
   _requirePermission(role || ROLES.ADMIN, 'bulk_edit');
   studentIds = (studentIds || []).map(id => String(id).trim()).filter(Boolean);
@@ -415,26 +555,45 @@ function bulkSetStatus(studentIds, academicStatus, tradeStatus, setBy, role) {
     const existing = lastRow >= VAULT_DATA_START_ROW
       ? sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 2).getValues()
       : [];
-    const toDelete = [];
+
+    // Clear (not delete/shift) any existing academic_status/
+    // trade_status rows for these students, and note which students
+    // already have a last_modified row (and where) so it can be
+    // updated in place below instead of always appending a new one.
+    const toClear = [];
+    const lastModifiedRowById = {};
     existing.forEach((row, i) => {
       const rowId   = String(row[0] || '').trim();
       const rowType = String(row[1] || '').trim();
       if (!idSet.has(rowId)) return;
-      if (academicStatus && rowType === 'academic_status') toDelete.push(i + VAULT_DATA_START_ROW);
-      if (tradeStatus    && rowType === 'trade_status')    toDelete.push(i + VAULT_DATA_START_ROW);
+      if (academicStatus && rowType === 'academic_status') toClear.push(i + VAULT_DATA_START_ROW);
+      if (tradeStatus    && rowType === 'trade_status')    toClear.push(i + VAULT_DATA_START_ROW);
+      if (rowType === 'last_modified') lastModifiedRowById[rowId] = i + VAULT_DATA_START_ROW;
     });
-    toDelete.sort((a, b) => b - a).forEach(row => sheet.deleteRow(row));
+    toClear.forEach(row => sheet.getRange(row, 1, 1, 6).clearContent());
 
-    const newRows   = [];
-    const stampRows = studentIds.map(id => [id, 'last_modified', now.toISOString(), '', setBy || '', now]);
+    const newRows = [];
     studentIds.forEach(id => {
       if (academicStatus) newRows.push([id, 'academic_status', academicStatus, '', setBy || 'staff', now]);
       if (tradeStatus)    newRows.push([id, 'trade_status',    tradeStatus,    '', setBy || 'staff', now]);
     });
-    const allRows = [...newRows, ...stampRows];
-    if (allRows.length) {
-      sheet.getRange(sheet.getLastRow() + 1, 1, allRows.length, 6).setValues(allRows);
+    if (newRows.length) {
+      sheet.getRange(sheet.getLastRow() + 1, 1, newRows.length, 6).setValues(newRows);
     }
+
+    // last_modified: update in place for students who already have a
+    // row, append for the rest — avoids growing the sheet by one row
+    // per student on every single bulk action, forever.
+    studentIds.forEach(id => {
+      const rowValues = [id, 'last_modified', now.toISOString(), '', setBy || '', now];
+      const existingRow = lastModifiedRowById[id];
+      if (existingRow) {
+        sheet.getRange(existingRow, 1, 1, 6).setValues([rowValues]);
+      } else {
+        sheet.appendRow(rowValues);
+      }
+    });
+
     _clearDashboardCache();
     return { success: true, count: studentIds.length };
   });
@@ -453,18 +612,44 @@ function mergeStudents(sourceId, targetId, setBy, role) {
   return _withLock(() => {
     const mapSheet = getVaultSheet_(VAULT_SHEET_NAME_MAPPING);
 
-    // Re-point all mapping rows from source to target
-    const lastRow  = mapSheet.getLastRow();
-    let repointed  = 0;
+    // Confirm both students actually exist in Name Mapping before doing
+    // anything — a merge into/from a nonexistent ID would otherwise fail
+    // silently downstream (source's profile would just never resolve,
+    // and _applyMerges would quietly no-op).
+    const lastRow = mapSheet.getLastRow();
+    let sourceExists = false, targetExists = false;
     if (lastRow >= VAULT_DATA_START_ROW) {
       const ids = mapSheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, 1).getValues();
       for (let i = 0; i < ids.length; i++) {
-        if (String(ids[i][0] || '').trim() === sourceId) {
-          mapSheet.getRange(i + VAULT_DATA_START_ROW, 1).setValue(targetId);
-          repointed++;
-        }
+        const id = String(ids[i][0] || '').trim();
+        if (id === sourceId) sourceExists = true;
+        if (id === targetId) targetExists = true;
       }
     }
+    if (!sourceExists) throw new Error('Source student not found in Name Mapping.');
+    if (!targetExists) throw new Error('Target student not found in Name Mapping.');
+
+    // Deliberately NOT repointing the source's Name Mapping row to
+    // targetId. The merge itself happens one layer up, in
+    // _applyMerges (Profiles.gs): it looks up the source profile by
+    // its OWN id, folds any academic/trade/time/intervention data the
+    // target is missing into the target profile, then filters the
+    // source's card out of the final list using the 'merged_into'
+    // override set below. All of that depends on the source's Name
+    // Mapping row still carrying its real, original studentId — a
+    // previous version of this function overwrote that ID to match
+    // targetId instead, which left two Name Mapping rows sharing the
+    // same ID (a duplicate dashboard card) AND broke _applyMerges's
+    // own lookup (byId[sourceId] came back empty, since nothing had
+    // that id anymore), so the carry-over logic silently never ran.
+    //
+    // Note: this only merges the two students' DASHBOARD profiles.
+    // It does not repoint sourceId -> targetId inside Productivity
+    // Data, Trade Overview, Transcript Rows, Academic Snapshots, etc.
+    // If a future need arises to fully consolidate a student's raw
+    // history under one ID (not just their dashboard card), that's a
+    // separate, larger change touching every Vault sheet keyed by
+    // studentId — flag it separately rather than folding it in here.
 
     // Carry non-duplicate overrides from source to target
     const ovSheet   = _ensureVaultOverridesSheet_();
@@ -484,7 +669,7 @@ function mergeStudents(sourceId, targetId, setBy, role) {
         if (!targetTypes.has(rowType)) { toAppend.push([targetId, rowType, row[2], row[3], row[4], row[5]]); carried++; }
         toDeleteRows.push(i + VAULT_DATA_START_ROW);
       });
-      toDeleteRows.sort((a, b) => b - a).forEach(r => ovSheet.deleteRow(r));
+      toDeleteRows.forEach(r => ovSheet.getRange(r, 1, 1, 6).clearContent());
       if (toAppend.length) {
         ovSheet.getRange(ovSheet.getLastRow() + 1, 1, toAppend.length, 6).setValues(toAppend);
       }
@@ -493,7 +678,7 @@ function mergeStudents(sourceId, targetId, setBy, role) {
     _setOverrideRawVault_(sourceId, 'merged_into', targetId, 'Merged via dashboard', setBy || 'staff');
     _touchLastModifiedVault_(targetId, setBy || 'staff');
     _clearDashboardCache();
-    return { success: true, repointedMappingRows: repointed, carriedOverrides: carried };
+    return { success: true, carriedOverrides: carried };
   });
 }
 
@@ -501,10 +686,20 @@ function mergeStudents(sourceId, targetId, setBy, role) {
 // ── Progress snapshots ───────────────────────────────────────
 // ============================================================
 // Writes weekly risk/progress snapshots used for stale detection and trend arrows
+
+// Thin wrapper — see getWIRData above for why these one-line
+// pass-throughs exist (single storage path, kept for call-site
+// stability if a second path is ever added).
 function writeProgressSnapshots(profiles, hubSS) {
   return writeProgressSnapshotsVault_(profiles);
 }
 
+// Runs after every dashboard rebuild. For each active student, keeps
+// at most one retained snapshot (the most recent) and skips writing
+// a new one if the last snapshot is under 6 days old — this is what
+// "weekly" snapshot cadence actually means here, there's no time-based
+// trigger enforcing it. Snapshots older than SNAPSHOT_PRUNE_DAYS get
+// deleted outright so this sheet doesn't grow unbounded.
 function writeProgressSnapshotsVault_(profiles) {
   if (!profiles || !profiles.length) return;
 
@@ -546,7 +741,7 @@ function writeProgressSnapshotsVault_(profiles) {
     while (i < sorted.length) {
       let j = i;
       while (j + 1 < sorted.length && sorted[j] - sorted[j + 1] === 1) j++;
-      sheet.deleteRows(sorted[j], j - i + 1);
+      sheet.getRange(sorted[j], 1, j - i + 1, 6).clearContent();
       i = j + 1;
     }
   }
@@ -588,16 +783,7 @@ function _computeScheduleDerived_(weekLabel, schedule) {
   const todayKey = JS_DAY_MAP[jsDay] || null;
   const isWeekend = !todayKey;
 
-  let expectedWeekHours = 0;
-  Object.entries(VALID_PERIODS).forEach(([day, validPeriods]) => {
-    validPeriods.forEach(periodNum => {
-      const entry = (schedule['Period ' + periodNum] || {})[day];
-      if (!entry) return;
-      if (ACADEMIC_NAMES.some(n => (entry.class || '').toLowerCase().includes(n.toLowerCase()))) {
-        expectedWeekHours++;
-      }
-    });
-  });
+  let expectedWeekHours = _countAcademicPeriodsInSchedule_(schedule);
 
   let todaySchedule      = null;
   let expectedTodayHours = null;
@@ -621,6 +807,8 @@ function _computeScheduleDerived_(weekLabel, schedule) {
   };
 }
 
+// Thin wrapper — same single-storage-path pattern as getWIRData/
+// writeProgressSnapshots above.
 function getStudentSchedule(studentId) {
   return getStudentScheduleFromVault_(studentId);
 }
@@ -664,7 +852,38 @@ function getStudentScheduleFromVault_(studentId) {
   }
 }
 
-function saveWeeklySchedule(base64Data, role) {
+// One Sheets API call for every sheet instead of one
+// getDataRange().getValues() call per sheet.
+// - Master export = 150+ tabs = 150+ round-trips without this
+// - REQUIRES "Sheets API" Advanced Service enabled (Services (+) ->
+//   Sheets API)
+// - Returns array of 2D value arrays, same order as sheetNames, same
+//   shape as .getValues() (formatted-string cells — parsers here
+//   already treat cells as strings)
+function _batchReadAllSheetValues_(spreadsheetId, sheetNames) {
+  const response = Sheets.Spreadsheets.get(spreadsheetId, {
+    ranges: sheetNames,
+    fields: 'sheets(data(rowData(values(formattedValue))))',
+  });
+
+  return (response.sheets || []).map(sheet => {
+    const rowData = (sheet.data && sheet.data[0] && sheet.data[0].rowData) || [];
+    return rowData.map(row =>
+      (row.values || []).map(cell => cell.formattedValue || '')
+    );
+  });
+}
+
+// Entry point for the schedule upload modal.
+// - Handles both formats: "master" export (one tab/student, >5
+//   sheets) and single-sheet export (one row/student)
+// - Converts uploaded .xlsx to a temp Google Sheet first — Apps
+//   Script can't parse .xlsx directly — then deletes both the
+//   upload and the converted copy once parsed
+// - weekLabelKeyOverride forces a specific Monday (backfill) instead
+//   of trusting the file's embedded "As Of" date — see
+//   isCurrentWeekUpload in _writeWeeklyScheduleToVault_
+function saveWeeklySchedule(base64Data, role, weekLabelKeyOverride) {
   _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
   try {
     const decoded     = Utilities.base64Decode(base64Data);
@@ -688,14 +907,30 @@ function saveWeeklySchedule(base64Data, role) {
     const VALID_PERIODS = SCHEDULE_VALID_PERIODS;
 
     let weekLabel = 'This Week';
+    let weekLabelKey = _currentWeekMondayLabel_(); // canonical yyyy-MM-dd Monday key for Weekly Hours History — falls back to the actual current week if the file's date can't be parsed
+
+    // A week explicitly picked in the upload UI always wins over
+    // whatever the file's own "As Of" text parses to — the whole
+    // point of the picker is deliberate control (backfilling a past
+    // week, or fixing one the file's embedded date got wrong).
+    const pickedMonday = weekLabelKeyOverride ? _parseLocalDate(weekLabelKeyOverride) : null;
+    if (pickedMonday) {
+      weekLabelKey = weekLabelKeyOverride;
+      const fri = new Date(pickedMonday); fri.setDate(pickedMonday.getDate() + 4);
+      const fmt = dt => (dt.getMonth() + 1) + '/' + dt.getDate();
+      weekLabel = fmt(pickedMonday) + ' – ' + fmt(fri) + '/' + fri.getFullYear();
+    }
     let students  = [];
     let skipped   = [];
 
     if (isMaster) {
       const DAY_COLS = { M:3, T:5, W:6, TH:7, F:8 };
-      allSheets.forEach(sheet => {
-        const values = sheet.getDataRange().getValues();
-        if (weekLabel === 'This Week') {
+      const sheetNames = allSheets.map(sh => sh.getName());
+      const allSheetValues = _batchReadAllSheetValues_(convertedId, sheetNames);
+
+      allSheets.forEach((sheet, sheetIdx) => {
+        const values = allSheetValues[sheetIdx] || [];
+        if (!pickedMonday && weekLabel === 'This Week') {
           for (let i = 0; i < Math.min(5, values.length); i++) {
             const match = String(values[i][1] || '').match(/As Of:\s+\w+,\s+(\w+\s+\d+,\s+\d+)/);
             if (match) {
@@ -706,6 +941,7 @@ function saveWeeklySchedule(base64Data, role) {
                 const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
                 const fmt = dt => (dt.getMonth() + 1) + '/' + dt.getDate();
                 weekLabel = fmt(mon) + ' – ' + fmt(fri) + '/' + fri.getFullYear();
+                weekLabelKey = _toDateStr(mon);
               }
               break;
             }
@@ -740,7 +976,7 @@ function saveWeeklySchedule(base64Data, role) {
     } else {
       const sheet  = allSheets[0];
       const values = sheet.getDataRange().getValues();
-      const match  = String(values[0][2] || '').match(/As Of:\s+\w+,\s+(\w+\s+\d+,\s+\d+)/);
+      const match  = !pickedMonday ? String(values[0][2] || '').match(/As Of:\s+\w+,\s+(\w+\s+\d+,\s+\d+)/) : null;
       if (match) {
         const d = new Date(match[1]);
         if (!isNaN(d.getTime())) {
@@ -749,6 +985,7 @@ function saveWeeklySchedule(base64Data, role) {
           const fri = new Date(mon); fri.setDate(mon.getDate() + 4);
           const fmt = dt => (dt.getMonth() + 1) + '/' + dt.getDate();
           weekLabel = fmt(mon) + ' – ' + fmt(fri) + '/' + fri.getFullYear();
+          weekLabelKey = _toDateStr(mon);
         }
       }
       const headerRow  = values[3];
@@ -785,26 +1022,65 @@ function saveWeeklySchedule(base64Data, role) {
     try { DriveApp.getFileById(convertedId).setTrashed(true); } catch(e2) {}
     if (!students.length) return { error: 'No students found in the file.' };
 
-    return _writeWeeklyScheduleToVault_(students, weekLabel, skipped);
+    return _writeWeeklyScheduleToVault_(students, weekLabel, skipped, weekLabelKey);
   } catch(e) {
     Logger.log('saveWeeklySchedule error: ' + e.message);
     return { error: 'Failed to save schedule: ' + e.message };
   }
 }
 
+// Bulk wrapper for backfilling many historical weeks at once — runs
+// saveWeeklySchedule once per file in filesArray, instead of the
+// client calling it N times by hand. Each entry needs its own
+// weekLabelKeyOverride: backlog uploads require deliberate week
+// control (see the comment on weekLabelKeyOverride above) since
+// there's no reliable way to guess which historical week an
+// arbitrary file belongs to just from its contents. Each file is
+// processed through the exact same, already-proven single-file path
+// — this doesn't change what gets written or how, just automates
+// running it multiple times.
+function saveWeeklySchedulesBulk(filesArray, role) {
+  _requirePermission(role || ROLES.ADMIN, 'manage_overrides');
+  if (!Array.isArray(filesArray) || !filesArray.length) {
+    return { success: false, error: 'No files provided.', results: [] };
+  }
+
+  const results = filesArray.map((f, i) => {
+    if (!f || !f.base64Data || !f.weekLabelKeyOverride) {
+      return { index: i, success: false, weekLabelKeyOverride: f && f.weekLabelKeyOverride || null, error: 'Missing file data or week for this entry.' };
+    }
+    try {
+      const result = saveWeeklySchedule(f.base64Data, role, f.weekLabelKeyOverride);
+      if (result && result.error) {
+        return { index: i, success: false, weekLabelKeyOverride: f.weekLabelKeyOverride, error: result.error };
+      }
+      return { index: i, success: true, weekLabelKeyOverride: f.weekLabelKeyOverride, result };
+    } catch (e) {
+      return { index: i, success: false, weekLabelKeyOverride: f.weekLabelKeyOverride, error: e.message };
+    }
+  });
+
+  const succeeded = results.filter(r => r.success).length;
+  return {
+    success: succeeded > 0,
+    total:   filesArray.length,
+    succeeded,
+    failed:  filesArray.length - succeeded,
+    results,
+  };
+}
+
 // ── Weekly Schedule write — VAULT PATH ──────────────────────────
-// Auto-registers any student appearing in a schedule upload who
-// isn't already in Name Mapping — previously only Roster Upload
-// could add a new student; a student who shows up on a schedule
-// before ever appearing on a roster export would otherwise be
-// silently dropped (their Weekly Schedule row would get written,
-// but nothing else in the app would recognize them, since Name
-// Mapping is the join key for almost everything). New rows are
-// added with active:true and blank tradeComplete/academicComplete/
-// examProgram — the same "unknown yet, fill in later" state
-// Roster Upload uses for a brand-new student. This never touches
-// or overwrites an existing Name Mapping row for a student who's
-// already there.
+// Auto-registers any student on a schedule upload who isn't in Name
+// Mapping yet.
+// - Previously only Roster Upload could add students — a student on
+//   a schedule before ever appearing on a roster would get their
+//   Weekly Schedule row written but stay invisible everywhere else,
+//   since Name Mapping is the join key for nearly everything
+// - New rows: active:true, blank tradeComplete/academicComplete/
+//   examProgram — same "unknown yet, fill in later" state as a
+//   brand-new Roster Upload student
+// - Never touches an existing Name Mapping row
 function _registerNewStudentsFromSchedule_(students) {
   const sheet = getVaultSheet_(VAULT_SHEET_NAME_MAPPING);
   const rows  = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
@@ -827,7 +1103,10 @@ function _registerNewStudentsFromSchedule_(students) {
   }
 }
 
-function _writeWeeklyScheduleToVault_(students, weekLabel, skipped) {
+// Writes both Weekly Schedule (current/last slots) and Weekly Hours
+// History from one upload. Locked — touches Name Mapping too, via
+// _registerNewStudentsFromSchedule_ below.
+function _writeWeeklyScheduleToVault_(students, weekLabel, skipped, weekLabelKey) {
   return _withLock(() => {
     _registerNewStudentsFromSchedule_(students);
 
@@ -854,38 +1133,83 @@ function _writeWeeklyScheduleToVault_(students, weekLabel, skipped) {
     const rowsToDelete  = []; // old 'last' rows being displaced
     const rowsToAppend  = []; // brand-new 'current' rows for this upload
 
-    students.forEach(s => {
-      const sid   = String(s.id).trim();
-      const entry = byStudent[sid];
-      const prevCurrent = entry && entry.current;
-      const prevLast    = entry && entry.last;
+    // Added/dropped diff vs. whoever was 'current' before this upload
+    // — computed here, before byStudent's 'current' entries get
+    // superseded below. Only meaningful for a genuine current-week
+    // upload (isCurrentWeekUpload, computed just below) — a backlog
+    // upload doesn't touch 'current' at all, so there's nothing to
+    // diff against.
+    const previousCurrentIds = new Set(
+      Object.keys(byStudent).filter(sid => byStudent[sid].current)
+    );
+    const newIds = new Set(students.map(s => String(s.id).trim()));
+    const droppedIds = [...previousCurrentIds].filter(sid => !newIds.has(sid));
+    const addedStudents = students.filter(s => !previousCurrentIds.has(String(s.id).trim()))
+      .map(s => ({ id: s.id, name: s.name }));
 
-      if (prevLast) rowsToDelete.push(prevLast.rowNum);
+    // Backlog upload (deliberately-picked PAST week) must never touch
+    // 'current'/'last' — those feed Display/instructor filter, which
+    // need the TRUE current schedule always. Weekly Hours History
+    // (below) is the only thing a backlog upload should populate.
+    //
+    // NOT an exact-match check against _currentWeekMondayLabel_() —
+    // too strict, caused a real bug: any small mismatch (timezone
+    // edge cases, file date parsing slightly off) silently skipped
+    // the Weekly Schedule write while Hours History still updated —
+    // "one system fresh, the other not." Now: backlog only if picked
+    // week is unambiguously OLDER than today's real current week;
+    // current week or future still updates normally.
+    const isCurrentWeekUpload = !weekLabelKey || weekLabelKey >= _currentWeekMondayLabel_();
 
-      if (prevCurrent) {
-        const demoted = prevCurrent.values.slice();
-        demoted[2] = 'last'; // slot column
-        rowsToRewrite.push({ rowNum: prevCurrent.rowNum, values: demoted });
+    if (isCurrentWeekUpload) {
+      students.forEach(s => {
+        const sid   = String(s.id).trim();
+        const entry = byStudent[sid];
+        const prevCurrent = entry && entry.current;
+        const prevLast    = entry && entry.last;
+
+        if (prevLast) rowsToDelete.push(prevLast.rowNum);
+
+        if (prevCurrent) {
+          const demoted = prevCurrent.values.slice();
+          demoted[2] = 'last'; // slot column
+          rowsToRewrite.push({ rowNum: prevCurrent.rowNum, values: demoted });
+        }
+
+        rowsToAppend.push([sid, weekLabel, 'current', JSON.stringify(s.schedule), now]);
+      });
+
+      // 1. Rewrite demoted rows in place — no row-count change.
+      rowsToRewrite.forEach(({ rowNum, values }) => {
+        sheet.getRange(rowNum, 1, 1, numCols).setValues([values]);
+      });
+
+      // 2. Clear displaced 'last' rows in place (not delete/shift).
+      rowsToDelete.forEach(rowNum => sheet.getRange(rowNum, 1, 1, numCols).clearContent());
+
+      // 3. Append new 'current' rows.
+      if (rowsToAppend.length) {
+        const startRow = sheet.getLastRow() + 1;
+        sheet.getRange(startRow, 1, rowsToAppend.length, numCols).setValues(rowsToAppend);
+        // Guard against Sheets auto-converting studentId/weekLabel-looking
+        // strings to numbers/dates — same fix already applied in WIR Reports.
+        sheet.getRange(startRow, 1, rowsToAppend.length, 2).setNumberFormat('@');
       }
+    }
 
-      rowsToAppend.push([sid, weekLabel, 'current', JSON.stringify(s.schedule), now]);
-    });
-
-    // 1. Rewrite demoted rows in place — no row-count change.
-    rowsToRewrite.forEach(({ rowNum, values }) => {
-      sheet.getRange(rowNum, 1, 1, numCols).setValues([values]);
-    });
-
-    // 2. Delete displaced 'last' rows bottom-up.
-    rowsToDelete.sort((a, b) => b - a).forEach(rowNum => sheet.deleteRow(rowNum));
-
-    // 3. Append new 'current' rows.
-    if (rowsToAppend.length) {
-      const startRow = sheet.getLastRow() + 1;
-      sheet.getRange(startRow, 1, rowsToAppend.length, numCols).setValues(rowsToAppend);
-      // Guard against Sheets auto-converting studentId/weekLabel-looking
-      // strings to numbers/dates — same fix already applied in WIR Reports.
-      sheet.getRange(startRow, 1, rowsToAppend.length, 2).setNumberFormat('@');
+    // Weekly Hours History — separate pacing-only sheet, written
+    // REGARDLESS of isCurrentWeekUpload (the whole point of a backlog
+    // upload).
+    // - Uses each student's PREVIOUS 'current' schedule (still in
+    //   byStudent, untouched if this is backlog) to union same-week
+    //   re-uploads (Wed/Fri changes) instead of overwriting earlier
+    //   hours. Genuine backlog weeks: 'current' belongs to a
+    //   different week, so no union happens — correct either way.
+    // - Batched like the write above: one read, compute in memory,
+    //   one write. ~165 students = seconds not minutes — same
+    //   N-reads mistake the WIR engine was rebuilt to get away from.
+    if (weekLabelKey) {
+      _writeWeeklyHoursHistoryBatch_(students, weekLabel, weekLabelKey, byStudent);
     }
 
     const schedCache = CacheService.getScriptCache();
@@ -893,13 +1217,124 @@ function _writeWeeklyScheduleToVault_(students, weekLabel, skipped) {
     const cacheKeys = students.map(s => 'schedule_' + s.id);
     for (let i = 0; i < cacheKeys.length; i += 100) schedCache.removeAll(cacheKeys.slice(i, i + 100));
 
-    return { success: true, weekLabel, studentCount: students.length, skipped, skippedCount: skipped.length };
+    let droppedStudents = [];
+    if (isCurrentWeekUpload && droppedIds.length) {
+      const mappingRows = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
+      const nameById = {};
+      mappingRows.forEach(r => { nameById[String(r.studentId || '').trim()] = r.masterName || ''; });
+      droppedStudents = droppedIds.map(sid => ({ id: sid, name: nameById[sid] || '' }));
+    }
+
+    return {
+      success: true, weekLabel, studentCount: students.length, skipped, skippedCount: skipped.length,
+      added:   isCurrentWeekUpload ? addedStudents   : [],
+      dropped: isCurrentWeekUpload ? droppedStudents : [],
+    };
   });
+}
+
+// Guards against a corrupted/hand-edited scheduleJson cell breaking
+// the whole batch write — returns null on parse failure instead of
+// throwing, so one bad row doesn't take down everyone else's schedule
+// history write in the same run.
+function _safeParseScheduleJson_(raw) {
+  try { return JSON.parse(String(raw || '{}')); } catch (e) { return null; }
+}
+
+// Batched Weekly Hours History write for an entire upload — reads
+// the sheet exactly once, computes every student's new/updated row
+// in memory, then writes/deletes in as few sheet API calls as
+// possible. Replaces what was previously a read+write per student.
+function _writeWeeklyHoursHistoryBatch_(students, weekLabel, weekLabelKey, scheduleByStudent) {
+  const sheet   = getVaultSheet_(VAULT_SHEET_WEEKLY_HOURS_HISTORY);
+  const lastRow = sheet.getLastRow();
+  const numCols = VAULT_WEEKLY_HOURS_HISTORY_HEADERS.length;
+
+  const existing = lastRow >= VAULT_DATA_START_ROW
+    ? sheet.getRange(VAULT_DATA_START_ROW, 1, lastRow - VAULT_DATA_START_ROW + 1, numCols).getValues()
+    : [];
+
+  // Index existing rows by studentId -> array of { rowNum, weekLabelKey }
+  const byStudent = {};
+  existing.forEach((row, i) => {
+    const sid = String(row[0] || '').trim();
+    if (!sid) return;
+    if (!byStudent[sid]) byStudent[sid] = [];
+    byStudent[sid].push({ rowNum: VAULT_DATA_START_ROW + i, weekLabelKey: String(row[1] || '').trim() });
+  });
+
+  const now = new Date().toISOString();
+  const rowsToRewrite = []; // { rowNum, values } — updating this week's row in place
+  const rowsToAppend  = []; // brand-new week row for a student with no existing row for it
+
+  students.forEach(s => {
+    const sid = String(s.id).trim();
+    const entry = scheduleByStudent[sid];
+    const prevCurrentSchedule = (entry && entry.current) ? _safeParseScheduleJson_(entry.current.values[3]) : null;
+    const prevCurrentWeekLabel = (entry && entry.current) ? String(entry.current.values[1] || '').trim() : null;
+    const isSameWeekReupload = prevCurrentSchedule && prevCurrentWeekLabel === weekLabel;
+
+    const effectiveSchedule = isSameWeekReupload
+      ? _unionSchedules_(prevCurrentSchedule, s.schedule)
+      : s.schedule;
+    const academicHours = _countAcademicPeriodsInSchedule_(effectiveSchedule);
+    const hasTrade = _scheduleHasTradePeriods_(effectiveSchedule);
+    const newRowValues = [sid, weekLabelKey, academicHours, hasTrade, 'real_upload', now];
+
+    const studentRows = byStudent[sid] || [];
+    const thisWeekRow = studentRows.find(r => r.weekLabelKey === weekLabelKey);
+
+    if (thisWeekRow) {
+      rowsToRewrite.push({ rowNum: thisWeekRow.rowNum, values: newRowValues });
+    } else {
+      rowsToAppend.push(newRowValues);
+    }
+
+    // No pruning here anymore. This sheet used to keep only a
+    // rolling window of each student's most recent few weeks — fine
+    // when it only ever needed to answer "what's assigned this
+    // week," but directly incompatible with also being the source of
+    // full historical scheduled-hours data (charts, backfills). A
+    // routine, completely normal current-week upload confirmed this
+    // in practice: it silently wiped real backfilled history the
+    // moment it ran, because from its perspective those weeks were
+    // simply "old." At roughly 165 students x 52 weeks/year, this
+    // sheet is nowhere near large enough to need automatic deletion
+    // — a few thousand rows a year is not a real size problem for a
+    // Sheet.
+  });
+
+  // 1. Rewrite in place — no row-count change. Re-applies the same
+  //    text-format guard as the append path below — without this,
+  //    a rewrite (not a fresh append) could let Sheets silently
+  //    convert weekLabel into a real Date object instead of keeping
+  //    it as the plain 'yyyy-MM-dd' string every comparison in
+  //    _resolveAssignedHours_ expects. That mismatch is invisible
+  //    just looking at the sheet (still displays as the same date)
+  //    but breaks the exact-string lookup completely.
+  rowsToRewrite.forEach(({ rowNum, values }) => {
+    sheet.getRange(rowNum, 1, 1, numCols).setValues([values]);
+    sheet.getRange(rowNum, 1, 1, 2).setNumberFormat('@');
+  });
+
+  // 2. Append brand-new week rows for students with no row for this
+  //    week yet, all in one range write.
+  if (rowsToAppend.length) {
+    const startRow = sheet.getLastRow() + 1;
+    sheet.getRange(startRow, 1, rowsToAppend.length, numCols).setValues(rowsToAppend);
+    sheet.getRange(startRow, 1, rowsToAppend.length, 2).setNumberFormat('@');
+  }
 }
 
 // ============================================================
 // ── Email digest ─────────────────────────────────────────────
 // ============================================================
+
+// Builds and sends the HTML email digest (high/medium risk tables +
+// summary counts) to a given recipient list. Called both manually
+// from the sidebar and by the Monday-morning trigger below. Recipient
+// list is whatever's passed in — the trigger path resolves that via
+// _getDigestRecipients, a manual send can pass any list the UI collects.
 function sendDigest(recipientList, role) {
   _requirePermission(role || ROLES.ADMIN, 'send_digest');
   const data = getDashboardData();
@@ -987,6 +1422,10 @@ function sendDigest(recipientList, role) {
   return { success: true, sent: recipients.length, highRisk: highRisk.length, mediumRisk: mediumRisk.length };
 }
 
+// Handler function for the Monday 8am trigger installed below.
+// Wrapped in its own try/catch since a trigger-fired function has no
+// caller to report errors to — a thrown error here would just show
+// up silently in the Executions log, so this logs explicitly instead.
 function scheduledWeeklyDigest() {
   try {
     const recipients = _getDigestRecipients();
@@ -998,6 +1437,11 @@ function scheduledWeeklyDigest() {
   }
 }
 
+// Reads the DigestRecipients named range in the Vault spreadsheet —
+// edit that named range directly in Sheets to change who gets the
+// Monday digest, no code change needed. Returns [] (not an error) if
+// the named range is missing or empty, so scheduledWeeklyDigest can
+// just skip quietly rather than fail.
 function _getDigestRecipients() {
   try {
     const hubSS = SpreadsheetApp.openById(SS_VAULT);
@@ -1010,6 +1454,10 @@ function _getDigestRecipients() {
   return [];
 }
 
+// One-time setup — run manually from the Apps Script editor once to
+// install the Monday 8am trigger. Safe to re-run: always removes any
+// existing trigger with the same handler first so you can't end up
+// with duplicates silently sending the digest twice.
 function installDigestTrigger() {
   removeDigestTrigger();
   ScriptApp.newTrigger('scheduledWeeklyDigest').timeBased().onWeekDay(ScriptApp.WeekDay.MONDAY).atHour(8).create();
