@@ -49,10 +49,12 @@ function getActiveStudentIdsForWIR() {
 
 // ── Per-student input gather — V2 shape ──────────────────────
 // Produces exactly what wirEvaluateStudent_() in WIREngineV2.gs
-// consumes. weekLabel is accepted for API-compatibility with the
-// old signature (used as the "as-of" week for course pacing/
-// deadline snapshots) but the flag engine itself walks the full
-// weekHistory rather than evaluating a single week in isolation.
+// consumes. weekLabel is used both as the "as-of" week for course
+// pacing/deadline snapshots AND to truncate weekHistory to weeks up
+// through that date — the flag engine's "this week" convention
+// (s.weekHistory[s.weekHistory.length - 1]) depends entirely on that
+// truncation to mean the requested week, not whatever Productivity
+// Data row happens to be most recently on file.
 function gatherWIRInputForStudent(studentId, weekLabel) {
   const id = String(studentId).trim();
 
@@ -63,9 +65,19 @@ function gatherWIRInputForStudent(studentId, weekLabel) {
     String(nameMapRow.academicComplete || '').trim().toUpperCase() === 'COMPLETE';
 
   // ── Week history — hours, credits, HS-week inference, for
-  // every week on file. This is what every streak/pace flag
-  // walks backward through.
-  const weekHistory = wirBuildWeekHistory_(id);
+  // every week on file up through the requested week. This is what
+  // every streak/pace flag walks backward through — truncating here
+  // (not just reading everything on file) is what makes "this week"
+  // in every flag's s.weekHistory[s.weekHistory.length - 1] lookup
+  // actually mean the requested week, rather than whatever
+  // Productivity Data row happens to be most recent (which could be
+  // a partial, still-in-progress current week if its time log had
+  // already been pasted by generation time — a real, confirmed way
+  // this could silently evaluate the wrong week's data).
+  const rawWeekHistory = wirBuildWeekHistory_(id);
+  const weekHistory = weekLabel
+    ? rawWeekHistory.filter(w => w.weekLabel <= weekLabel)
+    : rawWeekHistory;
   const hasAnyData = weekHistory.length > 0;
 
   // ── Course data — remaining courses/credits, next course
