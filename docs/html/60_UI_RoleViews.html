@@ -1,0 +1,271 @@
+<script>
+// ============================================================
+// 60_UI_RoleViews.html — Role-based view configuration
+// ============================================================
+
+
+// ── CARD REGISTRY ───────────────────────────────────────────
+const CARD_DEFS = {
+  total:            { label: 'Total Students',        metric: 'total',       cls: 'accent', sub: 'in the system' },
+  high:             { label: 'Needs Attention',        metric: 'riskCounts.HIGH',   cls: 'high', hero: true },
+  medium:           { label: 'Watch Closely',          metric: 'riskCounts.MEDIUM', cls: 'medium' },
+  low:              { label: 'On Track',               metric: 'riskCounts.LOW',    cls: 'low'    },
+  unknown:          { label: 'No Data Yet',             metric: 'riskCounts.UNKNOWN', cls: 'accent' },
+  tradeComplete:    { label: 'Trade Complete',          metric: '_computed.tradeComplete', cls: 'low', sub: 'finished trades' },
+  hsComplete:       { label: 'High School Complete',    metric: '_computed.hsComplete',    cls: 'low', sub: 'finished high school' },
+  archived:         { label: 'Archived',                metric: '_archivedCount',    cls: 'medium', sub: 'view / restore', clickable: true },
+  wir:              { label: 'Interventions',           metric: 'withIntervention',  cls: 'high', sub: 'on WIR this week' },
+  hasNotes:         { label: 'With Notes',               metric: 'hasNotes',          cls: 'accent', sub: 'have staff notes' },
+  avgAcademicPct:   { label: 'Avg Academic Progress',    metric: 'avgAcademicPct',    cls: 'accent', suffix: '%', sub: 'program average' },
+  avgTradesPct:     { label: 'Avg Trade Progress',       metric: 'avgTradesPct',      cls: 'accent', suffix: '%', sub: 'program average' },
+  tabeProgress: {
+    label: 'TABE Progress',
+    type: 'expandable-tabe',
+    cls: 'accent',
+  },
+};
+
+// ── SIDEBAR SECTION REGISTRY ────────────────────────────────
+const SIDEBAR_SECTION_IDS = [
+  'data_imports', 'generate', 'reports', 'maintenance', 'communicate', 'presentation', 'help',
+];
+
+
+// ── SHARED TEMPLATES ─────────────────────────────────────────
+function _instructorTemplate(autoFilter) {
+  return {
+    noSummaryCards: true,
+    defaultView: 'table',
+    defaultSort: 'academicPct',
+    sidebar: {
+      order: ['reports', 'communicate', 'presentation', 'help'],
+      collapsedByDefault: ['reports'],
+      hidden: ['data_imports', 'generate', 'maintenance'],
+    },
+    autoFilter,
+    autoFilterClearable: true,
+  };
+}
+
+// ── ROLE VIEW CONFIG ─────────────────────────────────────────
+const ROLE_VIEW_CONFIG = {
+  'Admin': {
+    summaryCards: null,   // null = current default card set, untouched
+    defaultView: 'table',
+    defaultSort: 'name',
+    sidebar: { order: SIDEBAR_SECTION_IDS, collapsedByDefault: [], hidden: [] },
+    extraViews: ['productivity'],
+    autoFilter: null,
+  },
+
+  // ── Managers ────────────────────────────────────────────
+  'Program Manager': {
+    summaryCards: ['high', 'total', 'medium', 'low', 'tradeComplete', 'hsComplete', 'wir', 'avgAcademicPct', 'avgTradesPct'],
+    defaultView: 'productivity',
+    defaultSort: 'risk',
+    sidebar: {
+      order: ['communicate', 'reports', 'generate', 'data_imports', 'maintenance', 'presentation', 'help'],
+      collapsedByDefault: ['data_imports', 'maintenance'],
+      hidden: [],
+    },
+    extraViews: ['productivity'],
+    autoFilter: null,
+    crossReference: null, 
+  },
+
+  'Manager': { // generic — pending eventual Academic/CTT split
+    summaryCards: ['high', 'total', 'medium', 'low', 'tradeComplete', 'hsComplete', 'wir', 'avgAcademicPct', 'avgTradesPct'],
+    defaultView: 'table',
+    defaultSort: 'risk',
+    sidebar: {
+      order: ['reports', 'generate', 'communicate', 'data_imports', 'maintenance', 'presentation', 'help'],
+      collapsedByDefault: ['data_imports', 'maintenance'],
+      hidden: [],
+    },
+    autoFilter: null,
+    crossReference: null,
+  },
+
+  'Academic Manager': {
+    summaryCards: ['high', 'total', 'medium', 'low', 'hsComplete', 'avgAcademicPct', 'wir', 'tabeProgress'],
+    tabeAutoExpand: true,   // TABE is their #1 watch item — open by default
+    defaultView: 'table',
+    defaultSort: 'risk',
+    sidebar: {
+      order: ['reports', 'communicate', 'generate', 'data_imports', 'maintenance', 'presentation', 'help'],
+      collapsedByDefault: ['data_imports', 'maintenance'],
+      hidden: [],
+      hiddenButtons: ['openTradeUploadModal', 'openTradeSnapshotUpload', 'btnTradePctSummary'],
+    },
+    autoFilter: null,
+    crossReference: 'CTT Manager', // "Viewing: My Dashboard ▾" toggle target
+  },
+
+  'CTT Manager': {
+    summaryCards: ['high', 'total', 'medium', 'low', 'tradeComplete', 'avgTradesPct', 'wir', 'tabeProgress'],
+    tabeAutoExpand: false,  // present, but occasional-glance only — collapsed by default
+    defaultView: 'table',
+    defaultSort: 'risk',
+    sidebar: {
+      order: ['data_imports', 'reports', 'generate', 'communicate', 'maintenance', 'presentation', 'help'],
+      collapsedByDefault: ['maintenance'],
+      hidden: [],
+      // Hide academic-only buttons/sections not relevant here.
+      hiddenButtons: ['openAcademicCreditsUpload', 'btnCreditReport'],
+    },
+    autoFilter: null,
+    crossReference: 'Academic Manager',
+  },
+
+  // ── Counselor ───────────────────────────────────────────
+  'Counselor': {
+    summaryCards: ['high', 'medium', 'low', 'wir', 'avgAcademicPct', 'avgTradesPct'],
+    defaultView: 'table',
+    defaultSort: 'risk',
+    sidebar: {
+      order: ['reports', 'communicate', 'presentation', 'help'],
+      collapsedByDefault: [],
+      hidden: ['data_imports', 'generate', 'maintenance'], // zero permissions land here — hide, don't just collapse
+    },
+    autoFilter: null,
+  },
+  'HSE/HSD1 Instructor': _instructorTemplate({ type: 'hsd', value: 'HSE/HSD1' }),
+  'HSD2 Instructor':     _instructorTemplate({ type: 'hsd', value: 'HSD2' }),
+  'HSD3 Instructor':     _instructorTemplate({ type: 'hsd', value: 'HSD3' }),
+  'TABE Instructor': _instructorTemplate({ type: 'subject', value: ['reading', 'math'] }),
+};
+const NON_TRADE_INSTRUCTOR_ROLES = [
+  'Academic Instructor', 'HSE/HSD1 Instructor', 'HSD2 Instructor',
+  'HSD3 Instructor', 'TABE Instructor',
+];
+const INSTRUCTOR_SUFFIX = ' Instructor';
+function resolveRoleViewConfig(role) {
+  if (ROLE_VIEW_CONFIG[role]) return ROLE_VIEW_CONFIG[role];
+
+  if (role && role.endsWith(INSTRUCTOR_SUFFIX) && !NON_TRADE_INSTRUCTOR_ROLES.includes(role)) {
+    const tradeName = role.slice(0, -INSTRUCTOR_SUFFIX.length);
+    return _instructorTemplate({ type: 'trade', value: tradeName, includeUSN: true });
+  }
+
+  return null; // unknown role — caller should fall back to current default layout
+}
+
+
+// ============================================================
+// applyRoleViewConfig(role)
+// ------------------------------------------------------------
+function applyRoleViewConfig(role) {
+  const config = resolveRoleViewConfig(role);
+  if (!config) return; // unrecognized role — leave current default layout alone
+  _applySidebarLayout(config);
+  _applyExtraViewButtons(config);
+  _applyRoleDefaults(config);
+  _pendingRoleAutoFilter = config.autoFilter || null;
+  _viewingAsRole = role;
+  _renderCrossReferenceToggle(role, config);
+}
+function _renderCrossReferenceToggle(role, config) {
+  const wrap = document.getElementById('crossReferenceToggleWrap');
+  const sel  = document.getElementById('crossReferenceSelect');
+  if (!wrap || !sel) return;
+
+  if (!config.crossReference) {
+    wrap.style.display = 'none';
+    return;
+  }
+
+  wrap.style.display = '';
+  sel.innerHTML = `
+    <option value="${role}">My Dashboard (${role})</option>
+    <option value="${config.crossReference}">${config.crossReference} view</option>
+  `;
+  sel.value = role;
+}
+
+function _applyExtraViewButtons(config) {
+  const extras = config.extraViews || [];
+
+  const prodBtn = document.getElementById('btnProductivityView');
+  if (prodBtn) prodBtn.style.display = extras.includes('productivity') ? '' : 'none';
+
+  if (_currentView === 'productivity' && !extras.includes('productivity') && typeof setView === 'function') {
+    setView('table');
+  }
+}
+function switchDashboardView(viewAsRole) {
+  const config = resolveRoleViewConfig(viewAsRole);
+  if (!config) return;
+
+  _viewingAsRole = viewAsRole;
+
+  _applySidebarLayout(config);
+  _applyExtraViewButtons(config);
+  _forceApplyRoleDefaults(config);
+  if (typeof renderSummaryCards === 'function' && typeof _lastMetrics !== 'undefined') {
+    renderSummaryCards(_lastMetrics || {});
+  }
+  if (typeof applyFilters === 'function') applyFilters();
+  const sel = document.getElementById('crossReferenceSelect');
+  if (sel) sel.value = viewAsRole;
+}
+function _applySidebarLayout(config) {
+  const sb = config.sidebar;
+  if (!sb) return;
+  document.querySelectorAll('.sidebar-body > .sidebar-divider').forEach(el => { el.style.display = 'none'; });
+
+  const orderList = sb.order || SIDEBAR_SECTION_IDS;
+  let visibleIndex = 0;
+
+  SIDEBAR_SECTION_IDS.forEach(id => {
+    const body  = document.getElementById('sec-' + id);
+    if (!body) return;
+    const label = body.previousElementSibling;
+    if (!label || !label.classList.contains('sidebar-section-label')) return;
+
+    const isHidden = (sb.hidden || []).includes(id);
+    if (isHidden) {
+      body.style.display = 'none';
+      label.style.display = 'none';
+      return;
+    }
+
+    label.style.display = '';
+    const pos = orderList.indexOf(id);
+    const orderValue = pos === -1 ? 999 : pos; // unlisted sections fall to the end rather than disappearing
+    label.style.order = orderValue;
+    body.style.order  = orderValue;
+    if (visibleIndex === 0) {
+      label.style.borderTop = 'none';
+      label.style.marginTop = '0';
+      label.style.paddingTop = '';
+    } else {
+      label.style.borderTop = '1px solid var(--border)';
+      label.style.marginTop = '10px';
+      label.style.paddingTop = '10px';
+    }
+    visibleIndex++;
+
+    const shouldCollapse = (sb.collapsedByDefault || []).includes(id);
+    body.style.display = shouldCollapse ? 'none' : '';
+    const chevron = label.querySelector('.sidebar-chevron');
+    if (chevron) chevron.textContent = shouldCollapse ? '▸' : '▾';
+  });
+  (sb.hiddenButtons || []).forEach(fnName => {
+    document.querySelectorAll(`[onclick*="${fnName}"]`).forEach(el => { el.style.display = 'none'; });
+  });
+}
+
+let _roleDefaultsApplied = false;
+function _applyRoleDefaults(config) {
+  if (_roleDefaultsApplied) return;
+  _roleDefaultsApplied = true;
+  _forceApplyRoleDefaults(config);
+}
+function _forceApplyRoleDefaults(config) {
+  if (config.defaultView && typeof setView === 'function') setView(config.defaultView);
+  if (config.defaultSort) {
+    const sortEl = document.getElementById('sortSelect');
+    if (sortEl) sortEl.value = config.defaultSort;
+  }
+}
+</script>
