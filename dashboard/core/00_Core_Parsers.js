@@ -3,6 +3,11 @@
 // ============================================================
 
 // ── TABE ──────────────────────────────────────────────────────
+// Parses the raw TABE export sheet into {studentId: {name, math,
+// reading, ...}}. Row 1 is headers, skipped. A student only makes it
+// into the result if they have at least one real subtest — a row
+// with neither math nor reading data is just noise (student listed
+// but never tested).
 function parseTABESheet(values) {
   if (!values || values.length < 2) return {};
   const result = {};
@@ -26,31 +31,32 @@ function parseTABESheet(values) {
   return result;
 }
 
+// Reads one subtest's block (math or reading) starting at startIdx.
+// Fixed 14-column layout per subtest: attempts, then 3 groups of
+// (date, scale, EFL, EFL level) for previous/current/best, then
+// gain. Column offsets are position-based, not header-matched — if
+// the TABE export's column order ever changes, this breaks silently
+// (reads the wrong field into the wrong slot, not an error).
 function _tabeReadSubtest(row, startIdx) {
   const attempts = parseInt(row[startIdx], 10);
   if (!attempts || isNaN(attempts)) return null;
-
   const prevDate  = _tabeFormatDate(row[startIdx + 1]);
   const prevScale = parseInt(row[startIdx + 2], 10);
   const prevEFL   = parseInt(row[startIdx + 3], 10);
   const prevEFLL  = String(row[startIdx + 4] || '').trim();
-
   const currDate  = _tabeFormatDate(row[startIdx + 5]);
   const currScale = parseInt(row[startIdx + 6], 10);
   const currEFL   = parseInt(row[startIdx + 7], 10);
   const currEFLL  = String(row[startIdx + 8] || '').trim();
-
   const bestDate  = _tabeFormatDate(row[startIdx + 9]);
   const bestScale = parseInt(row[startIdx + 10], 10);
   const bestEFL   = parseInt(row[startIdx + 11], 10);
   const bestEFLL  = String(row[startIdx + 12] || '').trim();
-
   const gainRaw = row[startIdx + 13];
   const gain    = (gainRaw !== '' && gainRaw !== null && gainRaw !== undefined)
     ? parseInt(gainRaw, 10) : null;
 
   if (!currDate || isNaN(currScale)) return null;
-
   return {
     attempts,
     current:  { date: currDate,  scale: currScale,  efl: isNaN(currEFL)  ? null : currEFL,  eflLevel: currEFLL  },
@@ -65,13 +71,15 @@ function _tabeReadSubtest(row, startIdx) {
 // Formats a date value from a TABE sheet cell as M/D/YYYY string
 function _tabeFormatDate(val) {
   if (!val) return '';
-  if (val instanceof Date) {
-    return (val.getMonth() + 1) + '/' + val.getDate() + '/' + val.getFullYear();
-  }
+  if (val instanceof Date) {return (val.getMonth() + 1) + '/' + val.getDate() + '/' + val.getFullYear();}
   return String(val).trim();
 }
 
 // ── Overrides ─────────────────────────────────────────────────
+// Raw row -> object parse for Overrides And Notes. No filtering,
+// normalization, or dedup here — that's the caller's job (e.g.
+// overridesByStudent grouping in ProfilesVault.gs). This just gets
+// the columns into named fields.
 function parseOverridesSheet(values) {
   if (!values || values.length < 2) return [];
   const result = [];
@@ -93,6 +101,10 @@ function parseOverridesSheet(values) {
 }
 
 // ── Schedule — VAULT PATH ───────────────────────────────────────
+// Reads Weekly Schedule into {studentId: academicPeriodCount} —
+// only 'current' slot rows count (see _touchLastModifiedVault_/
+// slot comments in Datafetch.gs re: current vs last). A row with a
+// corrupted scheduleJson cell is skipped, not fatal to the rest.
 function parseVaultScheduleSheet(values) {
   if (!values || values.length < 2) return {};
   const ACADEMIC_NAMES = SCHEDULE_ACADEMIC_NAMES;
