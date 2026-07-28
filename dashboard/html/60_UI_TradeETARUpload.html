@@ -1,5 +1,9 @@
 <!-- ============================================================
-     Trade ETAR Upload Modl
+     Trade ETAR Upload Modal
+     Ports the "TAR Tools" sidebar's batch-upload UX (drag/drop,
+     multi-file, one-at-a-time processing with progress) into the
+     dashboard's modal system. Calls uploadTradeETARData() instead
+     of the legacy per-student-tab writer.
      ============================================================ -->
 
 <div id="tradeUploadModal" class="modal-overlay hidden" onclick="closeTradeUploadModal(event)">
@@ -23,7 +27,7 @@
         <div style="font-size:12px;color:var(--text-muted);">.xlsx, .xls, or .csv — multiple files allowed</div>
       </div>
 
-      <input type="file" id="tradeFileInput" accept=".xlsx,.xls,.csv" multiple style="display:none;">
+      <input type="file" id="tradeFileInput" accept=".xlsx,.xls,.csv" multiple class="hidden">
 
       <div id="tradeFileList" style="display:none;margin-bottom:12px;border:1px solid var(--border);border-radius:7px;background:var(--bg3);overflow:hidden;max-height:130px;overflow-y:auto;"></div>
 
@@ -87,11 +91,13 @@ document.addEventListener('DOMContentLoaded', () => {
   const fileInput = document.getElementById('tradeFileInput');
   const dropZone  = document.getElementById('tradeDropZone');
   if (!fileInput || !dropZone) return;
+
   fileInput.addEventListener('change', () => {
     _tradeUpload.selectedFiles = Array.from(fileInput.files || []);
     _renderTradeSelectedFiles();
     _setTradeStatus(_tradeUpload.selectedFiles.length ? 'Files selected. Ready to upload.' : 'Ready. Choose one or more ETAR files.');
   });
+
   dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = 'var(--accent)'; dropZone.style.background = 'var(--bg4)'; });
   dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = 'var(--border-bright)'; dropZone.style.background = 'var(--bg3)'; });
   dropZone.addEventListener('drop', e => {
@@ -118,7 +124,7 @@ function _setTradeRunning(isRunning) {
   clearBtn.disabled  = isRunning;
   uploadBtn.textContent = isRunning ? 'Processing…' : 'Upload Selected Files';
 }
-     
+
 function _renderTradeSelectedFiles() {
   const list = document.getElementById('tradeFileList');
   if (!_tradeUpload.selectedFiles.length) {
@@ -190,6 +196,9 @@ async function uploadTradeETARFiles() {
   document.getElementById('tradeFileInput').value = '';
   _renderTradeSelectedFiles();
   _setTradeStatus('Batch finished.\nSuccessful: ' + successCount + '\nFailed: ' + failCount + '\n\nReady for the next batch.');
+
+  // Refresh the dashboard's cached data so trade info shows up
+  // without a manual full page reload.
   if (successCount > 0 && typeof refreshData === 'function') refreshData();
 }
 
