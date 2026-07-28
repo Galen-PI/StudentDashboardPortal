@@ -14,6 +14,19 @@ function _computeHSGraduationPredictions(profiles, hsMonthlyData) {
     if (!p.academic || p.academic.type !== 'HS') return;
     const ac         = p.academic;
     const courseData = p.courseData || null;
+    // Second, independent completion check — p.hsComplete depends
+    // entirely on Name Mapping's academicComplete column being
+    // manually set to "Complete", which can lag behind reality (staff
+    // hasn't updated it yet, or the cached dashboard data is briefly
+    // stale). A student whose actual computed coursework already
+    // shows 0 credits remaining or 100% complete is done regardless
+    // of whether that manual flag has caught up — showing them as a
+    // "potential" graduate at that point is just wrong, not a matter
+    // of interpretation.
+    const computedCreditsLeft = ac.credits !== null && ac.credits !== undefined
+      ? ac.credits : courseData ? courseData.remainingCredits : null;
+    if (computedCreditsLeft !== null && computedCreditsLeft <= 0) return;
+    if (ac.percent !== null && ac.percent >= 100) return;
     const graduationDate = ac.graduation ? _parseLocalDate(ac.graduation) : null;
     if (!graduationDate) return;
     if (graduationDate > twoMonthsOut) return;
