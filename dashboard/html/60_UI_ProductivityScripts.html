@@ -1,6 +1,6 @@
 <script>
 // ─────────────────────────────────────────────────────────────
-// PRODUCTIVITY MODAL v2
+// PRODUCTIVITY Scripts
 // Admin/Manager only — whole-group and individual student views
 // ─────────────────────────────────────────────────────────────
 
@@ -111,7 +111,21 @@ function _loadProductivityData() {
       }
       window._tabeProfiles = result.tabeProfiles || [];
       _productivityData = result.productivityData   || [];
-      _cohortSummary    = result.productivityCohort || [];
+      // Undefined normalized to null right here, once, so every
+      // function reading _cohortSummary below is protected — a field
+      // merely missing from an older cached payload (rather than
+      // explicitly null) would otherwise slip past '!== null' checks
+      // scattered across several functions and crash on .toFixed(),
+      // since undefined !== null is true in JS.
+      _cohortSummary = (result.productivityCohort || []).map(w => ({
+        label:           w.label,
+        studentCount:    w.studentCount,
+        avgProductivity: w.avgProductivity === undefined ? null : w.avgProductivity,
+        avgAssigned:     w.avgAssigned     === undefined ? null : w.avgAssigned,
+        avgWorked:       w.avgWorked       === undefined ? null : w.avgWorked,
+        minProductivity: w.minProductivity === undefined ? null : w.minProductivity,
+        maxProductivity: w.maxProductivity === undefined ? null : w.maxProductivity,
+      }));
       _rosterNames      = new Set(result.rosterNames || []);
       _hsMonthlyCohort    = result.hsMonthlyCohort    || []; 
       _tradeMonthlyCohort = result.tradeMonthlyCohort || [];
@@ -143,6 +157,10 @@ function switchProdTab(tab) {
   document.getElementById('prodGainsView').classList.toggle('hidden', tab !== 'gains');
   document.getElementById('prodTabGraduates').classList.toggle('active', tab === 'graduates');
   document.getElementById('prodGraduatesView').classList.toggle('hidden', tab !== 'graduates');
+  document.getElementById('prodTabTradeReport').classList.toggle('active', tab === 'tradeReport');
+  document.getElementById('prodTradeReportView').classList.toggle('hidden', tab !== 'tradeReport');
+  document.getElementById('prodTabGlossary').classList.toggle('active', tab === 'glossary');
+  document.getElementById('prodGlossaryView').classList.toggle('hidden', tab !== 'glossary');
   if (tab === 'gains') {
     requestAnimationFrame(() => _renderGainsView());
   }
@@ -161,6 +179,9 @@ function switchProdTab(tab) {
   }
   if (tab === 'progress') {
     _renderProgressView();
+  }
+  if (tab === 'tradeReport') {
+    requestAnimationFrame(() => _renderTradeReportView());
   }
 }
 
@@ -229,7 +250,7 @@ function _renderCohortView() {
       tip: 'On average, what percentage of scheduled academic time students actually used across all weeks. 70%+ is the target.' },
     { label: 'Best Week',          value: peakWeek ? peakWeek.label : '—',
       tip: 'The week where students used the highest percentage of their scheduled time on average.' },
-    { label: 'Best Week Usage',    value: peakWeek ? peakWeek.avgProductivity.toFixed(1) + '%' : '—',
+    { label: 'Best Week Usage',    value: peakWeek && peakWeek.avgProductivity !== null && peakWeek.avgProductivity !== undefined ? peakWeek.avgProductivity.toFixed(1) + '%' : '—',
       tip: 'The average usage rate during the best week.' },
     { label: 'Students Tracked',   value: totalStudents,
       tip: 'The number of students included in this analysis.' },
@@ -262,11 +283,31 @@ function _renderCohortView() {
       labels,
       datasets: [
         {
+          type:            'bar',
+          label:           'Avg Scheduled Hours',
+          data:            assigned,
+          backgroundColor: _hexToRgba(cc.p.accentMid, 0.35),
+          borderRadius:    2,
+          yAxisID:         'yHours',
+          order:           2,
+        },
+        {
+          type:            'bar',
+          label:           'Avg Hours Worked',
+          data:            worked,
+          backgroundColor: _hexToRgba(cc.p.medium, 0.55),
+          borderRadius:    2,
+          yAxisID:         'yHours',
+          order:           2,
+        },
+        {
+          type:            'line',
           label:           'Avg Time Used %',
           data:            productivity,
-          borderColor:     _hexToRgba(cc.p.low, 0.9),
-          backgroundColor: _hexToRgba(cc.p.low, 0.12),
-          fill:            true,
+          borderColor:     _hexToRgba(cc.p.low, 0.95),
+          backgroundColor: 'transparent',
+          fill:            false,
+          borderWidth:     2.5,
           tension:         0.35,
           yAxisID:         'yProd',
           pointRadius:     5,
@@ -274,25 +315,7 @@ function _renderCohortView() {
           pointBackgroundColor: productivity.map(v =>
             v !== null && v > PROD_ERROR_THRESHOLD ? _hexToRgba(cc.p.warn, 0.9) : _hexToRgba(cc.p.low, 0.9)
           ),
-        },
-        {
-          label:           'Avg Scheduled Hours',
-          data:            assigned,
-          borderColor:     _hexToRgba(cc.p.accentMid, 0.75),
-          backgroundColor: 'transparent',
-          borderDash:      [5, 3],
-          tension:         0.35,
-          yAxisID:         'yHours',
-          pointRadius:     3,
-        },
-        {
-          label:           'Avg Hours Worked',
-          data:            worked,
-          borderColor:     _hexToRgba(cc.p.medium, 0.8),
-          backgroundColor: 'transparent',
-          tension:         0.35,
-          yAxisID:         'yHours',
-          pointRadius:     3,
+          order:           1,
         },
       ]
     },
@@ -307,8 +330,9 @@ function _renderCohortView() {
             label: ctx => {
               const v = ctx.parsed.y;
               if (v === null) return ctx.dataset.label + ': —';
-              const base = ctx.dataset.label + ': ' + (ctx.datasetIndex === 0 ? v.toFixed(1) + '%' : v.toFixed(1) + ' h');
-              return ctx.datasetIndex === 0 && v > PROD_ERROR_THRESHOLD ? base + ' ⚠ possible data error' : base;
+              const isPct = ctx.dataset.yAxisID === 'yProd';
+              const base = ctx.dataset.label + ': ' + (isPct ? v.toFixed(1) + '%' : v.toFixed(1) + ' h');
+              return isPct && v > PROD_ERROR_THRESHOLD ? base + ' ⚠ possible data error' : base;
             }
           }
         }
@@ -345,7 +369,7 @@ function _renderCohortView() {
     const color   = _prodColor(prod);
     const minProd = w.minProductivity;
     const maxProd = w.maxProductivity;
-    const spreadStr = minProd !== null
+    const spreadStr = (minProd !== null && maxProd !== null)
       ? minProd.toFixed(0) + '% – ' + maxProd.toFixed(0) + '%'
       : '—';
     const spreadNote = maxProd !== null && maxProd > PROD_ERROR_THRESHOLD
@@ -353,7 +377,7 @@ function _renderCohortView() {
       : '';
 
     const usageHtml = prod !== null
-      ? `<span style="font-weight:700;color:${color};">${prod.toFixed(1)}%${_errorBadge(prod)}</span>`
+      ? `<span style="display:inline-flex;align-items:center;gap:6px;justify-content:center;"><span style="width:7px;height:7px;border-radius:50%;background:${color};flex-shrink:0;"></span><span style="font-weight:600;color:var(--text);">${prod.toFixed(1)}%</span>${_errorBadge(prod)}</span>`
       : '—';
 
     return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}">
@@ -390,15 +414,51 @@ function _populateStudentDropdown() {
   const sorted = [..._productivityData]
     .filter(s => {
       if (!s.name || !s.name.trim()) return false;
-      // Only show students whose name matches something in the Name Mapping sheet
-      if (!_rosterNames || !_rosterNames.size) return true; // fallback: show all
-      const norm = s.name.toLowerCase().replace(/[^a-z ]/g, '').trim().split(' ').filter(Boolean).sort().join(' ');
-      return _rosterNames.has(norm);
+      // Hide entries where the name fell back to a raw studentId
+      // (getProductivityPayloadFromVault_ does this when a
+      // productivity row's studentId isn't found in Name Mapping) —
+      // a real name always has at least one letter in it, a raw ID
+      // never does. This replaces an exact-match check against a
+      // separately-normalized roster name set, which turned out to
+      // be the only place in this whole view enforcing that match —
+      // the cohort chart/table show every student with real
+      // productivity data with no such check, so a mismatch here
+      // could silently empty the dropdown while the cohort view
+      // looked completely normal.
+      return /[a-zA-Z]/.test(s.name);
     })
     .sort((a, b) => a.name.localeCompare(b.name));
 
   sel.innerHTML = '<option value="">— Select a student —</option>' +
     sorted.map(s => `<option value="${esc(s.name)}">${esc(s.name)}</option>`).join('');
+}
+
+// Marks a week as excluded from percentage/pacing calculations, with
+// a reason (sick, appointment, worked outside scheduled class time,
+// etc.) — the underlying logged data is untouched, this only affects
+// aggregates. Re-fetches the productivity payload afterward so the
+// cohort averages/spread reflect the change immediately.
+function promptProductivityExclusion(studentId, weekLabel) {
+  const reason = (prompt('Reason for excluding ' + weekLabel + ' from calculations (e.g. "Sick", "Appointment", "Worked outside scheduled hours"):') || '').trim();
+  if (!reason) return;
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) { alert(result && result.error ? result.error : 'Failed to exclude this week.'); return; }
+      _loadProductivityData();
+    })
+    .withFailureHandler(function(err) { alert(err && err.message ? err.message : 'Failed to exclude this week.'); })
+    .setProductivityExclusion(studentId, weekLabel, reason, _currentRole);
+}
+
+function clearProductivityExclusion(studentId, weekLabel) {
+  if (!confirm('Re-include ' + weekLabel + ' in percentage/pacing calculations?')) return;
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) { alert(result && result.error ? result.error : 'Failed to re-include this week.'); return; }
+      _loadProductivityData();
+    })
+    .withFailureHandler(function(err) { alert(err && err.message ? err.message : 'Failed to re-include this week.'); })
+    .setProductivityExclusion(studentId, weekLabel, '', _currentRole);
 }
 
 function renderStudentProductivity() {
@@ -543,8 +603,12 @@ function renderStudentProductivity() {
       : diff > 5  ? `<span style="color:var(--low);">+${diff.toFixed(1)}%</span>`
       : diff < -5 ? `<span style="color:var(--high);">${diff.toFixed(1)}%</span>`
       : `<span style="color:var(--text-muted);">About avg</span>`;
+
+    const excludeBtn = w.excluded
+      ? `<button class="btn-quick-edit" style="font-size:10px;padding:2px 6px;" onclick="clearProductivityExclusion('${esc(student.studentId)}', '${esc(w.label)}')" title="Reason: ${esc(w.excludeReason || '')} — click to re-include this week">Excluded ✕</button>`
+      : `<button class="btn-quick-edit" style="font-size:10px;padding:2px 6px;opacity:0.6;" onclick="promptProductivityExclusion('${esc(student.studentId)}', '${esc(w.label)}')" title="Exclude this week from percentage/pacing calculations">Exclude</button>`;
  
-    return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}">
+    return `<tr style="border-bottom:1px solid var(--border);${isError ? 'background:color-mix(in srgb, var(--warn) 4%, transparent);' : ''}${w.excluded ? 'opacity:0.55;' : ''}">
       <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.label)}</td>
       <td style="padding:8px 10px;text-align:center;">${w.assigned !== null ? w.assigned.toFixed(1) + ' h' : '—'}</td>
       <td style="padding:8px 10px;text-align:center;">${w.worked   !== null ? w.worked.toFixed(1)   + ' h' : '—'}</td>
@@ -552,6 +616,7 @@ function renderStudentProductivity() {
         ${prod !== null ? prod.toFixed(1) + '%' : '—'}${_errorBadge(prod)}
       </td>
       <td style="padding:8px 10px;text-align:center;">${diffHtml}</td>
+      <td style="padding:8px 10px;text-align:center;">${excludeBtn}</td>
     </tr>`;
   }).join('');
  
@@ -564,10 +629,10 @@ function renderStudentProductivity() {
   document.getElementById('prodStudentSummary').innerHTML = [
     { label: 'Overall Time Used',  value: student.overallProductivity !== null ? student.overallProductivity.toFixed(1) + '%' : '—',
       tip: 'Across all weeks tracked, what percentage of their total scheduled academic time did this student actually use.' },
-    { label: 'Total Hours Worked', value: student.totalWorked.toFixed(1) + ' h',
-      tip: 'The total number of academic hours this student logged from April through June.' },
-    { label: 'Total Scheduled',    value: student.totalAssigned.toFixed(1) + ' h',
-      tip: 'The total number of academic hours this student was scheduled for from April through June.' },
+    { label: 'Total Hours Worked', value: student.totalWorked !== null && student.totalWorked !== undefined ? student.totalWorked.toFixed(1) + ' h' : '—',
+      tip: 'The total number of academic hours this student logged, added up across every week tracked.' },
+    { label: 'Total Scheduled',    value: student.totalAssigned !== null && student.totalAssigned !== undefined ? student.totalAssigned.toFixed(1) + ' h' : '—',
+      tip: 'The total number of academic hours this student was scheduled for, added up across every week tracked.' },
     { label: 'Weeks Tracked',      value: activeWeeks.length,
       tip: 'How many weeks this student had scheduled hours and is included in the analysis (weeks in Trades are excluded).' },
     { label: 'Suggested Weekly Hours', value: suggestion !== null ? suggestion + ' h' : '—',
@@ -833,7 +898,7 @@ function _renderHSProgressView() {
     return `
       <tr style="border-bottom:1px solid var(--border);">
         <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(m.month)}</td>
-        <td style="padding:8px 10px;text-align:center;">${m.completedCount ?? m.studentCount}</td>
+        <td style="padding:8px 10px;text-align:center;">${m.studentCount}</td>
         <td style="padding:8px 10px;text-align:center;font-weight:700;color:${color};">
           ${avg !== null ? avg.toFixed(1) : '—'}
         </td>
@@ -1140,7 +1205,7 @@ function _renderTABEWeekly() {
 
   // ── HTML ──────────────────────────────────────────────────
   let html = `
-    <div style="font-size:11px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:1px;margin-bottom:14px;">
+    <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:14px;">
       Period: ${periodLabel}
       ${mostRecentDate ? `<span style="margin-left:12px;font-weight:400;">Most recent test: ${(mostRecentDate.getMonth()+1)}/${mostRecentDate.getDate()}/${mostRecentDate.getFullYear()}</span>` : ''}
     </div>
@@ -1157,7 +1222,7 @@ function _renderTABEWeekly() {
         { label: 'Top Read Gain',   value: topReadGain !== null ? '+'+topReadGain : '—',          sub: 'scale points', color: 'var(--low)' },
       ].map(c => `
         <div style="background:var(--bg4);border:1px solid var(--border);border-radius:10px;padding:14px 16px;text-align:center;">
-          <div style="font-size:10px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.5px;margin-bottom:6px;">${c.label}</div>
+          <div style="font-size:11px;font-weight:600;color:var(--text-muted);margin-bottom:6px;">${c.label}</div>
           <div style="font-size:26px;font-weight:800;line-height:1;${c.color ? 'color:'+c.color : 'color:var(--text)'};">${c.value}</div>
           <div style="font-size:11px;color:var(--text-muted);margin-top:4px;">${c.sub}</div>
         </div>`).join('')}
@@ -1693,7 +1758,7 @@ function _buildGraduateCard(g) {
       '</div>'
     : '';
  
-  const uid = 'grad-signals-' + g.id.replace(/\W/g, '');
+  const uid = 'grad-signals-' + String(g.id || g.name || Math.random()).replace(/\W/g, '');
   const signalsList = g.notes && g.notes.length
     ? `<div style="margin-top:10px;">
         <button onclick="
@@ -1748,37 +1813,134 @@ function _buildGraduateCard(g) {
     ${signalsList}
   </div>`;
 }
-function runSyncStudentCourseData() {
-  const btn    = document.getElementById('syncCourseDataBtn');
-  const status = document.getElementById('syncCourseDataStatus');
-  btn.disabled    = true;
-  btn.textContent = '↻ Syncing…';
-  status.textContent = 'Reading student course sheets — this may take 30–60 seconds…';
-  status.style.color = 'var(--text-muted)';
+let _tradeReportData = null;
+let _tradeReportBasis = 'current'; // 'current' | 'projected'
+let _tradeReportThreshold = 80;
+
+function _renderTradeReportView() {
+  if (_tradeReportData) {
+    _renderTradeReportList(_tradeReportData);
+    return;
+  }
+  const skeleton = `<div style="display:flex;flex-direction:column;gap:10px;">
+    ${Array(3).fill(0).map(() => `<div class="skeleton-cell" style="height:64px;border-radius:8px;"></div>`).join('')}
+  </div>`;
+  document.getElementById('prodTradeReportBody').innerHTML = skeleton;
   google.script.run
     .withSuccessHandler(function(result) {
-      btn.disabled    = false;
-      btn.textContent = '↻ Sync Course Data';
-      if (result.error) {
-        status.textContent = '✕ ' + result.error;
-        status.style.color = 'var(--high)';
-        return;
-      }
-      status.textContent = '✓ Synced ' + result.synced + ' students in ' + result.elapsed + 's' +
-        (result.skipped ? ' · ' + result.skipped + ' skipped' : '');
-      status.style.color = 'var(--low)';
-      // Clear cached graduates data so the list reloads with fresh course data
-      _graduatesData = null;
-      _renderGraduatesView();
+      _tradeReportData = result;
+      _renderTradeReportList(result);
     })
     .withFailureHandler(function(err) {
-      btn.disabled    = false;
-      btn.textContent = '↻ Sync Course Data';
-      status.textContent = '✕ Failed: ' + (err && err.message ? err.message : 'unknown error');
-      status.style.color = 'var(--high)';
+      document.getElementById('prodTradeReportBody').innerHTML =
+        '<div style="padding:24px;text-align:center;color:var(--high);font-size:13px;">Failed to load: ' +
+        esc(err && err.message ? err.message : 'unknown error') + '</div>';
     })
-    .syncStudentCourseData();
+    .getTradeCompletionReport();
 }
+
+function _setTradeReportBasis(basis) {
+  _tradeReportBasis = basis;
+  document.getElementById('prodTradeBasisCurrent').classList.toggle('active', basis === 'current');
+  document.getElementById('prodTradeBasisProjected').classList.toggle('active', basis === 'projected');
+  if (_tradeReportData) _renderTradeReportList(_tradeReportData);
+}
+
+function _onTradeThresholdChange(val) {
+  _tradeReportThreshold = Number(val);
+  document.getElementById('prodTradeThresholdValue').textContent = val + '%';
+  if (_tradeReportData) _renderTradeReportList(_tradeReportData);
+}
+
+function _renderTradeReportList(data) {
+  const dateEl = document.getElementById('prodTradeReportSnapshotDate');
+  const bodyEl = document.getElementById('prodTradeReportBody');
+  if (data.error) {
+    if (dateEl) dateEl.textContent = '';
+    bodyEl.innerHTML = '<div style="padding:24px;text-align:center;color:var(--high);font-size:13px;">' +
+      esc(data.error) + '</div>';
+    return;
+  }
+
+  const basis = _tradeReportBasis;
+  const threshold = _tradeReportThreshold;
+
+  let rows = data.students || [];
+  if (basis === 'projected') {
+    rows = rows.filter(s => s.projectedPct !== null && s.projectedPct !== undefined);
+  }
+  rows = rows.filter(s => {
+    const val = basis === 'projected' ? s.projectedPct : s.overallPct;
+    return val !== null && val !== undefined && val >= threshold;
+  });
+  rows = rows.slice().sort((a, b) => {
+    const av = basis === 'projected' ? a.projectedPct : a.overallPct;
+    const bv = basis === 'projected' ? b.projectedPct : b.overallPct;
+    return bv - av;
+  });
+
+  if (dateEl) {
+    const basisLabel = basis === 'projected'
+      ? 'Projected to reach ' + threshold + '% by end of ' + esc(data.month) +
+        ' (' + data.daysLeftInMonth + ' days left)'
+      : 'Currently at or above ' + threshold + '%';
+    dateEl.textContent = basisLabel + ' · ' + rows.length + ' result' + (rows.length !== 1 ? 's' : '');
+  }
+
+  if (!rows.length) {
+    const emptyMsg = basis === 'projected'
+      ? 'No students are projected to reach ' + threshold + '% by month end based on their current trend.'
+      : 'No students currently have a trade at or above ' + threshold + '%.';
+    bodyEl.innerHTML = '<div style="padding:32px;text-align:center;background:var(--bg3);' +
+      'border-radius:8px;color:var(--text-muted);font-size:13px;font-style:italic;">' +
+      esc(emptyMsg) + '</div>';
+    return;
+  }
+
+  bodyEl.innerHTML = rows.map(s => _buildTradeReportCard(s, basis)).join('');
+}
+
+function _buildTradeReportCard(s, basis) {
+  const displayPct = basis === 'projected' ? s.projectedPct : s.overallPct;
+  const barColor = displayPct >= 95 ? 'var(--low)' : displayPct >= 85 ? 'var(--low)' : 'var(--medium)';
+  const scoreBar = `<div style="display:flex;align-items:center;gap:8px;margin-top:6px;">
+    <div style="flex:1;height:5px;background:var(--bg4);border-radius:3px;overflow:hidden;position:relative;">
+      <div style="height:100%;width:${Math.min(s.overallPct, 100)}%;background:var(--bg-elevated,var(--border));border-radius:3px;position:absolute;"></div>
+      <div style="height:100%;width:${Math.min(displayPct, 100)}%;background:${barColor};border-radius:3px;position:relative;"></div>
+    </div>
+    <span style="font-size:11px;font-weight:700;color:${barColor};min-width:40px;">${displayPct}%</span>
+  </div>`;
+
+  const metrics = [];
+  metrics.push('<span>Current: ' + s.overallPct + '%</span>');
+  if (s.projectedPct !== null && s.projectedPct !== undefined) {
+    metrics.push('<span>Projected: ' + s.projectedPct + '%</span>');
+  } else {
+    metrics.push('<span>No trend data on file</span>');
+  }
+  if (s.weeklyPctChange !== null && s.weeklyPctChange !== undefined) {
+    metrics.push('<span>' + (s.weeklyPctChange > 0 ? '+' : '') + s.weeklyPctChange + '%/wk</span>');
+  }
+  if (s.status)          metrics.push('<span>' + esc(s.status) + '</span>');
+  if (s.etarProjectedEnd) metrics.push('<span>ETAR end: ' + esc(s.etarProjectedEnd) + '</span>');
+
+  return `<div style="
+    background:var(--bg3);
+    border:1px solid var(--border);
+    border-left:3px solid ${barColor};
+    border-radius:8px;
+    padding:14px 16px;
+    margin-bottom:10px;
+  ">
+    <div style="display:flex;justify-content:space-between;align-items:baseline;">
+      <div style="font-size:13px;font-weight:700;color:var(--text);">${esc(s.name)}</div>
+      <div style="font-size:11px;color:var(--text-muted);">${esc(s.trade)}</div>
+    </div>
+    ${scoreBar}
+    <div style="display:flex;gap:14px;flex-wrap:wrap;margin-top:8px;font-size:11px;color:var(--text-muted);">${metrics.join('')}</div>
+  </div>`;
+}
+
 function debugTABETab() {
   console.log('_tabeProfiles length:', (window._tabeProfiles || []).length);
   console.log('First profile:', JSON.stringify((window._tabeProfiles || [])[0] || null));
