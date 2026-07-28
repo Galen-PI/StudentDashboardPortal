@@ -1,29 +1,6 @@
 // ============================================================
 // BulkPacing.gs — "Assign Student Hours" bulk tool (Vault-only)
 // ------------------------------------------------------------
-// Scans every student's on-file weekly schedule, detects how
-// many academic hours/week they're scheduled for and which
-// bi-weekly rotation (weeks 1&3 vs 2&4) they're currently in,
-// and lets staff batch-apply those as pacing settings.
-//
-// Pacing settings (weekly hours + active-week rotation) now live
-// in their own Vault sheet, VAULT_SHEET_STUDENT_PACING, keyed by
-// studentId — NOT Name Mapping columns O-S, which never existed
-// in Vault's 5-column Name Mapping schema in the first place.
-// Reads/writes here are upsert-not-delete, same principle as
-// every other Vault write in this project.
-// ============================================================
-
-// NOTE: PACING_VALID_PERIODS / PACING_ACADEMIC_NAMES used to be
-// this file's own local copy of the schedule-matching constants
-// (now consolidated in Config.gs as SCHEDULE_VALID_PERIODS /
-// SCHEDULE_ACADEMIC_NAMES). Intentionally NOT aliased here at
-// top level — cross-file .gs load order isn't guaranteed, so a
-// top-level `const X = Y` reaching into another file's top-level
-// const risks a "cannot access before initialization" error if
-// this file happens to load before Config.gs. Referenced directly
-// inside the function body below instead, which is always safe
-// since all files finish loading before any function runs.
 
 // ============================================================
 // SECTION 1 — SCAN ALL STUDENTS
@@ -31,52 +8,31 @@
 
 function scanAllStudentPacing() {
   try {
-    // ── Student list — Vault Name Mapping (5-column schema) ──────
     const nameRows = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
     if (!nameRows.length) return { success: false, error: 'Name Mapping is empty.' };
-
-    // ── Existing pacing settings — dedicated Vault sheet, ID-keyed ──
     const pacingRows = readVaultSheetAsObjects_(VAULT_SHEET_STUDENT_PACING, VAULT_STUDENT_PACING_HEADERS);
     const pacingById = {};
     pacingRows.forEach(row => {
       const id = String(row.studentId || '').trim();
       if (id) pacingById[id] = row;
     });
-
-    // ── Schedule lookup — Vault Weekly Schedule, 'current' slot only ──
     const scheduleByStudentId = _pacingLoadScheduleFromVault_();
-
     const currentRotation = _pacingCurrentRotation_();
-
-    // ── Historical rotation, observed from real Productivity Data ──
-    // Weekly Schedule only ever holds the current week's real data,
-    // so the other 3 rotation-week buckets used to fall back on a
-    // pure calendar assumption (odd weeks vs even weeks) with no way
-    // to check it against reality. Productivity Data already has real
-    // per-week assignedHours history (written by TimeLog.gs every
-    // time a weekly time log is saved) — so instead of guessing, look
-    // at what actually happened for THIS student historically.
     const observedRotationByStudentId = _pacingObservedRotationFromHistory_();
-
     const students = [];
     nameRows.forEach(row => {
       const studentId = String(row.studentId || '').trim();
       if (!studentId) return;
-
       const isActive = row.active === true || String(row.active).toLowerCase() === 'true';
       if (!isActive) return;
-
       const displayName = String(row.masterName || '').trim() || studentId;
-
       const schedule = scheduleByStudentId[studentId] || null;
       const hasSchedule = !!schedule;
       const observedRotation = observedRotationByStudentId[studentId] || null;
-
       const detected = hasSchedule
         ? _pacingDetectFromSchedule_(schedule, observedRotation)
         : { hours: 0, activeWeeks: observedRotation ? Object.assign({}, currentRotation, observedRotation) : currentRotation };
 
-      // Existing saved settings, from Student Pacing Settings
       const existing = pacingById[studentId] || null;
       const existingHoursRaw = existing ? Number(existing.weeklyHours) : NaN;
       const hasExisting = existing != null && isFinite(existingHoursRaw) && existingHoursRaw > 0;
@@ -87,7 +43,6 @@ function scanAllStudentPacing() {
         w3: existing.w3 === true || String(existing.w3).toUpperCase() === 'TRUE',
         w4: existing.w4 === true || String(existing.w4).toUpperCase() === 'TRUE',
       } : { w1: false, w2: false, w3: false, w4: false };
-
       let status;
       if (!hasSchedule) {
         status = 'no_schedule';
@@ -104,7 +59,6 @@ function scanAllStudentPacing() {
       } else {
         status = 'unchanged';
       }
-
       students.push({
         studentId,
         displayName,
@@ -117,11 +71,8 @@ function scanAllStudentPacing() {
         existingActiveWeeks,
       });
     });
-
     students.sort((a, b) => a.displayName.localeCompare(b.displayName));
-
     return { success: true, students, currentRotation, scheduleSource: 'vault' };
-
   } catch (err) {
     Logger.log('scanAllStudentPacing error: ' + err.message);
     return { success: false, error: err.message };
@@ -132,7 +83,6 @@ function scanAllStudentPacing() {
 function _pacingLoadScheduleFromVault_() {
   const scheduleByStudentId = {};
   const rows = readVaultSheetAsObjects_(VAULT_SHEET_WEEKLY_SCHEDULE, VAULT_SCHEDULE_HEADERS);
-
   rows.forEach(row => {
     if (String(row.slot).trim().toLowerCase() !== 'current') return;
     const sid = String(row.studentId || '').trim();
@@ -140,7 +90,6 @@ function _pacingLoadScheduleFromVault_() {
     try {
       scheduleByStudentId[sid] = JSON.parse(String(row.scheduleJson || '{}'));
     } catch (e) {
-      // Malformed JSON for this student — treat as no schedule
     }
   });
 
@@ -159,20 +108,6 @@ function _pacingDetectFromSchedule_(schedule, observedRotation) {
       }
     });
   });
-
-  // Ground-truth check for the CURRENT week — this is the one week
-  // we actually have real schedule data for (Weekly Schedule only
-  // holds the 'current' slot). If the schedule shows academic
-  // periods this week, this week really is an academic week; if it
-  // shows none, it's a trade week. This corrects the current bucket
-  // against real data instead of assuming.
-  //
-  // For the OTHER three buckets: rather than a pure calendar
-  // alternation guess, use this student's own observed history from
-  // Productivity Data (_pacingObservedRotationFromHistory_) when we
-  // have it — real past behavior beats an assumption. Only fall
-  // back to the calendar guess for buckets with no history at all
-  // (e.g. a brand-new student with no time logs yet).
   const activeWeeks = _pacingCurrentRotation_();
   if (observedRotation) Object.assign(activeWeeks, observedRotation);
   const currentBucket = 'w' + getCurrentWeekOfMonth_();
@@ -181,9 +116,6 @@ function _pacingDetectFromSchedule_(schedule, observedRotation) {
   return { hours, activeWeeks };
 }
 
-// ── Which bi-weekly rotation is "now" — routed through the shared
-//    getCurrentWeekOfMonth_() (Helpers.gs) so setWeekOverride()
-//    actually takes effect here too, same as TimeLog.gs. ──
 function _pacingCurrentRotation_() {
   const week = getCurrentWeekOfMonth_();
   const isOdd = week === 1 || week === 3;
@@ -193,35 +125,16 @@ function _pacingCurrentRotation_() {
 }
 
 // ── Observed rotation from real history ──────────────────────
-// Weekly Schedule only ever holds the current week's real data, so
-// the other 3 rotation buckets used to fall back on a pure
-// calendar-alternation guess with nothing to check it against.
-// Productivity Data already has real per-week assignedHours history
-// (TimeLog.gs writes it every time a weekly time log is saved) — so
-// for any week bucket where a student has actual logged history,
-// use what really happened instead of assuming.
-//
-// NOTE: deliberately does NOT use getCurrentWeekOfMonth_() here —
-// that function checks the manual holiday override, which is about
-// what week it is *today*, not about correctly re-bucketing a
-// student's past week labels. A separate, override-independent
-// day-of-month check (_pacingDayOfMonthBucket_) is used instead so
-// historical classification isn't distorted by whatever override
-// happens to be set right now.
 function _pacingObservedRotationFromHistory_() {
   const rows = readVaultSheetAsObjects_(VAULT_SHEET_PRODUCTIVITY, VAULT_PRODUCTIVITY_HEADERS);
-
-  // studentId -> { w1: {t,f}, w2: {t,f}, w3: {t,f}, w4: {t,f} }
   const tally = {};
   rows.forEach(row => {
     const studentId = String(row.studentId || '').trim();
     if (!studentId) return;
     const d = _parseLocalDate(row.weekLabel);
     if (!d) return;
-
     const bucket = 'w' + _pacingDayOfMonthBucket_(d);
     const wasAssigned = Number(row.assignedHours) > 0;
-
     if (!tally[studentId]) {
       tally[studentId] = { w1: { t: 0, f: 0 }, w2: { t: 0, f: 0 }, w3: { t: 0, f: 0 }, w4: { t: 0, f: 0 } };
     }
@@ -233,18 +146,11 @@ function _pacingObservedRotationFromHistory_() {
   Object.entries(tally).forEach(([studentId, buckets]) => {
     const rotation = {};
     Object.entries(buckets).forEach(([bucket, counts]) => {
-      // No observations at all for this bucket — leave it unset so
-      // the caller falls back to the calendar guess for just this
-      // bucket, not the whole student.
       if (counts.t + counts.f === 0) return;
-      // Majority vote across however many weeks of history we have
-      // for this bucket — a single anomalous week (e.g. a one-off
-      // schedule change) won't flip the whole bucket by itself.
       rotation[bucket] = counts.t >= counts.f;
     });
     if (Object.keys(rotation).length) result[studentId] = rotation;
   });
-
   return result;
 }
 
@@ -255,20 +161,10 @@ function _pacingDayOfMonthBucket_(date) {
 
 // ============================================================
 // SECTION 2 — BATCH APPLY
-// ------------------------------------------------------------
-// Upsert into VAULT_SHEET_STUDENT_PACING, keyed by studentId —
-// same upsert-not-delete principle as TABE Data / Weekly Schedule
-// / Student Course Data.
 // ============================================================
-
 function batchApplyStudentPacing(updates) {
   try {
     if (!updates || !updates.length) return { success: false, error: 'No updates provided.' };
-
-    // Locked: reads existing row indices, then writes/appends against
-    // them below. Without a lock, a single-student saveTranscriptSettings
-    // save on the same Student Pacing Settings sheet at the same time
-    // could shift or duplicate a row this batch is targeting.
     return _withLock(() => {
     const sheet   = getVaultSheet_(VAULT_SHEET_STUDENT_PACING);
     const lastRow = sheet.getLastRow();
@@ -282,25 +178,20 @@ function batchApplyStudentPacing(updates) {
           if (id) existingIdToRow[id] = VAULT_DATA_START_ROW + i;
         });
     }
-
     const now = new Date().toISOString();
     const toAppend = [];
     let applied = 0;
     const skipped = [];
-
     updates.forEach(u => {
       const studentId = String(u.studentId || '').trim();
       if (!studentId) { skipped.push(u.studentId); return; }
-
       const weeklyHours = u.weeklyHours || SETTINGS_DEFAULTS.weeklyHours;
       const weeks = u.activeWeeks || SETTINGS_DEFAULTS.activeWeeks;
-
       const row = [
         studentId, weeklyHours,
         weeks.w1 === true, weeks.w2 === true, weeks.w3 === true, weeks.w4 === true,
         now,
       ];
-
       const rowNum = existingIdToRow[studentId];
       if (rowNum) {
         sheet.getRange(rowNum, 1, 1, numCols).setValues([row]);
@@ -308,7 +199,6 @@ function batchApplyStudentPacing(updates) {
         toAppend.push(row);
       }
       applied++;
-
       logTranscriptWriteVault_(
         studentId,
         'pacing',
@@ -316,15 +206,11 @@ function batchApplyStudentPacing(updates) {
         `Student ${studentId}: ${weeklyHours}hrs, W1=${weeks.w1}, W2=${weeks.w2}, W3=${weeks.w3}, W4=${weeks.w4}`
       );
     });
-
     if (toAppend.length) {
       sheet.getRange(sheet.getLastRow() + 1, 1, toAppend.length, numCols).setValues(toAppend);
     }
-    // Guard studentId against Sheets auto-converting numeric-looking IDs
     sheet.getRange(1, 1, Math.max(sheet.getMaxRows(), 2), 1).setNumberFormat('@');
-
     SpreadsheetApp.flush();
-
     return {
       success: true,
       applied,
@@ -332,18 +218,15 @@ function batchApplyStudentPacing(updates) {
       skippedCount: skipped.length,
     };
     });
-
   } catch (err) {
     Logger.log('batchApplyStudentPacing error: ' + err.message);
     return { success: false, error: err.message };
   }
 }
 
-
 // ============================================================
 // VAULT DEBUG HELPER
 // ============================================================
-
 function debugPacingScheduleSourceVault() {
   const scheduleByStudentId = _pacingLoadScheduleFromVault_();
   const ids = Object.keys(scheduleByStudentId);
