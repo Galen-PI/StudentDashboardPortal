@@ -15,6 +15,16 @@
       <button class="modal-close" onclick="closeProductivityModalButton()">✕</button>
     </div>
 
+    <!-- productivityBody wraps the loading skeleton + real content
+         as one unit so JS can move it between this modal (for
+         roles opening it from the sidebar) and the inline
+         Productivity view container in Dashboard.html (Admin /
+         Program Manager) — see _showProductivityInline() /
+         _hideProductivityInline() in Scripts.html. Every ID
+         inside stays the same regardless of which parent it's
+         currently attached to, so no rendering function needs
+         to know or care which mode is active. -->
+    <div id="productivityBody" style="flex:1; display:flex; flex-direction:column; min-height:0;">
     <div id="productivityLoading" style="padding:20px;flex-shrink:0;">
       <div style="display:flex;flex-direction:column;gap:14px;">
         <div class="skeleton-cell wide" style="height:14px;"></div>
@@ -51,6 +61,12 @@
         </button>
         <button id="prodTabGraduates" class="prod-tab" onclick="switchProdTab('graduates')">
           Potential HS Graduates
+        </button>
+        <button id="prodTabTradeReport" class="prod-tab" onclick="switchProdTab('tradeReport')">
+          Trade Percentage Prediction
+        </button>
+        <button id="prodTabGlossary" class="prod-tab" onclick="switchProdTab('glossary')">
+          What Do These Mean?
         </button>
         <div style="margin-left:auto;display:flex;align-items:center;">
           <span class="prod-legend-item" style="color:var(--low);">■</span>
@@ -115,6 +131,7 @@
                 <th class="prod-th">Worked <span class="prod-tip" data-tip="How many hours this student actually logged in Edgenuity that week.">ⓘ</span></th>
                 <th class="prod-th">Usage <span class="prod-tip" data-tip="What percentage of their scheduled time they actually used. 70% or above is generally on track. Below 40% is a concern worth following up on.">ⓘ</span></th>
                 <th class="prod-th">vs. Group <span class="prod-tip" data-tip="How this student's usage compares to the group average for that week.">ⓘ</span></th>
+                <th class="prod-th">Audit <span class="prod-tip" data-tip="Exclude a week from percentage/pacing calculations — for weeks a student was sick, had an appointment, or worked outside their scheduled class time in a way that skews this week's number.">ⓘ</span></th>
               </tr>
             </thead>
             <tbody id="studentTableBody"></tbody>
@@ -144,6 +161,7 @@
                 <tr style="background:var(--bg4);border-bottom:2px solid var(--border);">
                   <th class="prod-th" style="text-align:left;">Month</th>
                   <th class="prod-th">Students</th>
+                  <th class="prod-th">Reduced</th>
                   <th class="prod-th">Avg Credits Reduced</th>
                   <th class="prod-th">Total Reduced</th>
                 </tr>
@@ -225,18 +243,102 @@
         <div id="prodGraduatesSnapshotDate"
           style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:16px;">
         </div>
-        <div style="display:flex;align-items:center;gap:12px;margin-bottom:16px;">
-          <button id="syncCourseDataBtn" onclick="runSyncStudentCourseData()" style="
-            font-size:12px;padding:6px 14px;
-            background:var(--bg3);color:var(--text-muted);
-            border:1px solid var(--border);border-radius:6px;
-            cursor:pointer;font-weight:600;
-          ">↻ Sync Course Data</button>
-          <span id="syncCourseDataStatus" style="font-size:12px;color:var(--text-muted);font-style:italic;"></span>
-        </div>
         <div id="prodGraduatesBody"></div>
       </div>
+      <!-- ── TRADE COMPLETION VIEW ─────────────────────────────── -->
+      <div id="prodTradeReportView" class="hidden" style="padding:20px;">
+        <div class="prod-explainer">
+          <strong>What am I looking at?</strong> Every active student's trade
+          progress, pulled straight from Trade Overview — same numbers as the
+          Overview tab. Toggle between their <strong>current %</strong> and a
+          <strong>projected end-of-month %</strong> (current % plus their recent
+          weekly trend, carried out to the last day of the month). Use the
+          slider to set the bar — e.g. "who's projected to hit 100% by month
+          end" or "who's projected to clear 80%." Students with no weekly trend
+          history on file are excluded from the projected view since there's
+          nothing to project from.
+        </div>
+
+        <div style="display:flex;gap:20px;align-items:center;flex-wrap:wrap;margin-bottom:16px;
+          background:var(--bg3);border:1px solid var(--border);border-radius:8px;padding:14px 16px;">
+          <div style="display:flex;gap:8px;">
+            <button id="prodTradeBasisCurrent" class="prod-tab active" style="padding:6px 14px;"
+              onclick="_setTradeReportBasis('current')">Current %</button>
+            <button id="prodTradeBasisProjected" class="prod-tab" style="padding:6px 14px;"
+              onclick="_setTradeReportBasis('projected')">Projected by month end</button>
+          </div>
+          <div style="display:flex;align-items:center;gap:10px;flex:1;min-width:220px;">
+            <label style="font-size:12px;color:var(--text-muted);white-space:nowrap;">Threshold</label>
+            <input id="prodTradeThresholdSlider" type="range" min="50" max="100" step="5" value="80"
+              style="flex:1;" oninput="_onTradeThresholdChange(this.value)">
+            <span id="prodTradeThresholdValue" style="font-size:13px;font-weight:700;color:var(--text);min-width:36px;">80%</span>
+          </div>
+        </div>
+
+        <div id="prodTradeReportSnapshotDate"
+          style="font-size:11px;color:var(--text-muted);font-weight:600;margin-bottom:16px;">
+        </div>
+        <div id="prodTradeReportBody"></div>
+      </div>
+
+      <div id="prodGlossaryView" class="hidden" style="padding:20px;max-width:640px;">
+        <div class="prod-explainer" style="margin-bottom:20px;">
+          Plain-language explanations of the numbers shown on the Individual Student tab.
+        </div>
+
+        <div style="display:flex;flex-direction:column;gap:16px;">
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Overall Time Used</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              Total Hours Worked ÷ Total Scheduled, across every week tracked. It's the same idea as each week's individual percentage, just added up over the whole tracked period instead of one week at a time. 70% and above is generally considered on track; below 40% is worth a closer look.
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Total Hours Worked</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              The sum of academic hours this student actually logged in Edgenuity, added up across every week tracked.
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Total Scheduled</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              The sum of academic hours this student was scheduled for, added up across every week tracked. This comes from whatever weekly schedule was uploaded (or estimated from a pattern, if that week's schedule wasn't uploaded yet).
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Weeks Tracked</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              How many weeks actually count toward the numbers above. A week only counts if the student had scheduled academic hours that week — weeks spent entirely in Trades, or weeks with no schedule on file at all, are left out since there's nothing meaningful to measure. A week marked "Excluded" (see the Audit column on this tab) is also left out.
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Suggested Weekly Hours</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              A recommended weekly scheduled-hours target, based on how many hours this student actually tends to complete — weighted toward their most recent weeks, so a recent improvement or slump counts more than something from months ago. Use it as a more realistic pacing target than a flat default number.
+            </div>
+          </div>
+          <div style="border-top:1px solid var(--border);padding-top:14px;">
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Usage (in the week-by-week table below)</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              That single week's worked-vs-scheduled percentage — the same math as Overall Time Used, just for one week instead of the whole period.
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">vs. Group</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              How this student's usage that week compares to the average usage across everyone else tracked that same week. Green means meaningfully above average, red means meaningfully below, and "About avg" means it's within a few points either way.
+            </div>
+          </div>
+          <div>
+            <div style="font-weight:700;font-size:14px;color:var(--text);margin-bottom:4px;">Audit / Exclude</div>
+            <div style="font-size:13px;color:var(--text-muted);line-height:1.6;">
+              Marks a specific week as excluded from every number on this page — for weeks a student was sick, had an appointment, or worked on their high school outside their actual scheduled class time in a way that throws off that week's percentage. The week still shows in the table with a reason attached, it's just left out of the math.
+            </div>
+          </div>
+        </div>
+      </div>
     </div><!-- /productivityContent -->
+    </div><!-- /productivityBody -->
   </div>
 </div>
 
@@ -269,11 +371,9 @@
   min-width: 120px;
 }
 .prod-chip-label {
-  font-size: 10px;
-  font-weight: 700;
+  font-size: 11px;
+  font-weight: 600;
   color: var(--text-muted);
-  text-transform: uppercase;
-  letter-spacing: .4px;
   margin-bottom: 4px;
 }
 .prod-chip-value {
@@ -285,10 +385,8 @@
   padding: 8px 10px;
   text-align: center;
   color: var(--text-muted);
-  font-size: 11px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  font-size: 12px;
+  font-weight: 600;
   white-space: nowrap;
 }
 .prod-tip {
@@ -369,9 +467,7 @@
   text-align: center;
   color: var(--text-muted);
   font-size: 12px;
-  font-weight: 700;
-  text-transform: uppercase;
-  letter-spacing: 0.4px;
+  font-weight: 600;
   white-space: nowrap;
   cursor: pointer;
   user-select: none;
