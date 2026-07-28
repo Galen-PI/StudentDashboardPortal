@@ -1,7 +1,5 @@
 <script>
-// ============================================================
 // Student Progress Dashboard — Client Script
-// ------------------------------------------------------------
 // TABLE OF CONTENTS
 //   1.  State & constants
 //   2.  Themed dialog / toast helpers
@@ -38,9 +36,7 @@
 //   33. Modal tabs: Transcript / Testing / Trades / Time Log
 //   34. Academic credits snapshot + Weekly Credit Report
 //   35. Bulk pacing tool
-// ─────────────────────────────────────────────────────────────
 // 1. State & constants
-// ─────────────────────────────────────────────────────────────
 let allProfiles  = [];
 let activeRisk   = 'ALL';
 let activeType   = 'ALL';
@@ -52,18 +48,20 @@ let _lastRenderFingerprint = '';
 let _hsMonthlyByStudent = {};
 let _hsMonthlyCohort    = [];
 let _tradeMonthlyCohort = [];
+let _tabeCohort         = null; // from result.tabeCohort — see getTABECohortSummary() in 20_Academic_TABE.gs
+let _tabeCardExpanded   = null; // null = not yet seeded from role's autoExpand; true/false once user or config sets it
 
 const _warnGlyph = '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width:11px;height:11px;vertical-align:-1px;display:inline-block;"><path stroke-linecap="round" stroke-linejoin="round" d="M12 9v3.75m-9.303 3.376c-.866 1.5.217 3.374 1.948 3.374h14.71c1.73 0 2.813-1.874 1.948-3.374L13.949 3.378c-.866-1.5-3.032-1.5-3.898 0L2.697 16.126zM12 15.75h.007v.008H12v-.008z"/></svg>';
 
 // ── Session state ────────────────────────────────────────────
 let _currentRole       = SERVER_ROLE       || '';
+// Display-only role for cards/sidebar layout. Defaults to _currentRole;
+let _viewingAsRole     = '';
 let _currentName       = SERVER_NAME       || '';
 let _currentEmployeeId = SERVER_EMPLOYEE_ID || '';
 
 
-// ─────────────────────────────────────────────────────────────
 // 2. Themed dialog / toast helpers
-// ─────────────────────────────────────────────────────────────
 function _ensureThemedDialogEl() {
   if (document.getElementById('themedDialog')) return;
   const el = document.createElement('div');
@@ -166,9 +164,19 @@ function showToast(message, type, duration) {
   toast._hideTimer = setTimeout(() => { toast.style.opacity = '0'; }, duration || 3400);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 3. Client-side permission helpers
-// ─────────────────────────────────────────────────────────────
+
+// Shared arrays, referenced by multiple role keys below instead of repeating the same list per role.
+const ACADEMIC_INSTRUCTOR_PERMS = [
+  // 'upload_etar' removed — that's Trade ETAR upload, not an academic action. Was previously (incorrectly) granted here;
+  'export_csv', 'send_digest',
+  'edit_transcript', 'edit_timelog', 'add_note',
+];
+
+const TRADE_INSTRUCTOR_PERMS = [
+  'export_csv', 'send_digest', 'upload_etar', 'add_note',
+];
+
 const CLIENT_PERMISSIONS = {
   'Admin': ['*'],
 
@@ -191,11 +199,23 @@ const CLIENT_PERMISSIONS = {
     'add_note', 'delete_note',
   ],
 
-  'Academic Instructor': [ // = "Teacher"
-    'export_csv', 'send_digest', 'upload_etar',
-    'edit_transcript', 'edit_timelog', 'add_note',
-  ],
+  'Academic Instructor': ACADEMIC_INSTRUCTOR_PERMS,
+
+  // HSD-class and TABE instructor roles are all academic-side —
+  'HSE/HSD1 Instructor': ACADEMIC_INSTRUCTOR_PERMS,
+  'HSD2 Instructor':     ACADEMIC_INSTRUCTOR_PERMS,
+  'HSD3 Instructor':     ACADEMIC_INSTRUCTOR_PERMS,
+  'TABE Instructor':     ACADEMIC_INSTRUCTOR_PERMS,
+
+  // Trade instructor roles — one per trade, all sharing the same permission set (only the auto-filtered student view differs per role, handled
+  'CNA Instructor':                   TRADE_INSTRUCTOR_PERMS,
+  'Culinary Instructor':              TRADE_INSTRUCTOR_PERMS,
+  'BCT Instructor':                   TRADE_INSTRUCTOR_PERMS,
+  'Security Instructor':              TRADE_INSTRUCTOR_PERMS,
+  'Pharmacy Technican Instructor':    TRADE_INSTRUCTOR_PERMS,
+  'Carpentry Instructor':             TRADE_INSTRUCTOR_PERMS,
 };
+
 
 function _can(permission) {
   if (!_currentRole) return false;
@@ -207,8 +227,7 @@ function _can(permission) {
   return perms.includes(permission);
 }
 
-// Permissions considered "editing" — blocked entirely while Lock Mode is on,
-// regardless of role, so a Manager can browse without risk of accidental changes.
+// Permissions considered "editing" — blocked entirely while Lock Mode is on, regardless of role, so a Manager can browse without risk of
 function _isEditPermission(permission) {
   return ['add_note', 'delete_note', 'edit_status', 'edit_risk', 'bulk_edit',
           'merge', 'manage_overrides', 'revert_changes', 'upload_schedule',
@@ -232,15 +251,12 @@ function _canEdit(section) {
   return false;
 }
 
-// ─────────────────────────────────────────────────────────────
 // 4. Bootstrap
-// ─────────────────────────────────────────────────────────────
 document.addEventListener('DOMContentLoaded', () => {
 
-  // Load login announcements
-  loadLoginAnnouncements(() => {
-    document.getElementById('loginScreen').classList.remove('hidden');
-  });
+  // Restore whatever theme was last saved — applyTheme() and applyCustomThemeNow() (60_UI_Dashboard.html) always wrote to localStorage
+  _restoreSavedTheme_();
+
   document.getElementById('studentsBody').addEventListener('click', e => {
     const btn = e.target.closest('.detail-btn');
     if (btn) openModal(btn.dataset.id);
@@ -260,7 +276,16 @@ document.addEventListener('DOMContentLoaded', () => {
       if (riskBtn) { document.querySelectorAll('[data-risk]').forEach(b => b.classList.remove('active')); riskBtn.classList.add('active'); activeRisk = savedRisk; }
     }
     const savedType = localStorage.getItem('dashActiveType');
-    if (savedType) {
+    if (savedType && savedType.startsWith('TRADE:')) {
+      const tradeBtn = document.querySelector('[data-type="TRADES"]');
+      if (tradeBtn) {
+        document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active'));
+        tradeBtn.classList.add('active');
+        tradeBtn.textContent = savedType.slice(6);
+        activeType = savedType;
+        _tradeCycleIndex = _getDistinctTradeNames_().indexOf(savedType.slice(6));
+      }
+    } else if (savedType) {
       const typeBtn = document.querySelector('[data-type="' + savedType + '"]');
       if (typeBtn) { document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active')); typeBtn.classList.add('active'); activeType = savedType; }
     }
@@ -285,19 +310,55 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btnCardView')?.classList.add('active');
     document.getElementById('btnTableView')?.classList.remove('active');
   }
+
   if (_currentRole) {
     document.getElementById('loginScreen').classList.add('hidden');
     _applyRoleUI();
+    if (typeof applyRoleViewConfig === 'function') applyRoleViewConfig(_currentRole);
     _loadPinnedIds();
     loadData();
     initCounselorFilter();
     initTeacherFilter();
+    initSubjectFilter();
+    return;
   }
+
+  // No server-provided role — try the remembered employee ID before falling back to the manual login screen, so a plain page refresh doesn't
+  let rememberedId = null;
+  try { rememberedId = localStorage.getItem('dashEmployeeId'); } catch(e) {}
+
+  if (!rememberedId) {
+    loadLoginAnnouncements(() => {
+      document.getElementById('loginScreen').classList.remove('hidden');
+    });
+    return;
+  }
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.error) {
+        // Stored ID is no longer valid (removed from staff roles, etc.) — clear it and fall back to a normal manual login.
+        try { localStorage.removeItem('dashEmployeeId'); } catch(e) {}
+        loadLoginAnnouncements(() => {
+          document.getElementById('loginScreen').classList.remove('hidden');
+        });
+        return;
+      }
+      _currentRole       = result.role;
+      _currentName       = result.name;
+      _currentEmployeeId = result.employeeId;
+      _completeLogin();
+    })
+    .withFailureHandler(function() {
+      // Network hiccup, not necessarily an invalid ID — don't clear storage, just fall back to manual login for this one load.
+      loadLoginAnnouncements(() => {
+        document.getElementById('loginScreen').classList.remove('hidden');
+      });
+    })
+    .getRoleByEmployeeId(rememberedId);
 });
 
-// ─────────────────────────────────────────────────────────────
 // 5. Staff login
-// ─────────────────────────────────────────────────────────────
 function staffLogin() {
   const input = document.getElementById('employeeIdInput');
   const id    = (input ? input.value : '').trim();
@@ -319,6 +380,8 @@ function staffLogin() {
       _currentRole       = result.role;
       _currentName       = result.name;
       _currentEmployeeId = result.employeeId;
+      // Remembered so future page loads can silently re-validate this ID with the server instead of showing the login screen again.
+      try { localStorage.setItem('dashEmployeeId', result.employeeId); } catch(e) {}
       _completeLogin();
     })
     .withFailureHandler(function() {
@@ -346,10 +409,23 @@ function _completeLogin() {
   const wirLabel = document.getElementById('wirWeekLabel');
   if (wirLabel) wirLabel.textContent = _currentName + ' · ' + _currentRole;
   _applyRoleUI();
+  if (typeof applyRoleViewConfig === 'function') applyRoleViewConfig(_currentRole);
   _loadPinnedIds();
   loadData();
   initCounselorFilter();
   initTeacherFilter();
+  initSubjectFilter();
+}
+
+// Clears the remembered employee ID and reloads to the manual login screen — for a shared computer, or signing in as someone else.
+function staffLogout() {
+  try { localStorage.removeItem('dashEmployeeId'); } catch(e) {}
+  // Reload the TOP window, not just this frame — if this dashboard is ever embedded in an iframe (doGet() sets XFrameOptionsMode.
+  try {
+    window.top.location.href = window.location.href;
+  } catch(e) {
+    location.reload();
+  }
 }
 
 function loadLoginAnnouncements(callback) {
@@ -393,10 +469,9 @@ function _setVisible(id, visible) {
   if (el) el.style.display = visible ? '' : 'none';
 }
 
-// ─────────────────────────────────────────────────────────────
 // 6. Data loading
-// ─────────────────────────────────────────────────────────────
 function loadData() {
+  _dataLoadInFlight = true;
   setLoading(true);
   _startLoadTimeoutWatch();
   google.script.run
@@ -406,6 +481,16 @@ function loadData() {
 }
 
 let _refreshTimerInterval = null;
+let _dataLoadInFlight = false; // tracks ANY in-flight load (first load or refresh) — see _startLoadTimeoutWatch()
+
+// Shared by the normal completion path (finish() below) and the timeout watchdog, so the Refresh button/timer can recover even if
+function _resetRefreshButtonUI() {
+  const btn   = document.getElementById('refreshBtn');
+  const label = document.getElementById('refreshBtnLabel');
+  clearInterval(_refreshTimerInterval);
+  if (btn)   { btn.disabled = false; btn.style.opacity = ''; btn.style.pointerEvents = ''; }
+  if (label) label.textContent = 'Refresh';
+}
 
 function refreshData() {
   const btn   = document.getElementById('refreshBtn');
@@ -426,13 +511,13 @@ function refreshData() {
     label.textContent = `Refreshing… ${mins}:${String(secs).padStart(2, '0')}`;
   }, 1000);
 
+  _dataLoadInFlight = true;
   setLoading(true);
   _startLoadTimeoutWatch();
 
   function finish(fn, arg) {
-    clearInterval(_refreshTimerInterval);
-    if (btn)   { btn.disabled = false; btn.style.opacity = ''; btn.style.pointerEvents = ''; }
-    if (label) label.textContent = 'Refresh';
+    _dataLoadInFlight = false;
+    _resetRefreshButtonUI();
     fn(arg);
   }
 
@@ -445,14 +530,16 @@ function refreshData() {
 function _startLoadTimeoutWatch() {
   if (_loadTimeoutHandle) clearTimeout(_loadTimeoutHandle);
   _loadTimeoutHandle = setTimeout(() => {
-    const stillLoading = !document.getElementById('loadingState').classList.contains('hidden');
-    if (stillLoading) {
+    if (_dataLoadInFlight) {
+      _dataLoadInFlight = false;
+      _resetRefreshButtonUI(); // recover the button/skeleton state even though the server call never called back
       showError("The page is taking much longer than expected to load. This usually means the connection to Google's servers was blocked. Try refreshing, or opening this dashboard in a different browser.");
     }
   }, 25000);
 }
 
 function onDataLoaded(result) {
+  _dataLoadInFlight = false;
   setLoading(false);
   if (result.error) { showError(result.error); return; }
 
@@ -460,10 +547,16 @@ function onDataLoaded(result) {
   _hsMonthlyByStudent = result.hsMonthlyByStudent || {};
   _hsMonthlyCohort    = result.hsMonthlyCohort    || [];
   _tradeMonthlyCohort = result.tradeMonthlyCohort || [];
+  _tabeCohort         = result.tabeCohort         || null;
   wirWeekLabel = result.wirWeekLabel || null;
+
+  if (_pendingRoleAutoFilter && _pendingRoleAutoFilter.type === 'trade') {
+    _activeTradeAutoFilter = { trade: _pendingRoleAutoFilter.value, includeUSN: !!_pendingRoleAutoFilter.includeUSN };
+  }
 
   renderSummaryCards(result.metrics || {});
   if (_archivedCount === null) _loadArchivedCount();
+  if (!_customColumnsLoaded) _loadCustomColumns();
   _lastRenderFingerprint = '';
   applyFilters();
   renderFreshnessBanner(result.lastUpdated, wirWeekLabel, result.rosterLastUpdated);
@@ -481,13 +574,12 @@ function onDataLoaded(result) {
 }
 
 function onError(err) {
+  _dataLoadInFlight = false;
   setLoading(false);
   showError(typeof err === 'string' ? err : (err.message || 'Unknown error'));
 }
 
-// ─────────────────────────────────────────────────────────────
 // 7. Freshness banner
-// ─────────────────────────────────────────────────────────────
 function renderFreshnessBanner(lastUpdated, wirLabel, rosterLastUpdated) {
   try {
     const banner  = document.getElementById('freshnessBanner');
@@ -543,53 +635,176 @@ function dismissFreshness() {
   try { sessionStorage.setItem('freshnessDismissed', '1'); } catch(e) {}
 }
 
-// ─────────────────────────────────────────────────────────────
 // 8. Summary cards
-// ─────────────────────────────────────────────────────────────
+const DEFAULT_CARD_ORDER = [
+  'high', 'total', 'medium', 'low', 'unknown',
+  'tradeComplete', 'hsComplete', 'archived', 'wir', 'hasNotes',
+];
+
+// Resolves a CARD_DEFS metric path (e.g. 'riskCounts.HIGH') or a '_computed.*' key against the raw metrics object + the client-computed
+function _resolveCardMetric(path, metrics, computed) {
+  if (path.indexOf('_computed.') === 0) return computed[path.slice('_computed.'.length)];
+  if (path === '_archivedCount') return _archivedCount ?? '…';
+  return path.split('.').reduce((obj, k) => (obj == null ? undefined : obj[k]), metrics);
+}
+
 function renderSummaryCards(m) {
   _lastMetrics = m;
   const container = document.getElementById('summaryCards');
-  const rc        = m.riskCounts || {};
-  const total         = m.total            || 0;
-  const high          = rc.HIGH            || 0;
-  const medium        = rc.MEDIUM          || 0;
-  const low           = rc.LOW             || 0;
-  const unknown       = rc.UNKNOWN         || 0;
-  const unmapped      = m.unmapped         || 0;
-  const wir           = m.withIntervention || 0;
-  const hasNotes      = m.hasNotes         || 0;
 
-  const tradeComplete = allProfiles.filter(p =>
-    p.tradeStatusOverride ? p.tradeStatusOverride === 'TRADE_COMPLETE' : !!p.tradeComplete
-  ).length;
-  const hsComplete = allProfiles.filter(p =>
-    p.academicStatusOverride ? p.academicStatusOverride === 'HS_COMPLETE' : !!p.hsComplete
-  ).length;
+  // Values that need client-side logic (override-aware), not a straight passthrough from the server metrics object.
+  const computed = {
+    tradeComplete: allProfiles.filter(p =>
+      p.tradeStatusOverride ? p.tradeStatusOverride === 'TRADE_COMPLETE' : !!p.tradeComplete
+    ).length,
+    hsComplete: allProfiles.filter(p =>
+      p.academicStatusOverride ? p.academicStatusOverride === 'HS_COMPLETE' : !!p.hsComplete
+    ).length,
+  };
 
-  const cards = [
-    { label: 'Total Students',  value: total,        cls: 'accent', sub: 'in the system' },
-    { label: 'Needs Attention', value: high,          cls: 'high',   sub: high   === 1 ? 'student' : 'students' },
-    { label: 'Watch Closely',   value: medium,        cls: 'medium', sub: medium === 1 ? 'student' : 'students' },
-    { label: 'On Track',        value: low,           cls: 'low',    sub: low    === 1 ? 'student' : 'students' },
-    { label: 'No Data Yet',     value: unknown,       cls: 'accent', sub: unknown === 1 ? 'student' : 'students' },
-    { label: 'Trade Complete',  value: tradeComplete, cls: 'low',    sub: 'finished trades' },
-    { label: 'High School Complete', value: hsComplete, cls: 'low', sub: 'finished high school' },
-    { label: 'Archived', value: _archivedCount ?? '…', cls: 'medium', sub: 'view / restore', clickable: true },
-    { label: 'Interventions',   value: wir,           cls: 'high',   sub: 'on WIR this week' },
-    { label: 'With Notes',      value: hasNotes,      cls: 'accent', sub: 'have staff notes' },
-  ];
+  const roleConfig = (typeof resolveRoleViewConfig === 'function') ? resolveRoleViewConfig(_viewingAsRole || _currentRole) : null;
 
-  container.innerHTML = cards.map(c => `
-    <div class="card card-${c.cls}" ${c.clickable ? `onclick="openArchivedModal()" style="cursor:pointer;"` : ''}>
-      <div class="card-label">${c.label}</div>
-      <div class="card-value ${c.cls}">${c.value}</div>
-      <div class="card-sub">${c.sub}</div>
-    </div>`).join('');
+  if (roleConfig && roleConfig.noSummaryCards) {
+    container.innerHTML = '';
+    container.style.display = 'none';
+    return;
+  }
+  container.style.display = '';
+
+  // null summaryCards (Admin, or a role not yet defined) → the original fixed order;
+  const cardKeys = (roleConfig && roleConfig.summaryCards) ? roleConfig.summaryCards : DEFAULT_CARD_ORDER;
+
+  const cardsHtml = cardKeys.map(key => {
+    const def = CARD_DEFS[key];
+    if (!def) return ''; // unknown key in a config — skip rather than throw
+
+    if (def.type === 'expandable-tabe') {
+      const autoExpand = roleConfig ? !!roleConfig.tabeAutoExpand : false;
+      return renderTabeCardHtml(_tabeCohort, autoExpand);
+    }
+
+    const rawValue = _resolveCardMetric(def.metric, m, computed);
+    const value = (rawValue ?? 0) + (def.suffix || '');
+    const count = typeof rawValue === 'number' ? rawValue : null;
+    const sub = def.sub || (count !== null ? (count === 1 ? 'student' : 'students') : '');
+
+    if (def.hero) {
+      const rc = m.riskCounts || {};
+      const total = m.total || 0;
+      const segs = [
+        { key: 'HIGH',    cls: 'high',    label: 'Needs Attention' },
+        { key: 'MEDIUM',  cls: 'medium',  label: 'Watch Closely' },
+        { key: 'LOW',     cls: 'low',     label: 'On Track' },
+        { key: 'UNKNOWN', cls: 'neutral', label: 'No Data Yet' },
+      ];
+      const barHtml = total ? segs.map(s => {
+        const n = rc[s.key] || 0;
+        const pct = (n / total) * 100;
+        return pct > 0 ? `<div class="hero-breakdown-seg" style="width:${pct}%;background:var(--${s.cls === 'neutral' ? 'neutral' : s.cls})"></div>` : '';
+      }).join('') : '';
+      const legendHtml = segs.map(s => {
+        const n = rc[s.key] || 0;
+        return `<span><span class="dot" style="background:var(--${s.cls === 'neutral' ? 'neutral' : s.cls})"></span>${s.label} ${n}</span>`;
+      }).join('');
+
+      return `
+      <div class="card card-${def.cls} card-hero">
+        <div class="card-hero-headline">
+          <div>
+            <div class="card-label">${def.label}</div>
+            <div class="card-value ${def.cls}">${value}</div>
+          </div>
+          <div class="card-sub">${sub}</div>
+        </div>
+        <div class="hero-breakdown">
+          <div class="hero-breakdown-bar">${barHtml}</div>
+          <div class="hero-breakdown-legend">${legendHtml}</div>
+        </div>
+        <button class="hero-action" onclick="jumpToRiskFilter('HIGH')">View list &rarr;</button>
+      </div>`;
+    }
+
+    return `
+    <div class="card card-${def.cls}" ${def.clickable ? `onclick="openArchivedModal()" style="cursor:pointer;"` : ''}>
+      <div class="card-label">${def.label}</div>
+      <div class="card-value ${def.cls}">${value}</div>
+      <div class="card-sub">${sub}</div>
+    </div>`;
+  }).join('');
+
+  container.innerHTML = cardsHtml;
 }
 
-// ─────────────────────────────────────────────────────────────
+// Jumps straight from the hero card to the filtered table/card list —
+// reuses the existing chip-based filter machinery (setRiskFilter)
+// rather than duplicating filter logic, then scrolls the list into view.
+function jumpToRiskFilter(riskKey) {
+  const chip = document.querySelector(`[data-risk="${riskKey}"]`);
+  if (chip) setRiskFilter(chip);
+  const list = document.getElementById('resultCount');
+  if (list) list.scrollIntoView({ behavior: 'smooth', block: 'start' });
+}
+
+// ── TABE Progress card ─────────────────────────
+function renderTabeCardHtml(cohort, autoExpand) {
+  if (_tabeCardExpanded === null) _tabeCardExpanded = !!autoExpand;
+  const expanded = _tabeCardExpanded;
+
+  const math    = cohort && cohort.math;
+  const reading = cohort && cohort.reading;
+
+  function miniStat(label, subj) {
+    if (!subj) return `<div class="card-tabe-mini"><div class="card-tabe-mini-label">${label}</div><div class="card-tabe-empty">Not enough data yet</div></div>`;
+    const sign = subj.avgGain > 0 ? '+' : '';
+    return `
+      <div class="card-tabe-mini">
+        <div class="card-tabe-mini-label">${label}</div>
+        <div class="card-tabe-mini-value">${sign}${subj.avgGain}</div>
+        <div class="card-tabe-mini-sub">${subj.improvedPct}% improved (${subj.improvedCount}/${subj.count})</div>
+      </div>`;
+  }
+
+  function expandedSubject(label, subj) {
+    if (!subj) return `<div><div class="card-tabe-subject-title">${label}</div><div class="card-tabe-empty">Not enough retest history yet to show gains.</div></div>`;
+    const sign = subj.avgGain > 0 ? '+' : '';
+    const levelChips = Object.entries(subj.levelCounts || {})
+      .sort((a, b) => a[0].localeCompare(b[0]))
+      .map(([lvl, n]) => `<span class="card-tabe-level-chip">${esc(lvl)}: ${n}</span>`)
+      .join('');
+    return `
+      <div>
+        <div class="card-tabe-subject-title">${label}</div>
+        <div class="card-tabe-stat-row"><span>Avg gain</span><b>${sign}${subj.avgGain}</b></div>
+        <div class="card-tabe-stat-row"><span>Improved</span><b>${subj.improvedPct}% (${subj.improvedCount}/${subj.count})</b></div>
+        <div class="card-tabe-levels">${levelChips || '<span class="card-tabe-empty">No level data</span>'}</div>
+      </div>`;
+  }
+
+  return `
+    <div class="card card-accent card-tabe ${expanded ? 'expanded' : ''}" onclick="toggleTabeCard()">
+      <div class="card-tabe-header">
+        <div class="card-label">TABE Progress</div>
+        <span class="card-tabe-chevron">&#9656;</span>
+      </div>
+      <div class="card-tabe-summary-row">
+        ${miniStat('Math', math)}
+        ${miniStat('Reading', reading)}
+      </div>
+      ${expanded ? `
+        <div class="card-tabe-expanded-body" onclick="event.stopPropagation()">
+          ${expandedSubject('Math', math)}
+          ${expandedSubject('Reading', reading)}
+        </div>
+      ` : ''}
+    </div>`;
+}
+
+function toggleTabeCard() {
+  _tabeCardExpanded = !_tabeCardExpanded;
+  renderSummaryCards(_lastMetrics || {});
+}
+
 // 9. Filters (risk / type / counselor / teacher) + presets
-// ─────────────────────────────────────────────────────────────
 function setRiskFilter(el) {
   document.querySelectorAll('[data-risk]').forEach(b => b.classList.remove('active'));
   el.classList.add('active');
@@ -606,11 +821,89 @@ function setTypeFilter(el) {
   applyFilters();
 }
 
+// Cycles the "Trades" tab through every distinct trade name found in
+// the current data — CNA, then BCT, then Culinary, and so on — one
+// trade at a time per click, filtering to only that trade. Wraps
+// back to the first trade after the last.
+let _tradeCycleIndex = -1;
+
+function _getDistinctTradeNames_() {
+  const names = new Set();
+  allProfiles.forEach(p => (p.trades || []).forEach(t => { if (t.tarName) names.add(t.tarName); }));
+  return [...names].sort();
+}
+
+function cycleTradeFilter(el) {
+  const tradeNames = _getDistinctTradeNames_();
+  if (!tradeNames.length) return;
+  _tradeCycleIndex = (_tradeCycleIndex + 1) % tradeNames.length;
+  const tradeName = tradeNames[_tradeCycleIndex];
+  document.querySelectorAll('[data-type]').forEach(b => b.classList.remove('active'));
+  el.classList.add('active');
+  el.textContent = tradeName;
+  activeType = 'TRADE:' + tradeName;
+  try { localStorage.setItem('dashActiveType', activeType); } catch(e) {}
+  applyFilters();
+}
+
+// ── Bulk search ──────────────────────────────────────────────────
+function openBulkSearch() {
+  document.getElementById('bulkSearchModal').classList.remove('hidden');
+  document.getElementById('bulkSearchStatus').textContent = '';
+  if (_bulkSearchIds) {
+    document.getElementById('bulkSearchStatus').textContent = `Bulk search active — showing ${_bulkSearchIds.size} student${_bulkSearchIds.size !== 1 ? 's' : ''}.`;
+  }
+}
+
+function closeBulkSearch() {
+  document.getElementById('bulkSearchModal').classList.add('hidden');
+}
+
+function confirmBulkSearch() {
+  const raw = document.getElementById('bulkSearchInput').value || '';
+  const tokens = raw.split(/[\n,]/).map(t => t.trim()).filter(Boolean);
+  const status = document.getElementById('bulkSearchStatus');
+
+  if (!tokens.length) {
+    status.textContent = 'Paste at least one ID or name first.';
+    return;
+  }
+
+  const matchedIds  = new Set();
+  const unmatched   = [];
+
+  tokens.forEach(token => {
+    const lower = token.toLowerCase();
+    const match = allProfiles.find(p =>
+      (p.academicId && String(p.academicId).trim() === token) ||
+      (p.displayName && p.displayName.toLowerCase().includes(lower))
+    );
+    if (match) matchedIds.add(match.id);
+    else unmatched.push(token);
+  });
+
+  _bulkSearchIds = matchedIds;
+  applyFilters();
+
+  status.innerHTML = `Matched ${matchedIds.size} of ${tokens.length} entries.` +
+    (unmatched.length ? `<br><span style="color:var(--high);">Not found: ${esc(unmatched.join(', '))}</span>` : '');
+}
+
+function clearBulkSearch() {
+  _bulkSearchIds = null;
+  document.getElementById('bulkSearchInput').value = '';
+  document.getElementById('bulkSearchStatus').textContent = '';
+  applyFilters();
+  closeBulkSearch();
+}
+
 function applyFilters() {
   try { localStorage.setItem('dashSortKey', document.getElementById('sortSelect').value); } catch(e) {}
   const filtered = _getFilteredSorted();
   const sortKey     = document.getElementById('sortSelect').value;
-  const fingerprint = _currentView + '|' + sortKey + '|' + filtered.map(p => p.id + p.risk.score).join(',');
+  const fingerprint = _currentView + '|' + sortKey + '|' + filtered.map(p =>
+    p.id + p.risk.score + '~' + p.thisWeekSource + '~' + p.thisWeekAssignedHours + '~' + p.thisWeekWorkedHours
+  ).join(',');
   const countEl = document.getElementById('resultCount');
   countEl.textContent = `${filtered.length} student${filtered.length !== 1 ? 's' : ''}`;
   _renderFilterChips();
@@ -620,14 +913,12 @@ function applyFilters() {
   updateBulkBar();
   if      (_currentView === 'cards')  renderCards(filtered);
   else if (_currentView === 'action') renderActionView(filtered);
+  else if (_currentView === 'productivity') { /* no-op — Productivity view has its own render pipeline (_loadProductivityData/_renderProductivityModal), independent of the risk/type/search filters */ }
   else                                renderTable(filtered);
 }
 
 // ── Active filter chips ───────────────────────────────────────
-// The one thing people kept losing track of: forgetting a filter
-// was set from days ago and wondering where half their students
-// went. This shows every active filter in plain words with a
-// one-click ✕ to clear it, right above the table.
+// The one thing people kept losing track of: forgetting a filter was set from days ago and wondering where half their students went.
 function _renderFilterChips() {
   const box = document.getElementById('activeFilterChips');
   if (!box) return;
@@ -655,8 +946,18 @@ function _renderFilterChips() {
   if (_staleOnlyActive) {
     chips.push({ label: 'No Recent Updates', onClear: '_staleOnlyActive=false; applyFilters();' });
   }
+  if (_activeSubjectFilter) {
+    chips.push({ label: 'TABE: Reading/Math students', onClear: 'clearSubjectFilter()' });
+  }
+  if (_activeTradeAutoFilter) {
+    chips.push({ label: 'Trade: ' + _activeTradeAutoFilter.trade + (_activeTradeAutoFilter.includeUSN ? ' + USN' : ''), onClear: 'clearTradeAutoFilter()' });
+  }
 
-  if (!chips.length) { box.innerHTML = ''; box.classList.remove('show'); return; }
+  if (!chips.length) {
+    box.innerHTML = '<span class="filter-chip filter-chip-neutral">Showing all students — no filters applied</span>';
+    box.classList.add('show');
+    return;
+  }
   box.classList.add('show');
   box.innerHTML = chips.map(c =>
     `<span class="filter-chip">${esc(c.label)}<button class="filter-chip-x" onclick="${c.onClear}" title="Clear this filter">✕</button></span>`
@@ -732,6 +1033,11 @@ function clearCounselorFilter() {
 const TEACHER_STORAGE_KEY = 'tjc_teacher_filter';
 let _hsdAssignments   = {};   // studentId -> 'HSD 2' | 'HSD3' | 'HSE/HSD1'
 let _activeHSDFilter  = null; // currently selected HS class, or null = all
+let _subjectAssignments   = {};   // studentId -> ['reading','math',...], from getStudentSubjectAssignments()
+let _activeSubjectFilter  = null; // array of wanted subject keywords, or null = all — TABE Instructor auto-filter
+let _activeTradeAutoFilter = null; // { trade, includeUSN } or null = all — Trade Instructor auto-filter
+// Set by applyRoleViewConfig() (60_UI_RoleViews.html) before the data it depends on has necessarily loaded yet.
+let _pendingRoleAutoFilter = null;
 
 function initTeacherFilter() {
   google.script.run
@@ -741,6 +1047,13 @@ function initTeacherFilter() {
         return;
       }
       _hsdAssignments = result.assignments || {};
+
+      if (_pendingRoleAutoFilter && _pendingRoleAutoFilter.type === 'hsd') {
+        const sel = document.getElementById('teacherSelect');
+        if (sel) sel.value = _pendingRoleAutoFilter.value;
+        _applySelectedTeacher(_pendingRoleAutoFilter.value);
+        return; // role-driven filter takes precedence over a stale localStorage pick
+      }
 
       // Restore saved selection
       const saved = localStorage.getItem(TEACHER_STORAGE_KEY);
@@ -785,9 +1098,33 @@ function clearTeacherFilter() {
   applyFilters();
 }
 
-// ─────────────────────────────────────────────────────────────
+// ── Subject filter (TABE Instructor auto-filter) ────────────
+// Loads studentId -> ['reading','math'] assignments once per session, same pattern as initTeacherFilter().
+function initSubjectFilter() {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) return;
+      _subjectAssignments = result.assignments || {};
+      if (_pendingRoleAutoFilter && _pendingRoleAutoFilter.type === 'subject') {
+        _activeSubjectFilter = _pendingRoleAutoFilter.value;
+        applyFilters();
+      }
+    })
+    .withFailureHandler(function() {})
+    .getStudentSubjectAssignments();
+}
+
+function clearSubjectFilter() {
+  _activeSubjectFilter = null;
+  applyFilters();
+}
+
+function clearTradeAutoFilter() {
+  _activeTradeAutoFilter = null;
+  applyFilters();
+}
+
 // 10. Table rendering
-// ─────────────────────────────────────────────────────────────
 function renderTable(profiles) {
   const tbody = document.getElementById('studentsBody');
   const noRes = document.getElementById('noResults');
@@ -816,14 +1153,14 @@ function renderTable(profiles) {
           </div>
           <div class="student-id">
             ${p.academicId ? `<span class="student-id-chip" onclick="copyId(event, '${esc(p.academicId)}')" title="Click to copy ID">ID: ${esc(p.academicId)}</span>` : ''}
-            ${p.mappingMissing && !p.hsComplete ? '<span class="type-tag tag-warn">Not Set Up</span>' : ''}
+            ${p.mappingMissing && !p.hsComplete ? '<span class="type-tag tag-warn">No Data</span>' : ''}
             ${p.statusTag ? `<span class="status-tag-badge">${esc(p.statusTag)}</span>` : ''}
             ${p.isStale ? '<span class="stale-badge">Stale</span>' : ''}
             ${p.notes?.length ? `<span class="notes-badge">${p.notes.length}</span>` : ''}
           </div>
         </td>
         <td class="col-risk">
-          <span class="risk-badge risk-${d.riskLevel}">${riskLevelLabel(d.riskLevel)}</span>
+          <span class="risk-badge risk-${d.riskLevel}" title="${esc(riskScoreTooltip(p))}">${riskLevelLabel(d.riskLevel)}</span>
           ${d.trendHtml}
         </td>
         <td class="col-status" title="${esc(_stripTags(d.academicCell))}">${d.academicCell}</td>
@@ -839,8 +1176,15 @@ function renderTable(profiles) {
             <button class="btn-quick-edit" onclick="openQuickEdit('${esc(p.id || '')}')">Edit</button>
           </div>
         </td>
+        ${_customColumns.map(colName => {
+          const val = (_customColumnValuesByStudent[p.id] && _customColumnValuesByStudent[p.id][colName]) || '';
+          return `<td class="custom-col-td"><input type="text" value="${esc(val)}" data-student-id="${esc(p.id)}" data-column="${esc(colName)}"
+            onblur="saveCustomColumnValueFromInput(this)"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:4px 6px;box-sizing:border-box;"></td>`;
+        }).join('')}
       </tr>`;
   }).join('');
+  _applyColVisibility();
 }
 
 function interventionBadge(intervention) {
@@ -868,14 +1212,25 @@ function riskLevelLabel(level) {
   return { HIGH: 'Needs Attention', MEDIUM: 'Watch Closely', LOW: 'On Track', UNKNOWN: 'No Data Yet' }[level] || level;
 }
 
-// ─────────────────────────────────────────────────────────────
+// Builds a plain-text, newline-separated breakdown for a native title="" tooltip — e.g.
+function riskScoreTooltip(p) {
+  const risk = p?.risk;
+  if (!risk) return '';
+  const detailed = risk.flagsDetailed;
+  if (!detailed || !detailed.length) {
+    return 'Score: ' + (risk.score || 0) + ' / 200';
+  }
+  const lines = detailed.map(f => '+' + f.points + ' ' + f.label);
+  lines.push('—');
+  lines.push('Score: ' + (risk.score || 0) + ' / 200 (' + riskLevelLabel(risk.level) + ')');
+  return lines.join('\n');
+}
+
 // 11. Shared student display builder
-// ─────────────────────────────────────────────────────────────
 function _buildStudentDisplay(p) {
   const acPct      = p.academic?.percent ?? null;
   const trPct      = p.trades?.[0]?.overallPct ?? null;
   const daysToETAR = p.trades?.[0]?.daysToETAR ?? null;
-  const thisWkHr   = p.academic?.thisWeekHours ?? null;
   const riskLevel  = p.risk?.level || 'UNKNOWN';
   const acadType   = p.academic?.type || '';
 
@@ -948,12 +1303,19 @@ function _buildStudentDisplay(p) {
     thisWkCell = '<span class="in-trades-badge">In Trades</span>';
   } else if (isUSNorNotStarted && !p.hasTrades) {
     thisWkCell = '<span style="color:var(--text-muted);font-size:12px;">—</span>';
-  } else if (thisWkHr === 'NWH') {
-    thisWkCell = '<span class="in-trades-badge">In Trades</span>';
-  } else if (thisWkHr !== null && thisWkHr !== undefined) {
-    thisWkCell = (+thisWkHr).toFixed(1) + ' h';
   } else {
-    thisWkCell = '—';
+    const twd = computeThisWeekDisplay_(p);
+    if (twd.kind === 'trades' || twd.kind === 'unassigned') {
+      thisWkCell = `<span class="in-trades-badge">${esc(twd.label)}</span>`;
+    } else if (twd.kind === 'no_data') {
+      thisWkCell = `<span class="in-trades-badge" style="background:var(--bg4);color:var(--text-muted);" title="No schedule uploaded yet this week">${esc(twd.label)}</span>`;
+    } else if (twd.kind === 'no_current_schedule') {
+      thisWkCell = `<span class="in-trades-badge" style="background:var(--bg4);color:var(--text-muted);" title="No schedule on file for the current week for this student">${esc(twd.label)}</span>`;
+    } else if (twd.kind === 'uncertain') {
+      thisWkCell = `<span class="in-trades-badge" style="background:var(--medium-glow);color:var(--medium);" title="Recent weeks don't agree on a pattern — worth a manual check">${esc(twd.label)}</span>`;
+    } else {
+      thisWkCell = esc(twd.label);
+    }
   }
 
   const etarCell = daysToETAR !== null
@@ -975,9 +1337,7 @@ function _buildStudentDisplay(p) {
   };
 }
 
-// ─────────────────────────────────────────────────────────────
 // 12. Detail modal
-// ─────────────────────────────────────────────────────────────
 let _savedTableScrollTop = null;
 
 function openModal(id) {
@@ -998,15 +1358,44 @@ function openModal(id) {
     if (p.hasTrades)                       badges.push('<span class="type-tag tag-trades">Trades</span>');
     if (p.tradeComplete)                   badges.push(`<span class="type-tag tag-complete">Trade Complete${p.completedTrades?.length ? ' — ' + esc(p.completedTrades.join(', ')) : ''}</span>`);
     if (p.hasIntervention)                 badges.push(interventionBadge(p.intervention));
-    badges.push(`<span class="risk-badge risk-${p.risk.level}">${riskLevelLabel(p.risk.level)}</span>`);
-    if (p.mappingMissing && !p.hsComplete) badges.push('<span class="type-tag tag-warn">Not Set Up</span>');
+    badges.push(`<span class="risk-badge risk-${p.risk.level}" title="${esc(riskScoreTooltip(p))}">${riskLevelLabel(p.risk.level)}</span>`);
+    if (p.mappingMissing && !p.hsComplete) badges.push('<span class="type-tag tag-warn">No Data</span>');
  
     document.getElementById('modalBadges').innerHTML = badges.join('');
     document.getElementById('modalBody').innerHTML   = buildModalBody(p);
     document.getElementById('detailModal').classList.remove('hidden');
+
+    // Hours Required (Overview tab) needs the same data the Academic
+    // Transcript tab uses, but Overview is the first tab shown, so
+    // this can't wait for someone to click into Transcript first.
+    // Fetch immediately on modal open (skipped if already cached for
+    // this student from a prior Transcript tab visit this session),
+    // and update just these two spans directly instead of a full
+    // modal re-render, so it doesn't disturb anything else in progress.
+    if (p.academicId && !_hoursRequiredData) {
+      google.script.run
+        .withSuccessHandler(function(hoursResult) {
+          if (String(_transcriptStudentId) !== String(p.academicId)) return; // modal moved on to a different student
+          _hoursRequiredData = (hoursResult && hoursResult.success) ? hoursResult : null;
+          if (!_hoursRequiredData) return;
+          const idSuffix = String(p.id || '').replace(/\W/g, '');
+          const maxEl = document.getElementById('ov-hours-max-' + idSuffix);
+          const minEl = document.getElementById('ov-hours-min-' + idSuffix);
+          const unmatchedEl = document.getElementById('ov-hours-unmatched-' + idSuffix);
+          if (maxEl) maxEl.textContent = _hoursRequiredData.maxRequired + ' h';
+          if (minEl) minEl.textContent = _hoursRequiredData.minRequired + ' h';
+          if (unmatchedEl) {
+            const unmatched = _hoursRequiredData.unmatchedCourses || [];
+            unmatchedEl.textContent = unmatched.length
+              ? (unmatched.length + ' remaining class' + (unmatched.length === 1 ? '' : 'es') + ' not matched to Master Schedule Hours (not counted above): ' + unmatched.join(', '))
+              : '';
+          }
+        })
+        .withFailureHandler(function() { _hoursRequiredData = null; })
+        .getHoursRequiredForTranscript(p.academicId);
+    }
   } catch(err) {
-    // Log the real detail to the console for debugging, but keep the
-    // person's screen calm — a toast, not a debug dump in a blank tab.
+    // Log the real detail to the console for debugging, but keep the person's screen calm — a toast, not a debug dump in a blank tab.
     console.error('Error opening modal for', p.displayName, err);
     showToast('Could not open details for ' + p.displayName + ' — try refreshing the page.', 'error');
   }
@@ -1023,11 +1412,11 @@ function buildModalBody(p) {
                   : level === 'LOW'    ? 'Things look good'
                   : 'Need more data to evaluate this student';
 
-  left += `<div class="risk-score-block">
+  left += `<div class="risk-score-block" title="${esc(riskScoreTooltip(p))}">
     <div class="risk-score-ring">
       <div class="risk-score-center">
         <span class="risk-score-number risk-${level}">${score}</span>
-        <span class="risk-score-label">/ 100</span>
+        <span class="risk-score-label">/ 200</span>
       </div>
     </div>
     <div class="risk-score-detail">
@@ -1063,27 +1452,38 @@ function buildModalBody(p) {
 
   if (p.academic) {
     const a = p.academic;
-    const thisWkDisplay = a.thisWeekHours === 'NWH' ? 'In Trades this week'
-                        : a.thisWeekHours !== null   ? num(a.thisWeekHours) + ' h'
-                        : '—';
+    const twdOverview = computeThisWeekDisplay_(p);
+    const thisWkDisplay =
+      twdOverview.kind === 'trades'      ? 'In Trades this week'
+      : twdOverview.kind === 'unassigned' ? twdOverview.label
+      : twdOverview.kind === 'no_data'    ? 'Not uploaded yet this week'
+      : twdOverview.kind === 'no_current_schedule' ? twdOverview.label
+      : twdOverview.kind === 'uncertain'  ? 'Needs review — no clear pattern'
+      : twdOverview.label;
 
     left += `<div class="info-section"><h3>${ICONS.academic} Academic</h3>
-      <div class="info-row"><span class="label tip" data-tip="The academic program this student is enrolled in.">Type ⓘ</span><span class="value">${esc(a.type || '—')}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Whether the student is on track, ahead, or behind pace.">Pace ⓘ</span><span class="value">${esc(a.pace || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="The academic program this student is enrolled in.">Program ⓘ</span><span class="value">${esc(a.type || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Whether the student is on track, ahead, or behind pace.">Pace Level ⓘ</span><span class="value">${esc(a.pace || '—')}</span></div>
       <div class="info-row"><span class="label tip" data-tip="Overall percentage of academic coursework completed.">Progress ⓘ</span><div class="value">${a.percent !== null ? progressBar(a.percent, 'academic') : '—'}</div></div>
       <div class="info-row"><span class="label tip" data-tip="Total academic hours logged since enrollment.">Total Hours ⓘ</span><span class="value">${num(a.hours)} h</span></div>
-      <div class="info-row"><span class="label tip" data-tip="The date the student started their academic program.">Start Date ⓘ</span><span class="value">${esc(a.start || '—')}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="The target graduation date.">Graduation Date ⓘ</span><span class="value">${esc(a.graduation || '—')}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Estimated days until graduation based on current progress.">Days to Grad ⓘ</span><span class="value">${a.daysToGrad != null ? a.daysToGrad + ' days' : '—'}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Slowest realistic total — every remaining incomplete class taken at its full Master Schedule Hours allotment.">Total Hours Maximum Needed ⓘ</span><span class="value" id="ov-hours-max-${String(p.id || '').replace(/\W/g, '')}">${_hoursRequiredData && _transcriptStudentId === p.academicId ? _hoursRequiredData.maxRequired + ' h' : '…'}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Fastest realistic total — every remaining incomplete class at its Master Schedule Hours minimum.">Total Hours Minimum Needed ⓘ</span><span class="value" id="ov-hours-min-${String(p.id || '').replace(/\W/g, '')}">${_hoursRequiredData && _transcriptStudentId === p.academicId ? _hoursRequiredData.minRequired + ' h' : '…'}</span></div>
+      <div id="ov-hours-unmatched-${String(p.id || '').replace(/\W/g, '')}" style="font-size:11px;color:var(--text-muted);">${(_hoursRequiredData && _transcriptStudentId === p.academicId && _hoursRequiredData.unmatchedCourses && _hoursRequiredData.unmatchedCourses.length) ? (_hoursRequiredData.unmatchedCourses.length + ' remaining class' + (_hoursRequiredData.unmatchedCourses.length === 1 ? '' : 'es') + ' not matched to Master Schedule Hours (not counted above): ' + esc(_hoursRequiredData.unmatchedCourses.join(', '))) : ''}</div>
+      <div class="info-row"><span class="label tip" data-tip="The date the student started their academic program.">Edgenuity Start Date ⓘ</span><span class="value">${esc(a.start || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="The target graduation date.">Predicted Graduation Date ⓘ</span><span class="value">${esc(a.graduation || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Estimated days until graduation based on current progress.">Days to Graduation ⓘ</span><span class="value">${a.daysToGrad != null ? a.daysToGrad + ' days' : '—'}</span></div>
       <div class="info-row"><span class="label tip" data-tip="Credits still needed before graduating.">Credits Remaining ⓘ</span><span class="value">${a.credits != null ? a.credits : '—'}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="The next course or milestone to complete.">Next Milestone ⓘ</span><span class="value">${esc(a.nextMilestone || '—')}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Deadline for completing the next milestone.">Target Date ⓘ</span><span class="value">${esc(a.targetDate || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="The next course or milestone to complete.">Next Class ⓘ</span><span class="value">${esc(a.nextMilestone || '—')}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Deadline for completing the next milestone.">Class Target Date ⓘ</span><span class="value">${esc(a.targetDate || '—')}</span></div>
       <div class="info-row"><span class="label tip" data-tip="Days remaining until the next milestone target date.">Target Days Left ⓘ</span><span class="value">${a.targetDaysLeft != null ? a.targetDaysLeft + ' days' : '—'}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Academic hours logged so far this week.">This Week ⓘ</span><span class="value">${esc(thisWkDisplay)}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Academic hours logged last week.">Last Week Hrs ⓘ</span><span class="value">${a.lastWeekHours !== null ? num(a.lastWeekHours) + ' h' : '—'}</span></div>
-      <div class="info-row"><span class="label tip" data-tip="Course credits earned this week.">This Wk Credits ⓘ</span><span class="value">${num(a.thisWeekCredits)}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Academic hours logged so far this week.">This Week (Hours Worked) ⓘ</span><span class="value">${esc(thisWkDisplay)}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Academic hours logged last week.">Last Week Hours Worked ⓘ</span><span class="value">${a.lastWeekHours !== null ? num(a.lastWeekHours) + ' h' : '—'}</span></div>
+      <div class="info-row"><span class="label tip" data-tip="Course credits earned this week.">This Week Credits Earned ⓘ</span><span class="value">${num(a.thisWeekCredits)}</span></div>
     </div>`;
   }
+
+  left += buildTABESection(p);
+  left += buildHSMonthlySection(p);
 
   if (p.risk.flags && p.risk.flags.length) {
     const isMedium = level === 'MEDIUM';
@@ -1100,12 +1500,10 @@ function buildModalBody(p) {
       tradesHtml += `<div class="trade-card">
         <h4>${esc(t.tarName || '—')}</h4>
         ${infoRowsWithTips([
-          ['Status',             t.status    || '—',   'Current enrollment status.'],
           ['Pace Gap',           pct(t.paceGap),       'How far ahead or behind expected pace. Negative = behind.'],
           ['Overall %',          pct(t.overallPct),    'Total percentage of trade program completed.'],
           ['Staff %',            pct(t.staffPct),      'Percentage as recorded by the trade instructor.'],
           ['Student %',          pct(t.studentPct),    'Percentage as self-reported by the student.'],
-          ['Enrollment',         t.enrollment || '—',  'Enrollment type for this trade.'],
           ['ETAR Start',         t.etarStart  || '—',  'Date the student started this trade.'],
           ['ETAR Projected End', t.etarProjectedEnd || '—', 'Estimated completion date at current pace.'],
           ['Days to ETAR',       t.daysToETAR != null ? t.daysToETAR + ' days' : '—', 'Days remaining until projected trade completion.'],
@@ -1131,8 +1529,6 @@ function buildModalBody(p) {
   if (p.intervention) right += buildInterventionSection(p.intervention);
 
   right += buildScheduleSection(p);
-  right += buildTABESection(p);
-  right += buildHSMonthlySection(p);
   right += buildTradeMonthlySection(p);
 
   return _buildModalBodyReturn(left, right);
@@ -1149,17 +1545,16 @@ function buildInterventionSection(iv) {
     <h3>${ICONS.wir} Weekly Check-In Report${iv.weekLabel ? `<span class="wir-week-chip">${esc(iv.weekLabel)}</span>` : ''}</h3>`;
 
   html += `<div class="wir-status-row">
-    ${iv.adminPriority ? `<span class="int-badge ${priorityClass}">${esc(iv.adminPriority)}</span>` : ''}
-    ${iv.urgency       ? `<span class="urgency-badge urgency-${iv.urgency.toLowerCase()}">${esc(iv.urgency)}</span>` : ''}
-    ${iv.status        ? `<span class="wir-status-text">${esc(iv.status)}</span>` : ''}
+    ${iv.adminPriority ? `<span class="wir-fact"><span class="wir-fact-label">Priority</span><span class="int-badge ${priorityClass}">${esc(iv.adminPriority)}</span></span>` : ''}
+    ${iv.urgency       ? `<span class="wir-fact"><span class="wir-fact-label">Urgency</span><span class="urgency-badge urgency-${iv.urgency.toLowerCase()}">${esc(iv.urgency)}</span></span>` : ''}
+    ${iv.status && iv.status.toUpperCase() !== p ? `<span class="wir-status-text">${esc(iv.status)}</span>` : ''}
   </div>`;
 
   if (iv.gradGap && String(iv.gradGap).trim()) {
     const g = String(iv.gradGap).trim();
     const isOver   = g.includes('over limit') || g.startsWith('⛔');
     const isYellow = g.startsWith('🟡');
-    // Derived from the same theme tokens as everywhere else, instead of
-    // a hand-picked rgba snapshot that only matched the dark theme.
+    // Derived from the same theme tokens as everywhere else, instead of a hand-picked rgba snapshot that only matched the dark theme.
     const bgColor  = isOver ? 'var(--high-glow)' : isYellow ? 'var(--medium-glow)' : 'var(--accent-glow)';
     const txtColor = isOver ? 'var(--high)' : isYellow ? 'var(--medium)' : 'var(--low)';
     html += `<div style="background:${bgColor};border-radius:6px;padding:10px 14px;margin-bottom:10px;display:flex;align-items:center;gap:10px;">
@@ -1216,13 +1611,13 @@ function buildInterventionSection(iv) {
     const caseUid = 'case-' + Math.random().toString(36).slice(2, 7);
     html += `<div style="margin-top:8px;">
       <button onclick="
-        const el=document.getElementById('${caseUid}');const open=el.style.display!=='none';
-        el.style.display=open?'none':'block';
-        this.textContent=open?'▸ Case details':'▾ Case details';
+        const el=document.getElementById('${caseUid}');const wasHidden=el.classList.contains('hidden');
+        el.classList.toggle('hidden', !wasHidden);
+        this.textContent=wasHidden?'▾ Case details':'▸ Case details';
       " style="background:none;border:none;cursor:pointer;font-size:11px;font-weight:600;color:var(--text-muted);padding:4px 0;">
         ▸ Case details
       </button>
-      <div id="${caseUid}" style="display:none;">
+      <div id="${caseUid}" class="hidden">
         ${caseRows.length ? infoRows(caseRows) : ''}
         ${iv.caseNotes ? `<div class="wir-notes" style="margin-top:8px;"><div class="wir-notes-label">Case Notes</div><div class="wir-notes-text">${esc(iv.caseNotes)}</div></div>` : ''}
       </div>
@@ -1295,15 +1690,15 @@ function buildHSMonthlySection(p) {
   const totalGained = student.totalCreditsGained;
   html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Credits at Start</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Credits at Start</div>
       <div style="font-size:18px;font-weight:700;color:var(--text);">${student.earliestCredits ?? '—'}</div>
     </div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Credits Now</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Credits Now</div>
       <div style="font-size:18px;font-weight:700;color:var(--text);">${student.latestCredits ?? '—'}</div>
     </div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Total Reduced</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Total Reduced</div>
       <div style="font-size:18px;font-weight:700;color:${totalGained > 0 ? 'var(--low)' : totalGained < 0 ? 'var(--high)' : 'var(--text)'};">${totalGained > 0 ? '-' + totalGained : totalGained}</div>
     </div>
   </div>`;
@@ -1321,9 +1716,7 @@ function buildHSMonthlySection(p) {
     <tbody>`;
 
   student.months.forEach(m => {
-    // Treat both null and undefined as "no value" — a strict
-    // === null check alone lets undefined slip through and turn
-    // into +NaN a few lines down (Math.abs(undefined) === NaN).
+    // Treat both null and undefined as "no value" —
     const gained = (m.creditsGained === null || m.creditsGained === undefined) ? null : m.creditsGained;
 
     const color   = m.inProgress   ? 'var(--text-muted)'
@@ -1360,10 +1753,7 @@ function buildHSMonthlySection(p) {
 function buildTradeMonthlySection(p) {
   if (!p.trades || !p.trades.length) return '';
 
-  // Only build sections for trades that actually have monthly
-  // snapshot history — a trade with zero monthly rows contributes
-  // nothing to render (e.g. brand new enrollment, no monthly
-  // snapshot cadence run yet).
+  // Only build sections for trades that actually have monthly snapshot history —
   const tradesWithHistory = p.trades.filter(t => t.monthlyProgress && t.monthlyProgress.length);
   if (!tradesWithHistory.length) return '';
 
@@ -1374,10 +1764,7 @@ function _buildSingleTradeMonthlySection(p, trade) {
   const months = trade.monthlyProgress;
   const uid = 'trademonthly-' + (p.id || '').replace(/\W/g, '') + '-' + String(trade.tarName || '').replace(/\W/g, '');
 
-  // Totals — mirrors the HS section's "Credits at Start / Now / Total Reduced"
-  // cards, but for trade % gained instead of credits reduced. Trade gain is
-  // additive (going up is good), the reverse sign convention of HS credits
-  // (going down is good), so labels and coloring are flipped accordingly.
+  // Totals — mirrors the HS section's "Credits at Start / Now / Total Reduced" cards, but for trade % gained instead of credits reduced.
   const completed = months.filter(m => !m.addedPostFirst && m.overallGain !== null && m.overallGain !== undefined);
   const totalGained = +completed.reduce((sum, m) => sum + m.overallGain, 0).toFixed(1);
   const earliestPct = months[0] ? months[0].endOverallPct : null;
@@ -1393,15 +1780,15 @@ function _buildSingleTradeMonthlySection(p, trade) {
 
   html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">% at Start</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">% at Start</div>
       <div style="font-size:18px;font-weight:700;color:var(--text);">${earliestPct != null ? earliestPct.toFixed(1) + '%' : '—'}</div>
     </div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">% Now</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">% Now</div>
       <div style="font-size:18px;font-weight:700;color:var(--text);">${latestPct != null ? latestPct.toFixed(1) + '%' : '—'}</div>
     </div>
     <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-      <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Total Gained</div>
+      <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Total Gained</div>
       <div style="font-size:18px;font-weight:700;color:${totalGained > 0 ? 'var(--low)' : totalGained < 0 ? 'var(--high)' : 'var(--text)'};">${totalGained > 0 ? '+' + totalGained : totalGained}%</div>
     </div>
   </div>`;
@@ -1418,8 +1805,7 @@ function _buildSingleTradeMonthlySection(p, trade) {
     <tbody>`;
 
   months.forEach(m => {
-    // Treat null/undefined the same way the HS section does — a strict
-    // === null check alone would let undefined slip through into NaN.
+    // Treat null/undefined the same way the HS section does — a strict === null check alone would let undefined slip through into NaN.
     const gained = (m.overallGain === null || m.overallGain === undefined) ? null : m.overallGain;
     const isNew  = m.addedPostFirst === true;
 
@@ -1454,9 +1840,7 @@ function _buildSingleTradeMonthlySection(p, trade) {
   return html;
 }
 
-// ─────────────────────────────────────────────────────────────
 // 13. Overrides panel
-// ─────────────────────────────────────────────────────────────
 function toggleOverridePanel() {
   const panel = document.getElementById('overridePanel');
   if (panel) panel.classList.toggle('hidden');
@@ -1477,8 +1861,6 @@ function buildOverridePanel(p) {
   ];
   const TRADE_NAME_OPTIONS = ['BCT','Carpentry','CNA','Culinary','Security','USN','Pharmacy Technician','OTP in Advanced Manufacturing'];
   // Same three HS class groups the Teacher Filter uses (TeacherFilter.gs:TEACHER_HSD_CLASSES) —
-  // this override lets staff manually place a student into one when the schedule-based
-  // auto-detection has nothing for them yet (no schedule uploaded, ambiguous class name, etc).
   const HSD_CLASS_OPTIONS = ['HSD 2', 'HSD3', 'HSE/HSD1'];
 
   const currentAcademicStatus = p.academicStatusOverride || '';
@@ -1559,9 +1941,7 @@ function clearOverride(type) {
 }
 
 // ── Row highlight after save ───────────────────────────────────
-// After saving, it's easy to lose track of which row you were just
-// on, especially once the table re-sorts. Briefly glows that
-// student's row so it stays visually anchored for a couple seconds.
+// After saving, it's easy to lose track of which row you were just on, especially once the table re-sorts.
 function _flashRowSaved(id) {
   if (!id) return;
   const checkbox = document.querySelector('.row-check[data-id="' + CSS.escape(String(id)) + '"]');
@@ -1597,16 +1977,14 @@ function onOverrideError(id, err) {
 function toggleSection(uid, headerEl) {
   const body = document.getElementById(uid);
   if (!body) return;
-  const isHidden = body.style.display === 'none' || body.classList.contains('hidden');
-  body.style.display = isHidden ? '' : 'none';
-  body.classList.remove('hidden');
+  const isHidden = body.classList.contains('hidden') || body.style.display === 'none';
+  body.classList.toggle('hidden', !isHidden);
+  body.style.display = ''; // clear any leftover inline override from before this fix
   const chevron = headerEl.querySelector('.sidebar-chevron') || headerEl.querySelector('span:last-child');
   if (chevron) chevron.textContent = isHidden ? '▾' : '▸';
 }
 
-// ─────────────────────────────────────────────────────────────
 // 14. Merge students
-// ─────────────────────────────────────────────────────────────
 function openMergeModal()        { renderMergePanel(); document.getElementById('mergeModal').classList.remove('hidden'); }
 function closeMergeModal(e)      { if (e && e.target !== document.getElementById('mergeModal')) return; document.getElementById('mergeModal').classList.add('hidden'); }
 function closeMergeModalButton() { document.getElementById('mergeModal').classList.add('hidden'); }
@@ -1700,9 +2078,7 @@ function confirmMerge(sourceId, targetId) {
     .mergeStudents(sourceId, targetId, _currentEmployeeId, _currentRole);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 15. Trade summary modal
-// ─────────────────────────────────────────────────────────────
 function openTradeSummaryModal() {
   document.getElementById('tradeSummaryModal').classList.remove('hidden');
   const search = document.getElementById('tradeSummarySearch');
@@ -1730,9 +2106,7 @@ function _renderTradeSummary() {
         complete:    false,
       });
     });
-    // Students who've finished a trade drop out of p.trades[] entirely
-    // (per the existing "Trade Complete" card logic elsewhere) — pull
-    // them in from completedTrades so they still show up at 100%.
+    // Students who've finished a trade drop out of p.trades[] entirely (per the existing "Trade Complete" card logic elsewhere) —
     if (p.tradeComplete && (!p.trades || !p.trades.length) && p.completedTrades && p.completedTrades.length) {
       p.completedTrades.forEach(name => {
         (byTrade[name] = byTrade[name] || []).push({
@@ -1788,9 +2162,7 @@ function _renderTradeSummary() {
     : '<div style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No students match that search.</div>';
 }
 
-// ─────────────────────────────────────────────────────────────
 // 16. Uploads: schedule / roster / TABE
-// ─────────────────────────────────────────────────────────────
 function openScheduleUpload() {
   document.getElementById('scheduleUploadModal').classList.remove('hidden');
   document.getElementById('scheduleFileInput').value = '';
@@ -1799,10 +2171,199 @@ function openScheduleUpload() {
   document.getElementById('scheduleUploadBtn').disabled = true;
   document.getElementById('schedulePreview').innerHTML = '';
   document.getElementById('schedulePreview').classList.add('hidden');
+
+  // Default the week picker to this week's Monday — covers the
+  // normal Monday/Wednesday/Friday re-upload case with zero clicks;
+  // only needs changing when deliberately backfilling or fixing a
+  // past week.
+  const monday = _mondayOfWeek_(new Date());
+  const picker = document.getElementById('scheduleWeekPicker');
+  picker.value = _dateToInputValue_(monday);
+  _updateScheduleWeekLabel_(monday);
+}
+
+// Snaps any selected date to that week's Monday — a real calendar
+// picker showing individual days, but the meaningful unit here is
+// always the whole week, so whatever day gets clicked resolves to
+// its Monday automatically.
+function _mondayOfWeek_(date) {
+  const day = date.getDay(); // 0=Sun ... 6=Sat
+  const diff = day === 0 ? -6 : 1 - day;
+  const monday = new Date(date.getFullYear(), date.getMonth(), date.getDate() + diff);
+  return monday;
+}
+
+function _dateToInputValue_(date) {
+  const y = date.getFullYear();
+  const m = String(date.getMonth() + 1).padStart(2, '0');
+  const d = String(date.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
+function _updateScheduleWeekLabel_(monday) {
+  const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
+  const fmt = d => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const label = document.getElementById('scheduleWeekLabel');
+  const isCurrentWeek = _dateToInputValue_(monday) === _dateToInputValue_(_mondayOfWeek_(new Date()));
+  label.textContent = `Week of ${fmt(monday)} – ${fmt(friday)}` + (isCurrentWeek ? ' (current week)' : ' — backfilling a past week');
+}
+
+function onScheduleWeekPicked(input) {
+  if (!input.value) return;
+  // Parse as a local date, not UTC — a plain 'yyyy-MM-dd' parsed via
+  // `new Date(str)` treats it as UTC midnight, which can roll back a
+  // day in US timezones. Split and construct locally instead.
+  const [y, m, d] = input.value.split('-').map(Number);
+  const picked = new Date(y, m - 1, d);
+  const monday = _mondayOfWeek_(picked);
+  input.value = _dateToInputValue_(monday); // snap the visible picker to the Monday too
+  _updateScheduleWeekLabel_(monday);
 }
 
 function closeScheduleUpload() {
+  clearInterval(_scheduleUploadTimerInterval);
   document.getElementById('scheduleUploadModal').classList.add('hidden');
+}
+
+// ── Manual single-student schedule entry ────────────────────────
+// Mirrors SCHEDULE_VALID_PERIODS on the server exactly — Period 4 is
+// lunch (excluded everywhere), and Periods 1/2/3/5/6 run Mon–Fri
+// while Period 7 only exists Tue/Thu/Fri.
+const MANUAL_SCHEDULE_VALID_PERIODS = {
+  M:  [1, 2, 3, 5, 6],
+  T:  [1, 2, 3, 5, 6, 7],
+  W:  [1, 2, 3, 5, 6],
+  TH: [1, 2, 3, 5, 6, 7],
+  F:  [1, 2, 3, 5, 6, 7],
+};
+const MANUAL_SCHEDULE_DAYS       = ['M', 'T', 'W', 'TH', 'F'];
+const MANUAL_SCHEDULE_DAY_LABELS = { M: 'Mon', T: 'Tue', W: 'Wed', TH: 'Thu', F: 'Fri' };
+const MANUAL_SCHEDULE_PERIODS    = [1, 2, 3, 5, 6, 7];
+
+function openManualScheduleEntry() {
+  document.getElementById('manualScheduleModal').classList.remove('hidden');
+  document.getElementById('manualScheduleStatus').textContent = '';
+  document.getElementById('manualScheduleStatus').className   = 'schedule-status';
+
+  const sorted  = [...allProfiles].sort((a, b) => a.displayName.localeCompare(b.displayName));
+  const options = sorted.map(p =>
+    `<option value="${esc(p.academicId || p.id)}" data-name="${esc(p.displayName)}">${esc(p.displayName)}${p.academicId ? ' — ID: ' + esc(p.academicId) : ''}</option>`
+  ).join('');
+  document.getElementById('manualScheduleStudent').innerHTML = `<option value="">— Select student —</option>${options}`;
+
+  const monday = _mondayOfWeek_(new Date());
+  const picker = document.getElementById('manualScheduleWeekPicker');
+  picker.value = _dateToInputValue_(monday);
+  _updateManualScheduleWeekLabel_(monday);
+
+  _renderManualScheduleGrid();
+}
+
+function closeManualScheduleEntry() {
+  document.getElementById('manualScheduleModal').classList.add('hidden');
+}
+
+function _updateManualScheduleWeekLabel_(monday) {
+  const friday = new Date(monday); friday.setDate(monday.getDate() + 4);
+  const fmt = d => d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+  const label = document.getElementById('manualScheduleWeekLabel');
+  const isCurrentWeek = _dateToInputValue_(monday) === _dateToInputValue_(_mondayOfWeek_(new Date()));
+  label.textContent = `Week of ${fmt(monday)} – ${fmt(friday)}` + (isCurrentWeek ? ' (current week)' : ' — backfilling a past week');
+}
+
+function onManualScheduleWeekPicked(input) {
+  if (!input.value) return;
+  const [y, m, d] = input.value.split('-').map(Number);
+  const picked = new Date(y, m - 1, d);
+  const monday = _mondayOfWeek_(picked);
+  input.value = _dateToInputValue_(monday);
+  _updateManualScheduleWeekLabel_(monday);
+}
+
+function _renderManualScheduleGrid() {
+  const grid = document.getElementById('manualScheduleGrid');
+  let html = `<table style="width:100%;border-collapse:collapse;font-size:12px;">
+    <thead><tr>
+      <th style="padding:6px 8px;text-align:left;color:var(--text-muted);font-size:10px;text-transform:uppercase;">Period</th>
+      ${MANUAL_SCHEDULE_DAYS.map(d => `<th style="padding:6px 8px;text-align:left;color:var(--text-muted);font-size:10px;text-transform:uppercase;">${MANUAL_SCHEDULE_DAY_LABELS[d]}</th>`).join('')}
+    </tr></thead><tbody>`;
+  MANUAL_SCHEDULE_PERIODS.forEach(period => {
+    html += `<tr><td style="padding:4px 8px;font-weight:700;color:var(--text-muted);">${period}</td>`;
+    MANUAL_SCHEDULE_DAYS.forEach(day => {
+      const valid = MANUAL_SCHEDULE_VALID_PERIODS[day].includes(period);
+      if (!valid) {
+        html += `<td style="padding:4px;background:var(--bg3);"></td>`;
+      } else {
+        html += `<td style="padding:4px;">
+          <input type="text" placeholder="Class" data-period="${period}" data-day="${day}" data-field="class"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12px;padding:5px 6px;margin-bottom:3px;box-sizing:border-box;">
+          <input type="text" placeholder="Location" data-period="${period}" data-day="${day}" data-field="location"
+            style="width:100%;background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:11px;padding:4px 6px;box-sizing:border-box;">
+        </td>`;
+      }
+    });
+    html += `</tr>`;
+  });
+  html += `</tbody></table>`;
+  grid.innerHTML = html;
+}
+
+function confirmManualScheduleSave() {
+  const select      = document.getElementById('manualScheduleStudent');
+  const studentId   = select.value;
+  const studentName = select.options[select.selectedIndex] ? select.options[select.selectedIndex].dataset.name : '';
+  const status      = document.getElementById('manualScheduleStatus');
+  const btn         = document.getElementById('manualScheduleSaveBtn');
+
+  if (!studentId) {
+    status.textContent = '✕ Select a student first.';
+    status.className   = 'schedule-status err';
+    return;
+  }
+
+  const entries = [];
+  document.querySelectorAll('#manualScheduleGrid input[data-field="class"]').forEach(classInput => {
+    const className = classInput.value.trim();
+    if (!className) return;
+    const period = classInput.dataset.period;
+    const day    = classInput.dataset.day;
+    const locationInput = document.querySelector(`#manualScheduleGrid input[data-field="location"][data-period="${period}"][data-day="${day}"]`);
+    entries.push({ period, day, className, location: locationInput ? locationInput.value.trim() : '' });
+  });
+
+  if (!entries.length) {
+    status.textContent = '✕ Enter at least one class period.';
+    status.className   = 'schedule-status err';
+    return;
+  }
+
+  const weekLabelKey = document.getElementById('manualScheduleWeekPicker').value;
+
+  btn.disabled      = true;
+  btn.textContent   = 'Saving…';
+  status.textContent = '';
+  status.className   = 'schedule-status';
+
+  google.script.run
+    .withSuccessHandler(function(result) {
+      btn.disabled    = false;
+      btn.textContent = 'Save Schedule';
+      if (result.error) {
+        status.textContent = '✕ ' + result.error;
+        status.className   = 'schedule-status err';
+        return;
+      }
+      status.textContent = `✓ Saved schedule for ${studentName || studentId} — ${result.weekLabel}`;
+      status.className   = 'schedule-status ok';
+      setTimeout(() => closeManualScheduleEntry(), 1800);
+    })
+    .withFailureHandler(function(err) {
+      btn.disabled    = false;
+      btn.textContent = 'Save Schedule';
+      status.textContent = '✕ ' + (err && err.message ? err.message : 'Save failed — please try again.');
+      status.className   = 'schedule-status err';
+    })
+    .saveManualStudentSchedule(studentId, studentName, weekLabelKey, entries, _currentRole);
 }
 
 function onScheduleFileSelected(input) {
@@ -1857,6 +2418,8 @@ function onScheduleFileSelected(input) {
   reader.readAsArrayBuffer(file);
 }
 
+let _scheduleUploadTimerInterval = null;
+
 function confirmScheduleUpload() {
   const preview = document.getElementById('schedulePreview');
   const base64  = preview.dataset.base64;
@@ -1867,11 +2430,51 @@ function confirmScheduleUpload() {
 
   btn.disabled       = true;
   btn.textContent    = 'Uploading…';
-  status.textContent = 'Sending to server…';
   status.className   = 'schedule-status';
+
+  // No way to get real progress out of a single google.script.run call,
+  // so instead of a static "Sending to server…" that never changes (and
+  // looks identical whether it's working or frozen), show an elapsed
+  // timer plus honest, time-based phase guesses — this is what's
+  // actually happening in the background: convert the file to Sheets
+  // format (the slow part, usually a few seconds), then parse and
+  // write. A person watching a number tick up knows it's alive; a
+  // static sentence gives them nothing to go on.
+  const startTime = Date.now();
+  clearInterval(_scheduleUploadTimerInterval);
+  let _scheduleUploadDone = false;
+  const updateStatus = () => {
+    const elapsed = Math.floor((Date.now() - startTime) / 1000);
+    let phase = 'Converting file format…';
+    if (elapsed > 8)  phase = 'Reading student schedules…';
+    if (elapsed > 15) phase = 'Still working — larger files can take a bit longer…';
+    if (elapsed > 30) phase = 'Still going — if this passes a minute, the upload may have stalled; try again if so.';
+    status.textContent = `${phase} (${elapsed}s)`;
+  };
+  updateStatus();
+  _scheduleUploadTimerInterval = setInterval(updateStatus, 1000);
+
+  // Hang-recovery, same reasoning as the dashboard Refresh button fix:
+  // if google.script.run genuinely never calls back (network stall,
+  // Apps Script silently dropping the response), there needs to be a
+  // way out besides refreshing the whole page.
+  setTimeout(() => {
+    if (_scheduleUploadDone) return;
+    clearInterval(_scheduleUploadTimerInterval);
+    btn.textContent = 'Upload Schedule';
+    btn.disabled    = false;
+    status.textContent = "✕ This is taking much longer than expected and may have stalled. If you try again and it turns out this upload actually did go through in the background, re-uploading the same file/week is safe — it'll just update the same week's data again.";
+    status.className   = 'schedule-status err';
+  }, 90000);
+
+  function finish() {
+    _scheduleUploadDone = true;
+    clearInterval(_scheduleUploadTimerInterval);
+  }
 
   google.script.run
     .withSuccessHandler(function(result) {
+      finish();
       btn.textContent = 'Upload Schedule';
       if (result.error) {
         status.textContent = '✕ ' + result.error;
@@ -1880,18 +2483,29 @@ function confirmScheduleUpload() {
         return;
       }
 
-      if (result.skippedCount && result.skippedCount > 0) {
+      const addedList   = result.added   || [];
+      const droppedList = result.dropped || [];
+      const hasDiff     = addedList.length > 0 || droppedList.length > 0;
+
+      const diffHtml = hasDiff ? `
+        <div style="margin-top:10px;font-size:12px;">
+          ${addedList.length ? `<div style="margin-bottom:4px;"><span style="color:var(--ok);font-weight:700;">+ ${addedList.length} added:</span> ${esc(addedList.map(s => s.name || s.id).join(', '))}</div>` : ''}
+          ${droppedList.length ? `<div><span style="color:var(--high);font-weight:700;">− ${droppedList.length} dropped:</span> ${esc(droppedList.map(s => s.name || s.id).join(', '))}</div>` : ''}
+        </div>` : '';
+
+      if ((result.skippedCount && result.skippedCount > 0) || hasDiff) {
         const skippedNames = (result.skipped || [])
           .map(s => s.name ? s.name : (s.sheet ? 'Tab: ' + s.sheet : 'Unknown'))
           .join(', ');
         status.innerHTML = `
           <div style="color:var(--ok);margin-bottom:6px;">✓ Saved ${result.studentCount} student${result.studentCount !== 1 ? 's' : ''} for ${esc(result.weekLabel)}</div>
-          <div style="color:var(--warn);font-size:12px;">${_warnGlyph} ${result.skippedCount} skipped: ${esc(skippedNames)}</div>
+          ${result.skippedCount ? `<div style="color:var(--warn);font-size:12px;">${_warnGlyph} ${result.skippedCount} skipped: ${esc(skippedNames)}</div>` : ''}
+          ${diffHtml}
           <div style="margin-top:10px;">
             <button class="btn-override" onclick="closeScheduleUpload()" style="max-width:160px;">Close</button>
           </div>`;
         status.className = 'schedule-status';
-        // Don't auto-close so staff can read the skipped list
+        // Don't auto-close so staff can read the skipped/added/dropped list
       } else {
         status.textContent = `✓ Saved ${result.studentCount} student${result.studentCount !== 1 ? 's' : ''} for ${result.weekLabel}`;
         status.className   = 'schedule-status ok';
@@ -1899,12 +2513,189 @@ function confirmScheduleUpload() {
       }
     })
     .withFailureHandler(function(err) {
+      finish();
       btn.textContent    = 'Upload Schedule';
       btn.disabled       = false;
       status.textContent = '✕ Upload failed: ' + (err?.message || 'Please try again.');
       status.className   = 'schedule-status err';
     })
-    .saveWeeklySchedule(base64, _currentRole);
+    .saveWeeklySchedule(base64, _currentRole, document.getElementById('scheduleWeekPicker').value);
+}
+
+// ── Bulk schedule upload (backfilling several historical weeks) ──
+let _bulkScheduleFiles = []; // [{ fileName, base64, weekLabelKey }]
+
+function openBulkScheduleUpload() {
+  document.getElementById('bulkScheduleUploadModal').classList.remove('hidden');
+  document.getElementById('bulkScheduleFileInput').value = '';
+  document.getElementById('bulkSchedulePreviewList').innerHTML = '';
+  document.getElementById('bulkScheduleUploadStatus').textContent = '';
+  document.getElementById('bulkScheduleUploadStatus').className = 'schedule-status';
+  document.getElementById('bulkScheduleUploadBtn').disabled = true;
+  _bulkScheduleFiles = [];
+}
+
+function closeBulkScheduleUpload() {
+  document.getElementById('bulkScheduleUploadModal').classList.add('hidden');
+}
+
+// Reads every selected file in parallel, converting each to base64 —
+// same conversion the single-file path uses, just done for N files
+// instead of one. Preview rows appear once ALL files have finished
+// reading, each with its own week picker defaulted blank (deliberate —
+// there's no reliable way to guess which historical week a given file
+// belongs to, so this forces a real choice rather than a guess).
+function onBulkScheduleFilesSelected(input) {
+  const files = Array.from(input.files || []);
+  if (!files.length) return;
+
+  const status = document.getElementById('bulkScheduleUploadStatus');
+  status.textContent = `Reading ${files.length} file${files.length !== 1 ? 's' : ''}…`;
+  status.className = 'schedule-status';
+
+  const badExt = files.find(f => !f.name.toLowerCase().endsWith('.xlsx') && !f.name.toLowerCase().endsWith('.xls'));
+  if (badExt) {
+    status.textContent = `✕ "${badExt.name}" isn't an .xls or .xlsx file.`;
+    status.className = 'schedule-status err';
+    return;
+  }
+
+  const readOne = file => new Promise((resolve, reject) => {
+    const reader = new FileReader();
+    reader.onload = e => {
+      try {
+        const bytes = new Uint8Array(e.target.result);
+        let binary = '';
+        const chunk = 8192;
+        for (let i = 0; i < bytes.length; i += chunk) {
+          binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+        }
+        resolve({ fileName: file.name, base64: btoa(binary), weekLabelKey: '' });
+      } catch (err) { reject(err); }
+    };
+    reader.onerror = () => reject(new Error('Could not read ' + file.name));
+    reader.readAsArrayBuffer(file);
+  });
+
+  Promise.all(files.map(readOne))
+    .then(results => {
+      _bulkScheduleFiles = results;
+      document.getElementById('bulkSchedulePreviewList').innerHTML = results.map((f, i) => `
+        <div style="display:flex;align-items:center;gap:10px;background:var(--bg3);border:1px solid var(--border);border-radius:6px;padding:8px 12px;">
+          <div style="flex:1;font-size:12.5px;color:var(--text);overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${esc(f.fileName)}</div>
+          <input
+            type="date"
+            onchange="onBulkScheduleWeekPicked(${i}, this)"
+            style="background:var(--bg);border:1px solid var(--border);border-radius:4px;color:var(--text);font-family:var(--font);font-size:12.5px;padding:5px 8px;"
+          >
+        </div>`).join('');
+      status.textContent = `${results.length} file${results.length !== 1 ? 's' : ''} loaded — pick a week for each before uploading.`;
+      status.className = 'schedule-status ok';
+      _refreshBulkScheduleUploadReadiness_();
+    })
+    .catch(err => {
+      status.textContent = '✕ ' + err.message;
+      status.className = 'schedule-status err';
+    });
+}
+
+// Snaps the picked date to that week's Monday, same as the single-file
+// modal, and records it against the right file by index.
+function onBulkScheduleWeekPicked(index, inputEl) {
+  if (!inputEl.value) return;
+  const [y, m, d] = inputEl.value.split('-').map(Number);
+  const monday = _mondayOfWeek_(new Date(y, m - 1, d));
+  const mondayStr = _dateToInputValue_(monday);
+  inputEl.value = mondayStr;
+  if (_bulkScheduleFiles[index]) _bulkScheduleFiles[index].weekLabelKey = mondayStr;
+  _refreshBulkScheduleUploadReadiness_();
+}
+
+// Enables the upload button only once every loaded file has a week
+// picked — half-assigned batches are more likely to be a mistake than
+// intentional, so this doesn't let a partial batch through silently.
+function _refreshBulkScheduleUploadReadiness_() {
+  const btn = document.getElementById('bulkScheduleUploadBtn');
+  const allPicked = _bulkScheduleFiles.length > 0 && _bulkScheduleFiles.every(f => f.weekLabelKey);
+  btn.disabled = !allPicked;
+}
+
+// Wraps the callback-based google.script.run API in a Promise so the
+// chunked upload below can just await each call instead of nesting
+// success/failure handlers per chunk.
+function _runServerCall(fnName, ...args) {
+  return new Promise((resolve, reject) => {
+    google.script.run
+      .withSuccessHandler(resolve)
+      .withFailureHandler(reject)
+      [fnName](...args);
+  });
+}
+
+// Sends files in small groups instead of one giant call — two real
+// platform ceilings made "send everything at once" unsafe: Apps
+// Script's hard execution-time limit per call (6 min on a personal
+// account), and a payload-size limit on what google.script.run can
+// send in a single request. Base64-encoded .xlsx files add up fast
+// (about 33% larger than the raw file), and a batch of just 4 hit
+// that ceiling in testing. Chunking keeps every single call small and
+// fast regardless of how many files you select in total.
+const BULK_SCHEDULE_CHUNK_SIZE = 2;
+
+async function confirmBulkScheduleUpload() {
+  if (!_bulkScheduleFiles.length || !_bulkScheduleFiles.every(f => f.weekLabelKey)) return;
+
+  const btn    = document.getElementById('bulkScheduleUploadBtn');
+  const status = document.getElementById('bulkScheduleUploadStatus');
+  btn.disabled    = true;
+  btn.textContent = 'Uploading…';
+
+  const chunks = [];
+  for (let i = 0; i < _bulkScheduleFiles.length; i += BULK_SCHEDULE_CHUNK_SIZE) {
+    chunks.push(_bulkScheduleFiles.slice(i, i + BULK_SCHEDULE_CHUNK_SIZE));
+  }
+
+  const allResults = [];
+  let anyChunkFailedOutright = false;
+
+  for (let c = 0; c < chunks.length; c++) {
+    status.textContent = `Uploading batch ${c + 1} of ${chunks.length} (${chunks[c].length} file${chunks[c].length !== 1 ? 's' : ''})…`;
+    status.className = 'schedule-status';
+
+    try {
+      const result = await _runServerCall(
+        'saveWeeklySchedulesBulk',
+        chunks[c].map(f => ({ base64Data: f.base64, weekLabelKeyOverride: f.weekLabelKey })),
+        _currentRole
+      );
+      if (result && result.results) {
+        allResults.push(...result.results);
+      } else {
+        anyChunkFailedOutright = true;
+        chunks[c].forEach(f => allResults.push({ success: false, weekLabelKeyOverride: f.weekLabelKey, error: (result && result.error) || 'Unknown error for this batch.' }));
+      }
+    } catch (err) {
+      anyChunkFailedOutright = true;
+      chunks[c].forEach(f => allResults.push({ success: false, weekLabelKeyOverride: f.weekLabelKey, error: (err && err.message) || 'This batch failed to send.' }));
+    }
+  }
+
+  btn.textContent = 'Upload All';
+  btn.disabled    = false;
+
+  const succeeded = allResults.filter(r => r.success).length;
+  const lines = allResults.map(r => {
+    const label = r.weekLabelKeyOverride || '(unknown week)';
+    return r.success
+      ? `<div style="color:var(--ok);">✓ ${esc(label)} — ${r.result && r.result.studentCount || 0} students</div>`
+      : `<div style="color:var(--high);">✕ ${esc(label)} — ${esc(r.error || 'failed')}</div>`;
+  }).join('');
+
+  status.innerHTML = `
+    <div style="margin-bottom:6px;">${succeeded} of ${allResults.length} uploaded successfully${anyChunkFailedOutright ? ' (one or more batches failed to send entirely — see below)' : ''}.</div>
+    <div style="display:flex;flex-direction:column;gap:2px;font-size:12px;">${lines}</div>
+    <div style="margin-top:10px;"><button class="btn-override" onclick="closeBulkScheduleUpload()" style="max-width:160px;">Close</button></div>`;
+  status.className = 'schedule-status';
 }
 
 let _wirGenerating = false; // guards against closing mid-run
@@ -1916,7 +2707,7 @@ function openWIRGenerateModal() {
   document.getElementById('wirGenerateLoading').classList.add('hidden');
   document.getElementById('wirGenerateCloseBtn').style.display = '';
   const input = document.getElementById('wirGenerateWeekInput');
-  if (!input.value) input.value = _defaultTimeLogWeek_();
+  if (!input.value) input.value = _defaultWIRGenerateWeek_();
   document.getElementById('wirGenerateStatus').textContent = '';
   document.getElementById('wirGenerateStatus').className = 'schedule-status';
 }
@@ -2244,9 +3035,7 @@ function confirmTABEUpload() {
     .uploadTABEData(base64, _currentRole);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 17. UI helpers
-// ─────────────────────────────────────────────────────────────
 function setLoading(on) {
   document.getElementById('loadingState').classList.add('hidden');
   document.getElementById('errorState').classList.add('hidden');
@@ -2296,8 +3085,7 @@ function esc(str) {
   return String(str ?? '').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
 }
 
-// Plain-text version of an HTML snippet, for use in title="" tooltips
-// (title attributes can't render markup, only plain text).
+// Plain-text version of an HTML snippet, for use in title="" tooltips (title attributes can't render markup, only plain text).
 function _stripTags(html) {
   return String(html ?? '').replace(/<[^>]*>/g, '').trim();
 }
@@ -2309,6 +3097,67 @@ function pctStr(v) {
   return isNaN(n) ? '—' : n.toFixed(1) + '%';
 }
 function num(v) { return v !== null && v !== undefined ? (+v).toFixed(1) : '—'; }
+
+// Single source of truth for "This Week" display, used everywhere
+// it shows up (table, cards, Overview, CSV export, print doc, Action
+// View) instead of duplicating this branching in each spot — that
+// duplication is exactly how the old 'NWH' ambiguity spread
+// everywhere in the first place. Returns { label, kind } — kind is
+// for callers that want to color/style differently per state.
+function computeThisWeekDisplay_(p) {
+  // Top-level fields, computed for EVERY student regardless of
+  // whether they have academic course data — NOT p.academic.thisWeek*,
+  // which only exists when p.academic itself exists, silently
+  // skipping trade/unassigned detection for exactly the pure-trades
+  // students it matters most for.
+  const assigned = p.thisWeekAssignedHours;
+  const source   = p.thisWeekSource;
+  const workedHours = p.thisWeekWorkedHours;
+  if (assigned === undefined && source === undefined) return { label: '—', kind: 'none' };
+
+  // Prefer the REAL schedule-derived trade flag (this week's actual
+  // schedule, or a majority vote across recent real weeks) — only
+  // fall back to the static hasTrades/tradeComplete program flags
+  // when the schedule-derived value is unknown (null), since those
+  // don't reflect what a SPECIFIC week's schedule shows (e.g. MyPace
+  // 1/2, the pre-assignment period, isn't trade time even for a
+  // student who'll eventually be trade-assigned).
+  const hasTradeAssignment = p.thisWeekHasTrade !== null && p.thisWeekHasTrade !== undefined
+    ? p.thisWeekHasTrade
+    : !!(p.hasTrades || p.tradeComplete);
+  const isRealOrPattern = source === 'real_upload' || source === 'fallback_pattern';
+
+  // Confirmed (not guessed) zero academic hours this week — either a
+  // real trade week, or if there's no trade assignment at all, this
+  // is a student with nothing assigned yet (typically brand new).
+  if (assigned === 0 && isRealOrPattern) {
+    return hasTradeAssignment
+      ? { label: 'In Trades', kind: 'trades' }
+      : { label: 'Currently Unassigned Hours', kind: 'unassigned' };
+  }
+
+  // Genuinely has academic hours assigned this week (real schedule
+  // confirms it), but no time log has been pasted yet. Before
+  // Wednesday, this is just blank — nothing wrong, just not time yet
+  // to expect a number. From Wednesday on (hours logged Mon-Wed),
+  // treat it as an honest 0 if still nothing's been logged.
+  if (workedHours === null && assigned > 0 && isRealOrPattern) {
+    const day = new Date().getDay(); // 0 Sun, 1 Mon, 2 Tue, 3 Wed...
+    const pastWednesdayGrace = day === 0 || day >= 3;
+    return pastWednesdayGrace
+      ? { label: '0.0 h', kind: 'worked-zero' }
+      : { label: '—', kind: 'none' };
+  }
+
+  if (source === 'no_data_yet') return { label: 'Not Uploaded Yet', kind: 'no_data' };
+  if (source === 'uncertain')   return { label: 'Needs Review',     kind: 'uncertain' };
+
+  if (workedHours !== null && workedHours !== undefined) return { label: (+workedHours).toFixed(1) + ' h', kind: 'worked' };
+  // Nothing above matched — no recognized source, no logged hours.
+  // Usually means this week's schedule genuinely hasn't landed for
+  // this student and there's no history to fall back on either.
+  return { label: 'No Current Schedule', kind: 'no_current_schedule' };
+}
 
 function formatTimestamp(iso) {
   try {
@@ -2346,9 +3195,7 @@ function copyId(event, id) {
   }
 }
 
-// ─────────────────────────────────────────────────────────────
 // 18. Quick Edit drawer
-// ─────────────────────────────────────────────────────────────
 let _qeStudentId = null;
 
 function openQuickEdit(id) {
@@ -2434,9 +3281,7 @@ async function saveQuickEdit() {
   setTimeout(() => { statusEl.className = 'qe-status'; closeQuickEdit(); }, 1600);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 19. Change history
-// ─────────────────────────────────────────────────────────────
 function openHistoryPanel() {
   document.getElementById('historyModal').classList.remove('hidden');
   document.getElementById('historyList').innerHTML = '';
@@ -2530,9 +3375,7 @@ function confirmRevert(btn, studentId, type, rowIndex) {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
 // 20. Archived students
-// ─────────────────────────────────────────────────────────────
 let _archivedCount = null; // cached after first fetch, so the summary card doesn't need a server round trip on every render
 
 function _loadArchivedCount() {
@@ -2543,6 +3386,87 @@ function _loadArchivedCount() {
     })
     .withFailureHandler(() => { _archivedCount = 0; })
     .getArchivedStudents();
+}
+
+// ── Custom columns ───────────────────────────────────────────────
+let _customColumns = [];               // ordered array of column names
+let _customColumnValuesByStudent = {}; // { studentId: { columnName: value } }
+let _customColumnsLoaded = false;
+
+function _loadCustomColumns() {
+  google.script.run
+    .withSuccessHandler(function(result) {
+      _customColumnsLoaded = true;
+      if (!result || result.success === false) return;
+      _customColumns = result.columns || [];
+      _customColumnValuesByStudent = {};
+      (result.values || []).forEach(v => {
+        if (!_customColumnValuesByStudent[v.studentId]) _customColumnValuesByStudent[v.studentId] = {};
+        _customColumnValuesByStudent[v.studentId][v.columnName] = v.value;
+      });
+      _renderCustomColumnHeaders();
+      applyFilters();
+    })
+    .withFailureHandler(function() { _customColumnsLoaded = true; })
+    .getCustomColumnData();
+}
+
+function _renderCustomColumnHeaders() {
+  document.querySelectorAll('.custom-col-th').forEach(el => el.remove());
+  const anchor = document.getElementById('lastHeaderCell');
+  if (!anchor) return;
+  _customColumns.forEach(name => {
+    const th = document.createElement('th');
+    th.className = 'custom-col-th';
+    th.style.minWidth = '110px';
+    th.innerHTML = `<span style="cursor:pointer;" onclick="confirmRemoveCustomColumn('${esc(name)}')" title="Click to remove this column">${esc(name)} ✕</span>`;
+    anchor.insertAdjacentElement('beforebegin', th);
+  });
+}
+
+function promptAddCustomColumn() {
+  const name = (prompt('Name for the new column:') || '').trim();
+  if (!name) return;
+  if (_customColumns.some(c => c.toLowerCase() === name.toLowerCase())) {
+    alert('A column named "' + name + '" already exists.');
+    return;
+  }
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) { alert(result && result.error ? result.error : 'Failed to add column.'); return; }
+      _customColumns.push(result.columnName);
+      _renderCustomColumnHeaders();
+      applyFilters();
+    })
+    .withFailureHandler(function(err) { alert(err && err.message ? err.message : 'Failed to add column.'); })
+    .addCustomColumn(name, _currentRole);
+}
+
+function confirmRemoveCustomColumn(name) {
+  if (!confirm('Remove the "' + name + '" column and all its values for every student? This cannot be undone.')) return;
+  google.script.run
+    .withSuccessHandler(function(result) {
+      if (!result || result.success === false) { alert(result && result.error ? result.error : 'Failed to remove column.'); return; }
+      _customColumns = _customColumns.filter(c => c.toLowerCase() !== name.toLowerCase());
+      Object.keys(_customColumnValuesByStudent).forEach(sid => { delete _customColumnValuesByStudent[sid][name]; });
+      _renderCustomColumnHeaders();
+      applyFilters();
+    })
+    .withFailureHandler(function(err) { alert(err && err.message ? err.message : 'Failed to remove column.'); })
+    .removeCustomColumn(name, _currentRole);
+}
+
+function saveCustomColumnValueFromInput(input) {
+  const studentId  = input.dataset.studentId;
+  const columnName = input.dataset.column;
+  const value       = input.value;
+  if (!_customColumnValuesByStudent[studentId]) _customColumnValuesByStudent[studentId] = {};
+  _customColumnValuesByStudent[studentId][columnName] = value;
+  input.style.borderColor = 'var(--medium)';
+  google.script.run
+    .withSuccessHandler(function() { input.style.borderColor = ''; })
+    .withFailureHandler(function() { input.style.borderColor = 'var(--high)'; })
+    .saveCustomColumnValue(studentId, columnName, value, _currentRole);
 }
 
 function openArchivedModal() {
@@ -2590,9 +3514,7 @@ function restoreStudent(studentId, btn) {
     .setStudentActive(studentId, true, _currentEmployeeId, _currentRole);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 21. First-visit walkthrough
-// ─────────────────────────────────────────────────────────────
 const WT_STEPS = [
   { title: 'Welcome', body: 'This is the student progress dashboard for Tulsa Job Corps. It pulls from your academic, trades, and intervention data automatically. Here\'s a quick look at the four things you\'ll use most.', target: null, position: 'center' },
   { title: 'Start with the red ones', body: 'Students marked Needs Attention have the highest risk scores based on academic pace, trade progress, and WIR flags. Check this filter first thing each morning.', target: '[data-risk="HIGH"]', position: 'below' },
@@ -2665,9 +3587,7 @@ function _maybeStartWalkthrough() {
   setTimeout(startWalkthrough, 800);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 22. View toggle (table / cards / action) + renderers
-// ─────────────────────────────────────────────────────────────
 let _currentView = 'table';
 
 function setView(view) {
@@ -2675,11 +3595,65 @@ function setView(view) {
   document.getElementById('btnTableView').classList.toggle('active',  view === 'table');
   document.getElementById('btnCardView').classList.toggle('active',   view === 'cards');
   document.getElementById('btnActionView').classList.toggle('active', view === 'action');
+  const prodBtn = document.getElementById('btnProductivityView');
+  if (prodBtn) prodBtn.classList.toggle('active', view === 'productivity');
+
   document.querySelector('.table-wrap').classList.toggle('hidden', view !== 'table');
   document.getElementById('cardsGrid').classList.toggle('hidden',   view !== 'cards');
   document.getElementById('actionView').classList.toggle('hidden',  view !== 'action');
+  const prodContainer = document.getElementById('productivityViewContainer');
+  if (prodContainer) prodContainer.classList.toggle('hidden', view !== 'productivity');
+
+  if (view === 'productivity') {
+    _showProductivityInline();
+  } else {
+    _hideProductivityInline();
+  }
+
   try { localStorage.setItem('dashView', view); } catch(e) {}
   applyFilters();
+}
+
+// ── Productivity as an inline view (Admin / Program Manager) ──
+// Moves #productivityBody (loading skeleton + real content, see 60_UI_ProductivityModal.html) out of the modal and into the inline view
+function _showProductivityInline() {
+  const body      = document.getElementById('productivityBody');
+  const content   = document.getElementById('productivityContent');
+  const container = document.getElementById('productivityViewContainer');
+  if (body && container && body.parentElement !== container) {
+    container.appendChild(body);
+    body.style.display   = 'block';
+    body.style.flex      = '';
+    body.style.minHeight = '';
+    if (content) {
+      content.style.flex      = '';
+      content.style.overflowY = 'visible';
+      content.style.minHeight = '';
+    }
+  }
+  if (!_productivityData) {
+    _loadProductivityData();
+  } else {
+    _renderProductivityModal();
+  }
+}
+
+// Returns #productivityBody to its home inside the modal box (right after modal-header), restoring its original flex/scroll styles so the
+function _hideProductivityInline() {
+  const body     = document.getElementById('productivityBody');
+  const content  = document.getElementById('productivityContent');
+  const modalBox = document.querySelector('#productivityModal .modal-box');
+  if (body && modalBox && body.parentElement !== modalBox) {
+    modalBox.appendChild(body);
+    body.style.display   = 'flex';
+    body.style.flex      = '1';
+    body.style.minHeight = '0';
+    if (content) {
+      content.style.flex      = '1';
+      content.style.overflowY = 'auto';
+      content.style.minHeight = '0';
+    }
+  }
 }
 
 function renderCards(profiles) {
@@ -2729,10 +3703,12 @@ function renderCards(profiles) {
           </span>
         </div>
 
-        ${flags.length ? `<div class="sc-flags">${flags.map(f => `<div class="sc-flag ${level === 'MEDIUM' ? 'medium' : ''}">${esc(f)}</div>`).join('')}</div>` : ''}
+        ${flags.length
+          ? `<div class="sc-flags">${flags.map(f => `<div class="sc-flag ${level === 'MEDIUM' ? 'medium' : ''}">${esc(f)}</div>`).join('')}</div>`
+          : `<div class="sc-flags sc-flags-clear"><div class="sc-flag-clear">${level === 'UNKNOWN' ? 'Not enough data yet to flag anything.' : 'No flags this week — nothing needs attention.'}</div></div>`}
 
         <div class="sc-footer">
-          ${gradGap ? `<span class="sc-grad-window" style="color:${gwColor}">${esc(gradGap)}</span>` : '<span class="sc-grad-window" style="color:var(--text-muted)">—</span>'}
+          ${gradGap ? `<span class="sc-grad-window" style="color:${gwColor}" title="Days remaining in the two-year program window">Grad window: ${esc(gradGap)}</span>` : `<span class="sc-grad-window" style="color:var(--text-muted)">Grad window: —</span>`}
           ${d.intBadge}
           <div style="display:flex;gap:6px;margin-left:auto;"></div>
           <div class="action-btns">
@@ -2752,11 +3728,13 @@ function renderActionView(profiles) {
 
   const groups = [
     { key: 'grad_critical', icon: ICONS.blocked,     cls: 'critical', title: 'Over Program Limit',               sub: 'Graduation window has passed — immediate action required',       test: p => String(p.intervention?.gradGap || '').includes('over limit') },
-    { key: 'wir_critical',  icon: ICONS.alertTri,    cls: 'critical', title: 'Critical Intervention This Week',  sub: 'Admin priority is CRITICAL in the latest WIR',                   test: p => (p.intervention?.adminPriority || '').toUpperCase() === 'CRITICAL' },
+    { key: 'wir_critical',  icon: ICONS.alertTri,    cls: 'critical', title: 'Critical Intervention This Week',  sub: 'Program-deadline flag fired in the latest WIR — the most severe case the engine flags', test: p => String(p.intervention?.issueTags || p.intervention?.detectedPatterns || '').includes('PROGRAM_DEADLINE_CRITICAL') },
     { key: 'grad_watch',    icon: ICONS.calendar,    cls: 'high',     title: 'Graduation Deadline — Under 60 Days', sub: 'Students approaching the two-year program limit',             test: p => { const g = String(p.intervention?.gradGap || ''); if (g.includes('over limit')) return false; if (g.startsWith('🟡')) return true; const m = g.match(/(\d+)d left/); return !!m && parseInt(m[1], 10) <= 60; } },
     { key: 'wir_high',      icon: ICONS.flag,        cls: 'high',     title: 'High Intervention Priority',        sub: 'Admin priority is HIGH in the latest WIR',                      test: p => { const pri = (p.intervention?.adminPriority || '').toUpperCase(); const critg = String(p.intervention?.gradGap || ''); return pri === 'HIGH' && !critg.includes('over limit'); } },
     { key: 'followup',      icon: ICONS.checkCircle, cls: 'follow',   title: 'Follow-Up Due',                     sub: 'WIR follow-up date is today or in the past',                    test: p => { if (!p.intervention?.followUp) return false; const d = new Date(p.intervention.followUp); if (isNaN(d.getTime())) return false; const t = new Date(); t.setHours(0,0,0,0); return d <= t; } },
-    { key: 'no_hours',      icon: ICONS.clock,       cls: 'medium',   title: 'No Academic Hours This Week',       sub: 'Students with zero hours logged so far this week',               test: p => { const h = p.academic?.thisWeekHours; return h !== 'NWH' && (h === null || h === 0) && p.hasAcademic; } },
+    { key: 'no_hours',      icon: ICONS.clock,       cls: 'medium',   title: 'No Academic Hours This Week',       sub: 'Students with zero hours logged so far this week',               test: p => { const twd = computeThisWeekDisplay_(p); return twd.kind === 'worked-zero' || (twd.kind === 'worked' && p.thisWeekWorkedHours === 0); } },
+    { key: 'pacing_uncertain', icon: ICONS.alertTri, cls: 'medium',   title: 'Pacing Needs Review',                sub: 'Last 4 real weeks don\'t agree on a pattern — no schedule upload this week, worth a manual check', test: p => p.thisWeekSource === 'uncertain' && !p.thisWeekHasTrade },
+    { key: 'pacing_estimated', icon: ICONS.clock,    cls: 'follow',   title: 'Pacing From Pattern, Not This Week\'s Upload', sub: 'No schedule uploaded yet for the current week — this week\'s hours are estimated from recent history', test: p => p.thisWeekSource === 'fallback_pattern' && !p.thisWeekHasTrade },
     { key: 'stale',         icon: ICONS.noData,      cls: 'medium',   title: 'No Recent Progress Updates',        sub: 'Progress % unchanged for 3+ weeks — possible data gap',          test: p => p.isStale === true },
   ];
 
@@ -2814,12 +3792,10 @@ function toggleActionGroup(header, bodyId) {
   header.classList.toggle('collapsed', !isHidden);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 23. CSV export
-// ─────────────────────────────────────────────────────────────
 function exportCSV() {
   const filtered = _getFilteredSorted();
-  const headers  = ['Student','ID','Risk Level','Risk Score','Stale','Academic Type','Academic %','Pace','Days to Grad','This Week Hrs','Trade Name','Trade %','Trade Status','Days to ETAR','WIR Priority','WIR Urgency','Has Intervention','Total Time Hrs','Last Modified','Notes Count','Not Set Up'];
+  const headers  = ['Student','ID','Risk Level','Risk Score','Stale','Academic Type','Academic %','Pace','Days to Grad','This Week Hrs','Trade Name','Trade %','Trade Status','Days to ETAR','WIR Priority','WIR Urgency','Has Intervention','Total Time Hrs','Last Modified','Notes Count','No Data'];
   const csvRows  = [headers];
 
   filtered.forEach(p => {
@@ -2828,7 +3804,7 @@ function exportCSV() {
     csvRows.push([
       p.displayName, p.academicId || '', p.risk.level, p.risk.score, p.isStale ? 'Yes' : 'No',
       p.academic?.type || '', p.academic?.percent ?? '', p.academic?.pace || '', p.academic?.daysToGrad ?? '',
-      p.academic?.thisWeekHours === 'NWH' ? 'In Trades' : (p.academic?.thisWeekHours ?? ''),
+      (p.academic ? computeThisWeekDisplay_(p).label : ''),
       tradeName, p.trades?.[0]?.overallPct ?? (p.tradeComplete ? 100 : ''), effectiveTradeStatus,
       p.trades?.[0]?.daysToETAR ?? '', p.intervention?.adminPriority || '', p.intervention?.urgency || '',
       p.hasIntervention ? 'Yes' : 'No', p.time?.totalHours ?? '',
@@ -2844,9 +3820,7 @@ function exportCSV() {
   document.body.appendChild(a); a.click(); document.body.removeChild(a); URL.revokeObjectURL(url);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 24. Staff notes
-// ─────────────────────────────────────────────────────────────
 function buildNotesSection(p) {
   const notes = (p.notes || []).slice().sort((a, b) => (b.date || '') > (a.date || '') ? 1 : -1);
 
@@ -2933,9 +3907,7 @@ function riskTrendIcon(trend) {
   return '';
 }
 
-// ─────────────────────────────────────────────────────────────
 // 25. Filter presets (custom)
-// ─────────────────────────────────────────────────────────────
 const BUILTIN_PRESETS = {
   '__high_risk':        { risk: 'HIGH', type: 'ALL',            search: '' },
   '__unmapped':         { risk: 'ALL',  type: 'UNMAPPED',       search: '' },
@@ -2966,22 +3938,23 @@ function applyPreset(value) {
 }
 
 let _staleOnlyActive = false;
+let _bulkSearchIds = null; // Set of profile IDs, or null when bulk search isn't active
 
-// activeType checks:
-//   HS, HISET, GED    → based on examProgram (Name Mapping "examProgram"
-//                        column), NOT academic.type — academic.type only
-//                        ever holds 'HS' or null (see _buildAcademicFromCourseData_
-//                        in ProfilesVault.gs), so HISET/GED can only be
-//                        matched via examProgram.
-//   TRADES, INTERVENTION, TRADE_COMPLETE, HS_COMPLETE, UNMAPPED → unchanged.
+// activeType checks: HS, HISET, GED    → based on examProgram (Name Mapping "examProgram" column), NOT academic.type —
 function _getFilteredSorted() {
   let results = allProfiles.filter(p => {
-    if (activeRisk !== 'ALL' && p.risk.level !== activeRisk) return false;
+    if (_bulkSearchIds && !_bulkSearchIds.has(p.id)) return false;
+    if (activeRisk !== 'ALL' && activeRisk !== 'NOT_STARTED' && p.risk.level !== activeRisk) return false;
+    if (activeRisk === 'NOT_STARTED') {
+      const notStarted = p.academicStatusOverride === 'NOT_STARTED' || p.tradeStatusOverride === 'NOT_STARTED';
+      if (!notStarted) return false;
+    }
     if (activeType !== 'ALL') {
       if (activeType === 'HS'             && (!p.academic || p.academic.type !== 'HS'))    return false;
       if (activeType === 'HISET'          && p.examProgram !== 'HiSET')                    return false;
       if (activeType === 'GED'            && p.examProgram !== 'GED')                      return false;
       if (activeType === 'TRADES'         && (p.hasAcademic || !p.hasTrades))              return false;
+      if (activeType.startsWith('TRADE:') && !(p.trades || []).some(t => t.tarName === activeType.slice(6))) return false;
       if (activeType === 'INTERVENTION'   && !p.hasIntervention)                           return false;
       if (activeType === 'TRADE_COMPLETE' && !p.tradeComplete)                             return false;
       if (activeType === 'HS_COMPLETE'    && !p.hsComplete) return false;
@@ -3008,6 +3981,17 @@ function _getFilteredSorted() {
      const studentId = p.academicId || p.id || '';
      const effectiveHSD = p.hsdOverride || _hsdAssignments[studentId];
      if (effectiveHSD !== _activeHSDFilter) return false;
+    }
+    if (_activeSubjectFilter) {
+      const studentId = p.academicId || p.id || '';
+      const subjects = _subjectAssignments[studentId] || [];
+      if (!subjects.some(s => _activeSubjectFilter.includes(s))) return false;
+    }
+    if (_activeTradeAutoFilter) {
+      const tradeName = (p.tradeNameOverride || p.trades?.[0]?.tarName || '').toLowerCase();
+      const wanted = _activeTradeAutoFilter.trade.toLowerCase();
+      const isUSN  = tradeName === 'usn';
+      if (tradeName !== wanted && !(_activeTradeAutoFilter.includeUSN && isUSN)) return false;
     }
 
     return true;
@@ -3085,9 +4069,7 @@ setRiskFilter = function(el) { _staleOnlyActive = false; _origSetRiskFilter(el);
 const _origSetTypeFilter = setTypeFilter;
 setTypeFilter = function(el) { _staleOnlyActive = false; _origSetTypeFilter(el); };
 
-// ─────────────────────────────────────────────────────────────
 // 26. Bulk selection + bulk actions
-// ─────────────────────────────────────────────────────────────
 function toggleRowSelect(checkbox) {
   const id = checkbox.dataset.id;
   if (checkbox.checked) { selectedIds.add(id); checkbox.closest('tr').classList.add('row-selected'); }
@@ -3127,11 +4109,7 @@ function updateBulkBar() {
 }
 
 // ── Column visibility — per-column model ──────────────────────
-// Replaces the old single on/off _colsExpanded boolean. The
-// existing "+" button (toggleExtraCols) still works exactly as
-// before as an "everything on/off" shortcut, but now it's backed
-// by the same per-column state the new Columns customizer panel
-// controls, so the two stay in sync with each other.
+// Replaces the old single on/off _colsExpanded boolean.
 const COL_VISIBILITY_KEYS = {
   risk: 'col-risk', status: 'col-status', academicPct: 'col-academic-pct',
   tradeName: 'col-trade-name', tradePct: 'col-trade-pct', thisWeek: 'col-thisweek',
@@ -3160,12 +4138,7 @@ function setColumnVisibility(key, visible) {
   _applyColVisibility();
 }
 
-// The "+" button's original scope — only the 3 columns that were
-// always hidden-by-default. Kept separate from the full
-// COL_VISIBILITY_KEYS set so this button's behavior doesn't change
-// now that Risk/Status/Trade/This Week/WIR are also individually
-// toggleable (those default to visible and are controlled only via
-// their own sidebar checkboxes, not this shortcut).
+// The "+" button's original scope — only the 3 columns that were always hidden-by-default.
 const EXPANDABLE_COL_KEYS = ['academicPct', 'tradePct', 'etar'];
 
 function toggleExtraCols() {
@@ -3202,8 +4175,7 @@ function _restoreZoomLevel() {
   setZoomLevel(level);
 }
 
-// ── Density toggle — now a checkbox in the sidebar's View section
-// (moved out of the filter-bar toolbar) ─────────────────────────
+// ── Density toggle — now a checkbox in the sidebar's View section (moved out of the filter-bar toolbar) ─────────────────────────
 function toggleDensity() {
   const isCompact = document.body.classList.toggle('density-compact');
   const cb = document.getElementById('densityCheckbox');
@@ -3352,9 +4324,7 @@ async function confirmBulkStatus() {
     .bulkSetStatus(ids, acStatus, trStatus, _currentEmployeeId, _currentRole);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 27. Risk sparkline
-// ─────────────────────────────────────────────────────────────
 function buildRiskSparkline(p) {
   const snaps = (p.progressSnapshots || []).filter(s => s.score !== null && s.score !== undefined && s.date).sort((a, b) => a.date < b.date ? -1 : 1);
   if (snaps.length < 2) return '';
@@ -3392,13 +4362,8 @@ function buildRiskSparkline(p) {
   </div>`;
 }
 
-// ============================================================
 // 28. PRINT DOCUMENT BUILDERS
-// ------------------------------------------------------------
-// Print output is a fully separate #printDoc element built from
-// the same data already in memory (currentModalProfile,
-// _transcriptData) — not a recolored copy of the on-screen modal.
-// ============================================================
+// Print output is a fully separate #printDoc element built from the same data already in memory (currentModalProfile, _transcriptData) —
 function _escP(str) { return esc(str); } // alias for readability in this section
 
 function _docId(studentId, kind) {
@@ -3460,8 +4425,14 @@ function _buildPrintOverviewDoc(p) {
 
   if (p.academic) {
     const a = p.academic;
-    const thisWk = a.thisWeekHours === 'NWH' ? 'In trades this week'
-                 : a.thisWeekHours !== null ? num(a.thisWeekHours) + ' h' : '\u2014';
+    const twdPrint = computeThisWeekDisplay_(p);
+    const thisWk =
+      twdPrint.kind === 'trades'      ? 'In trades this week'
+      : twdPrint.kind === 'unassigned' ? twdPrint.label
+      : twdPrint.kind === 'no_data'    ? 'Not uploaded yet this week'
+      : twdPrint.kind === 'no_current_schedule' ? twdPrint.label
+      : twdPrint.kind === 'uncertain'  ? 'Needs review'
+      : twdPrint.label;
     const targetStatus = TargetDateEngine && a.targetDate
       ? (new Date(a.targetDate) < new Date() ? ' (overdue)' : '')
       : '';
@@ -3492,7 +4463,6 @@ function _buildPrintOverviewDoc(p) {
     p.trades.forEach(t => {
       html += `<div style="font-weight:700;font-size:9.5px;margin-bottom:3px;">${_escP(t.tarName)}</div>
         <div class="dl-grid" style="margin-bottom:6px;">
-          ${_dlRow('Status', t.status)}
           ${_dlRow('Overall %', pct(t.overallPct))}
           ${_dlRow('Pace gap', pct(t.paceGap))}
           ${_dlRow('Days to ETAR', t.daysToETAR != null ? t.daysToETAR + ' days' : null)}
@@ -3530,10 +4500,7 @@ function _buildPrintOverviewDoc(p) {
       </div>`;
   }
 
-  // Schedule + TABE side by side, built synchronously from cached
-  // data if available (schedule is fetched async elsewhere in the
-  // app — for print we skip the async fetch and just omit the
-  // section if nothing is cached yet, rather than block printing).
+  // Schedule + TABE side by side, built synchronously from cached data if available (schedule is fetched async elsewhere in the app —
   let scheduleHtml = '';
   const scheduleContainer = document.getElementById('schedule-' + String(p.academicId || p.id || '').replace(/\W/g, ''));
   if (scheduleContainer && scheduleContainer.dataset.printRows) {
@@ -3706,9 +4673,7 @@ window.addEventListener('afterprint', function() {
   if (el) el.innerHTML = '';
 });
 
-// ─────────────────────────────────────────────────────────────
 // 29. Role-based presets
-// ─────────────────────────────────────────────────────────────
 const ROLE_PRESETS = {
   manager:   { risk: 'ALL',  type: 'ALL',          search: '', sort: 'risk',        label: 'Manager view' },
   counselor: { risk: 'ALL',  type: 'INTERVENTION', search: '', sort: 'risk',        label: 'Counselor view' },
@@ -3731,9 +4696,7 @@ function applyRolePreset(role) {
   applyFilters();
 }
 
-// ─────────────────────────────────────────────────────────────
 // 30. Email digest
-// ─────────────────────────────────────────────────────────────
 function triggerDigest() {
   const highCount   = allProfiles.filter(p => p.risk && p.risk.level === 'HIGH').length;
   const mediumCount = allProfiles.filter(p => p.risk && p.risk.level === 'MEDIUM').length;
@@ -3780,9 +4743,7 @@ function confirmDigest() {
     .sendDigest(recipients, _currentRole);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 31. Schedule section (student modal)
-// ─────────────────────────────────────────────────────────────
 function buildScheduleSection(p) {
   const studentId = p.academicId || p.id || '';
   if (!studentId) return '';
@@ -3793,40 +4754,72 @@ function buildScheduleSection(p) {
     .withSuccessHandler(function(result) {
       const container = document.getElementById(uid);
       if (!container) return;
-      if (result.error || !result.weekLabel) {
+      if (result.error) {
         container.innerHTML = '';
         return;
+      }
+      const hasRealSchedule = !!result.weekLabel;
+
+      // Categorize WHY there's no schedule, using data already on
+      // the profile (trade assignment, academic enrollment) instead
+      // of guessing at hours from history. MyPace 1/2 shows up as a
+      // trade-overview row but represents pre-assignment orientation,
+      // not a real trade — checked separately so a brand-new student
+      // doesn't get mistaken for "in trades."
+      const realTrades  = (p.trades || []).filter(t => !/mypace/i.test(t.tarName || ''));
+      const isMyPaceOnly = !realTrades.length && (p.trades || []).some(t => /mypace/i.test(t.tarName || ''));
+      const hasRealTrade = realTrades.length > 0;
+      const hasAcademicEnrollment = !!p.academic || !!p.hasAcademic;
+
+      let noScheduleState;
+      if (hasRealTrade) {
+        noScheduleState = { label: 'In Trades', note: null };
+      } else if (isMyPaceOnly) {
+        noScheduleState = { label: 'No HSD or Trade Yet', note: null };
+      } else if (hasAcademicEnrollment) {
+        noScheduleState = { label: '0.0 h', note: 'No schedule uploaded yet for this week.' };
+      } else {
+        noScheduleState = { label: 'No Current Schedule', note: null };
       }
 
       const isWeekend  = result.isWeekend;
       const todayLabel = result.todayLabel;
 
       let html = `<div class="info-section">
-        <h3>${ICONS.calendar} Schedule <span style="font-weight:400;font-size:11px;color:var(--text-muted);">${esc(result.weekLabel)}</span></h3>`;
+        <h3>${ICONS.calendar} Schedule${hasRealSchedule ? ` <span style="font-weight:400;font-size:11px;color:var(--text-muted);">${esc(result.weekLabel)}</span>` : ''}</h3>`;
 
-      if (!isWeekend && result.expectedWeekHours > 0) {
+      if (!isWeekend && hasRealSchedule && result.expectedWeekHours > 0) {
         html += `<div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:14px;">
           <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-            <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Expected This Week</div>
+            <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Expected This Week</div>
             <div style="font-size:18px;font-weight:700;color:var(--text);">${result.expectedWeekHours} h</div>
           </div>
           <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-            <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Expected Today</div>
+            <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Expected Today</div>
             <div style="font-size:18px;font-weight:700;color:var(--text);">${result.expectedTodayHours !== null ? result.expectedTodayHours + ' h' : '—'}</div>
           </div>
           <div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:10px;text-align:center;">
-            <div style="font-size:9px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Worked This Week</div>
+            <div style="font-size:10px;font-weight:700;color:var(--text-muted);margin-bottom:4px;">Worked This Week</div>
             <div style="font-size:18px;font-weight:700;color:${
-              p.academic && p.academic.thisWeekHours !== null && p.academic.thisWeekHours !== 'NWH' && result.expectedWeekHours > 0
-                ? (+p.academic.thisWeekHours >= result.expectedWeekHours * 0.5 ? 'var(--low)' : 'var(--high)')
-                : 'var(--text)'
+              (() => {
+                const twd = computeThisWeekDisplay_(p);
+                const isRealWorkedNumber = twd.kind === 'worked' || twd.kind === 'worked-zero';
+                return (isRealWorkedNumber && result.expectedWeekHours > 0)
+                  ? (+p.thisWeekWorkedHours >= result.expectedWeekHours * 0.5 ? 'var(--low)' : 'var(--high)')
+                  : 'var(--text)';
+              })()
             };">${
-              p.academic && p.academic.thisWeekHours !== null
-                ? (p.academic.thisWeekHours === 'NWH' ? 'In Trades' : (+p.academic.thisWeekHours).toFixed(1) + ' h')
-                : '—'
+              esc(computeThisWeekDisplay_(p).label)
             }</div>
           </div>
         </div>`;
+      } else if (!hasRealSchedule) {
+        html += `<div style="background:var(--bg4);border:1px solid var(--border);border-radius:6px;padding:14px;text-align:center;margin-bottom:14px;">
+          <div style="font-size:16px;font-weight:700;color:var(--text);">${esc(noScheduleState.label)}</div>
+          ${noScheduleState.note ? `<div style="font-size:11px;color:var(--text-muted);font-style:italic;margin-top:6px;">${esc(noScheduleState.note)}</div>` : ''}
+        </div>`;
+        container.innerHTML = html + '</div>';
+        return;
       }
 
       if (!isWeekend && todayLabel) {
@@ -3943,9 +4936,7 @@ function buildScheduleSection(p) {
   </div>`;
 }
 
-// ─────────────────────────────────────────────────────────────
 // 32. TABE section (student modal)
-// ─────────────────────────────────────────────────────────────
 function buildTABESection(p) {
   if (!p.tabe || (!p.tabe.math && !p.tabe.reading)) return '';
 
@@ -4033,28 +5024,28 @@ function buildTABESection(p) {
     </div>`;
 }
 
-// ============================================================
 // 33. MODAL TABS: Transcript / Testing / Trades / Time Log
-// ============================================================
 let _transcriptData     = null;   // last-loaded payload from getStudentTranscript
 let _transcriptStudentId = null;  // which student it belongs to, so we know to reload on switch
 let _transcriptSettings  = null;  // { weeklyHours, activeWeeks }
-let _transcriptEditingRow = null; // rowIndex currently expanded for edit, or 'new-1'/'new-2' for add-row
+// Set of rowIds currently expanded for editing (was a single value —
+// changed so several existing rows can be open and corrected at once,
+// e.g. right after auto-populate, then saved together in one batch.
+let _transcriptEditingRows = new Set();
 
 function _resetTranscriptStateIfNewStudent(p) {
   if (_transcriptStudentId !== p.academicId) {
     _transcriptData      = null;
     _transcriptSettings  = null;
-    _transcriptEditingRow = null;
+    _transcriptEditingRows = new Set();
+    _hoursRequiredData   = null;
     _transcriptStudentId = p.academicId || null;
   }
   const modalBox = document.querySelector('#detailModal .modal-box');
   if (modalBox) modalBox.classList.remove('tr-wide');
 }
 
-// tabIds map is used (not string-guessed capitalization) precisely
-// because 'timelog' → 'modalTabTimeLog' has an internal capital L
-// that a naive charAt(0).toUpperCase() approach would miss.
+// tabIds map is used (not string-guessed capitalization) precisely because 'timelog' → 'modalTabTimeLog' has an internal capital L that a
 function switchModalTab(tab) {
   const overviewBtn    = document.getElementById('modalTabOverview');
   const transcriptBtn  = document.getElementById('modalTabTranscript');
@@ -4091,8 +5082,7 @@ function switchModalTab(tab) {
 }
 
 function _buildModalBodyReturn(left, right) {
-  // Testing tab only renders for HiSET/GED students — examProgram
-  // comes from Name Mapping (see ProfilesVault.gs), NOT academic.type.
+  // Testing tab only renders for HiSET/GED students — examProgram comes from Name Mapping (see ProfilesVault.gs), NOT academic.type.
   const showTesting = currentModalProfile && TESTING_SUBTESTS[currentModalProfile.examProgram];
 
   return `
@@ -4181,11 +5171,12 @@ function _buildModalBodyReturn(left, right) {
               <th>Total</th>
               <th>Idle</th>
               <th>Worked</th>
+              <th>Activities</th>
               <th>Assigned</th>
             </tr>
           </thead>
           <tbody id="timeLogHistoryBody">
-            <tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>
+            <tr><td colspan="6" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>
           </tbody>
         </table>
       </div>
@@ -4305,6 +5296,7 @@ function _saveTestingAttempt(subtestName, uid) {
 const TRANSCRIPT_COURSE_CATEGORIES = ['English','Math','Science','Social Studies','Language','Fine Arts','Electives'];
 
 let _courseCatalogue = null; // cached across the session — course list rarely changes
+let _hoursRequiredData = null; // { minRequired, maxRequired, matchedCount, unmatchedCourses } from getHoursRequiredForTranscript — reset per student, see _resetTranscriptStateIfNewStudent
 
 function _getCourseIdCategoryMap() {
   const map = {};
@@ -4347,9 +5339,21 @@ function _loadTranscriptTab() {
       _transcriptData      = result;
       _transcriptStudentId = studentId;
       _transcriptSettings  = result.settings || { weeklyHours: 10, activeWeeks: { w1:true, w2:true, w3:true, w4:true } };
-      _transcriptEditingRow = null;
+      _transcriptEditingRows = new Set();
 
       _renderTranscriptTab();
+
+      google.script.run
+        .withSuccessHandler(function(hoursResult) {
+          _hoursRequiredData = (hoursResult && hoursResult.success) ? hoursResult : null;
+          const transcriptView = document.getElementById('modalTranscriptView');
+          if (transcriptView && !transcriptView.classList.contains('hidden') && _transcriptData) {
+            _renderTranscriptTab();
+            _reopenTranscriptEditPanels();
+          }
+        })
+        .withFailureHandler(function() { _hoursRequiredData = null; })
+        .getHoursRequiredForTranscript(studentId);
 
       if (!_courseCatalogue) {
         google.script.run
@@ -4359,6 +5363,7 @@ function _loadTranscriptTab() {
             const transcriptView = document.getElementById('modalTranscriptView');
           if (transcriptView && !transcriptView.classList.contains('hidden') && _transcriptData) {
             _renderTranscriptTab();
+            _reopenTranscriptEditPanels();
             }
           })
           .withFailureHandler(function() { _courseCatalogue = []; })
@@ -4398,7 +5403,14 @@ function _renderTranscriptTab() {
       <div class="tr-chip"><div class="tr-chip-label">Courses Completed</div><div class="tr-chip-value">${completedCount}</div></div>
       <div class="tr-chip"><div class="tr-chip-label">In Progress</div><div class="tr-chip-value">${inProgress}</div></div>
       ${overdueCount > 0 ? `<div class="tr-chip" style="border-color:color-mix(in srgb, var(--high) 35%, transparent);"><div class="tr-chip-label" style="color:var(--high);">Overdue</div><div class="tr-chip-value" style="color:var(--high);">${overdueCount}</div></div>` : ''}
+      <div class="tr-chip" title="Minimum Amount of Hours Required — summed from Master Schedule Hours across this student's incomplete transcript courses only"><div class="tr-chip-label">Min Hours Required</div><div class="tr-chip-value">${_hoursRequiredData ? _hoursRequiredData.minRequired : '…'}</div></div>
+      <div class="tr-chip" title="Maximum Amount of Hours Required — summed from Master Schedule Hours across this student's incomplete transcript courses only"><div class="tr-chip-label">Max Hours Required</div><div class="tr-chip-value">${_hoursRequiredData ? _hoursRequiredData.maxRequired : '…'}</div></div>
     </div>
+    ${(_hoursRequiredData && _hoursRequiredData.unmatchedCourses && _hoursRequiredData.unmatchedCourses.length) ? `
+      <div style="font-size:11px;color:var(--text-muted);margin:-10px 0 14px;">
+        ${_hoursRequiredData.unmatchedCourses.length} course${_hoursRequiredData.unmatchedCourses.length === 1 ? '' : 's'} not found in Master Schedule Hours, so ${_hoursRequiredData.unmatchedCourses.length === 1 ? "it isn't" : "they aren't"} counted above: ${esc(_hoursRequiredData.unmatchedCourses.join(', '))}
+      </div>
+    ` : ''}
 
     <div style="margin-bottom:18px;">
       <div style="font-size:12px;font-weight:700;color:var(--text-muted);text-transform:uppercase;letter-spacing:.4px;margin-bottom:8px;">Credits by Category</div>
@@ -4453,8 +5465,20 @@ function _renderTranscriptBlock(blockNum, label, courses) {
   }
 
   return `
-    <div class="tr-block-header">${label}</div>
-    <table class="tr-table" id="${uid}">
+    <div class="tr-block-header" style="display:flex;align-items:center;justify-content:space-between;">
+      <span>${label}</span>
+      ${courses.length ? `
+        <span style="display:flex;gap:8px;">
+          <button class="btn-override-toggle" style="font-size:11px;" onclick="_openAllTranscriptEditsInBlock(${blockNum})" title="Open every row in ${esc(label)} for editing at once">
+            Bulk Edit
+          </button>
+          <button class="btn-override-toggle" style="font-size:11px;" onclick="_closeAllTranscriptEditsInBlock(${blockNum})" title="Collapse every open row in ${esc(label)} (does not save)">
+            Collapse All
+          </button>
+        </span>
+      ` : ''}
+    </div>
+    <table class="tr-table" id="${uid}" data-block="${blockNum}">
       <thead>
         <tr>
           <th>Course</th>
@@ -4488,7 +5512,7 @@ function _renderTranscriptRow(c) {
   };
   const s = statusMap[status] || statusMap['no-date'];
   const rowKey = 'row-' + c.rowId;
-  const isEditing = _transcriptEditingRow === c.rowId;
+  const isEditing = _transcriptEditingRows.has(String(c.rowId));
 
   const mainRow = `
     <tr class="tr-row ${isEditing ? 'editing' : ''}" onclick="_toggleTranscriptEdit('${esc(String(c.rowId))}')" id="${rowKey}">
@@ -4506,50 +5530,283 @@ function _renderTranscriptRow(c) {
   const editPanel = `
     <tr id="${editPanelId}-row" class="${isEditing ? '' : 'hidden'}">
       <td colspan="8" style="padding:0;border-bottom:1px solid var(--border);">
-        <div id="${editPanelId}" class="tr-edit-panel" style="margin:10px 14px;"></div>
+        <div id="${editPanelId}" class="tr-edit-panel tr-existing-edit-panel" data-row-id="${esc(String(c.rowId))}" data-block="${c.block ?? ''}" style="margin:10px 14px;"></div>
       </td>
     </tr>`;
 
   return mainRow + editPanel;
 }
 
-function _toggleTranscriptEdit(rowId) {
-  const wasEditing = String(_transcriptEditingRow) === String(rowId);
-  _transcriptEditingRow = wasEditing ? null : rowId;
-  _renderTranscriptTab();
-  if (!wasEditing) {
-    const course = (_transcriptData.courses || []).find(c => String(c.rowId) === String(rowId));
-    if (course) _renderTranscriptEditForm('edit-' + rowId, course, false);
+// Opens ONE row's edit panel via direct DOM manipulation — no full
+// table re-render, so any unsaved typing in OTHER currently-open
+// panels is completely untouched. This was the actual bug: the old
+// _toggleTranscriptEdit called _renderTranscriptTab() (a full rebuild
+// of every row's HTML) just to reveal one panel, which wiped every
+// other open panel's live input values back to their saved state.
+function _openTranscriptRowForEdit(rowId) {
+  const key = String(rowId);
+  if (_transcriptEditingRows.has(key)) return; // already open — nothing to do
+  _transcriptEditingRows.add(key);
+
+  const mainRow  = document.getElementById('row-' + key);
+  const panelRow = document.getElementById('edit-' + key + '-row');
+  if (mainRow) {
+    mainRow.classList.add('editing');
+    const chevronCell = mainRow.querySelector('td:last-child');
+    if (chevronCell) chevronCell.textContent = '▾ Edit';
+  }
+  if (panelRow) panelRow.classList.remove('hidden');
+
+  const course = (_transcriptData.courses || []).find(c => String(c.rowId) === key);
+  if (course) {
+    _renderTranscriptEditForm('edit-' + key, course, false);
+    _updateExistingEditsBar(course.block);
   }
 }
 
-function _openTranscriptAddRow(blockNum) {
-  const tempKey = 'new-' + blockNum;
-  _transcriptEditingRow = null;
+// Closes ONE row's edit panel, same direct-DOM approach — doesn't
+// touch any other row.
+function _closeTranscriptRowEdit(rowId) {
+  const key = String(rowId);
+  if (!_transcriptEditingRows.has(key)) return;
+  _transcriptEditingRows.delete(key);
 
+  const mainRow  = document.getElementById('row-' + key);
+  const panelRow = document.getElementById('edit-' + key + '-row');
+  if (mainRow) {
+    mainRow.classList.remove('editing');
+    const chevronCell = mainRow.querySelector('td:last-child');
+    if (chevronCell) chevronCell.textContent = '▸ Edit';
+  }
+  if (panelRow) panelRow.classList.add('hidden');
+
+  const course = (_transcriptData.courses || []).find(c => String(c.rowId) === key);
+  if (course) _updateExistingEditsBar(course.block);
+}
+
+// Opens every row in a block for editing at once — the "Bulk Edit"
+// button next to each block's header. Goes through the same
+// per-row DOM path as a single click (not a full table re-render),
+// so it's safe to use even if some rows in the block are already
+// open with unsaved changes — those are simply left alone.
+function _openAllTranscriptEditsInBlock(blockNum) {
+  const courses = (_transcriptData.courses || []).filter(c => c.block === blockNum);
+  courses.forEach(c => _openTranscriptRowForEdit(c.rowId));
+  _updateExistingEditsBar(blockNum);
+}
+
+// Closes every row in a block that's currently open for editing —
+// "Collapse All." Does NOT save anything; it's a pure UI close, same
+// as clicking each row's own toggle to close it individually.
+function _closeAllTranscriptEditsInBlock(blockNum) {
+  const courses = (_transcriptData.courses || []).filter(c => c.block === blockNum);
+  courses.forEach(c => _closeTranscriptRowEdit(c.rowId));
+  _updateExistingEditsBar(blockNum);
+}
+
+function _toggleTranscriptEdit(rowId) {
+  const key = String(rowId);
+  if (_transcriptEditingRows.has(key)) {
+    _closeTranscriptRowEdit(key);
+  } else {
+    _openTranscriptRowForEdit(key);
+  }
+}
+
+// After _renderTranscriptTab() rebuilds the DOM from scratch, every
+// row's edit panel div is empty again — this re-populates the form
+// for each rowId still in _transcriptEditingRows, and refreshes each
+// affected block's "Save All Changes" bar.
+function _reopenTranscriptEditPanels() {
+  const blocksTouched = new Set();
+  _transcriptEditingRows.forEach(rowId => {
+    const course = (_transcriptData.courses || []).find(c => String(c.rowId) === rowId);
+    if (course) {
+      _renderTranscriptEditForm('edit-' + rowId, course, false);
+      blocksTouched.add(course.block);
+    }
+  });
+  // Also refresh bars for blocks that just lost their last open row
+  // (bar needs to disappear), not just ones that still have rows open.
+  document.querySelectorAll('.tr-table').forEach(table => {
+    const blockNum = Number(table.dataset.block);
+    if (!isNaN(blockNum)) blocksTouched.add(blockNum);
+  });
+  blocksTouched.forEach(blockNum => _updateExistingEditsBar(blockNum));
+}
+
+// Shows/hides/updates the "Save All Changes (N)" bar for existing-row
+// edits in a block — separate from _updateBulkSaveBar (new rows),
+// since a block could have both new rows being added AND existing
+// rows being corrected at the same time.
+function _updateExistingEditsBar(blockNum) {
   const bodyId = 'tr-block-' + blockNum + '-body';
   const body   = document.getElementById(bodyId);
   if (!body) return;
 
-  // Remove any previous "new row" form if one is already open
-  const existing = document.getElementById('tr-new-row-wrap');
-  if (existing) existing.remove();
+  const openPanels = Array.from(body.querySelectorAll('.tr-existing-edit-panel[data-block="' + blockNum + '"]'))
+    .filter(p => !p.closest('tr').classList.contains('hidden'));
+  let bar = body.querySelector('.tr-bulk-edit-bar[data-block="' + blockNum + '"]');
+
+  if (openPanels.length < 2) {
+    // With 0 or 1 row open, the per-row Save button already covers
+    // it — the bulk bar only earns its place once there's actually
+    // more than one row to save together.
+    if (bar) bar.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement('tr');
+    bar.className = 'tr-bulk-edit-bar';
+    bar.dataset.block = blockNum;
+    const addRow = body.querySelector('.tr-row-add');
+    body.insertBefore(bar, addRow);
+  } else {
+    // Re-anchor in case row order shifted after the re-render.
+    const addRow = body.querySelector('.tr-row-add');
+    body.insertBefore(bar, addRow);
+  }
+
+  bar.innerHTML = `
+    <td colspan="8" style="padding:10px 14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn-override" onclick="_saveAllTranscriptEdits(${blockNum})">
+          Save All Changes (${openPanels.length})
+        </button>
+        <span id="tr-bulk-edit-status-${blockNum}" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+    </td>`;
+}
+
+// Saves every currently-open EXISTING-row edit panel in a block in one
+// batched call (saveTranscriptRows) — the actual fix for going through
+// several auto-populated rows and correcting them without a
+// save-then-reopen-next round trip for each one.
+function _saveAllTranscriptEdits(blockNum) {
+  const studentId = _transcriptStudentId;
+  const bodyId    = 'tr-block-' + blockNum + '-body';
+  const body      = document.getElementById(bodyId);
+  if (!body) return;
+
+  const panels = Array.from(body.querySelectorAll('.tr-existing-edit-panel[data-block="' + blockNum + '"]'))
+    .filter(p => !p.closest('tr').classList.contains('hidden'));
+  if (!panels.length) return;
+
+  const statusEl = document.getElementById('tr-bulk-edit-status-' + blockNum);
+  const rowsData = [];
+  for (const panel of panels) {
+    const rowId = panel.dataset.rowId;
+    const collected = _collectTranscriptRowData(panel.id, rowId, blockNum);
+    if (!collected.ok) {
+      const panelStatus = document.getElementById(panel.id + '-status');
+      if (panelStatus) { panelStatus.textContent = collected.error; panelStatus.style.color = 'var(--high)'; }
+      if (statusEl) { statusEl.textContent = 'Fix the highlighted row before saving.'; statusEl.style.color = 'var(--high)'; }
+      panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return;
+    }
+    rowsData.push(collected.rowData);
+  }
+
+  if (statusEl) { statusEl.textContent = 'Saving ' + rowsData.length + ' rows…'; statusEl.style.color = 'var(--text-muted)'; }
+
+  google.script.run
+    .withSuccessHandler(onSaved)
+    .withFailureHandler(onFailed)
+    .saveTranscriptRows(studentId, rowsData);
+
+  function onSaved(result) {
+    if (!result || result.success === false) { onFailed(result); return; }
+    showToast(rowsData.length === 1 ? 'Course updated.' : rowsData.length + ' courses updated.');
+
+    rowsData.forEach(rowData => {
+      const idx = _transcriptData.courses.findIndex(c => String(c.rowId) === String(rowData.rowId));
+      if (idx !== -1) {
+        _transcriptData.courses[idx] = Object.assign({}, _transcriptData.courses[idx], rowData, {
+          lastModified: new Date().toISOString(),
+        });
+      }
+      _transcriptEditingRows.delete(String(rowData.rowId));
+    });
+
+    _renderTranscriptTab();
+    _reopenTranscriptEditPanels();
+  }
+  function onFailed(err) {
+    const msg = (err && err.error) || (err && err.message) || 'Save failed — please try again.';
+    if (statusEl) { statusEl.textContent = msg; statusEl.style.color = 'var(--high)'; }
+  }
+}
+
+let _transcriptNewRowCounter = 0;
+
+function _openTranscriptAddRow(blockNum) {
+  const bodyId = 'tr-block-' + blockNum + '-body';
+  const body   = document.getElementById(bodyId);
+  if (!body) return;
+
+  // Unlike before, this does NOT remove any existing new-row panel —
+  // several blank rows can be open at once in the same block, so a
+  // whole semester's classes can be typed in before saving anything.
+  const panelNum = _transcriptNewRowCounter++;
+  const panelId  = 'tr-new-panel-' + blockNum + '-' + panelNum;
 
   const wrap = document.createElement('tr');
-  wrap.id = 'tr-new-row-wrap';
+  wrap.className = 'tr-new-row-wrap';
+  wrap.dataset.block = blockNum;
   wrap.innerHTML = `<td colspan="8" style="padding:0;">
-    <div id="tr-new-panel" class="tr-edit-panel" style="margin:10px 14px;"></div>
+    <div id="${panelId}" class="tr-edit-panel tr-new-panel" data-block="${blockNum}" style="margin:10px 14px;"></div>
   </td>`;
-  // Insert right before the "+ Add Course" row (which is always last)
-  const addRow = body.querySelector('.tr-row-add');
-  body.insertBefore(wrap, addRow);
+  // Insert right before the bulk-save bar (or the "+ Add Course" row
+  // if no bulk-save bar exists yet for this block).
+  const anchor = body.querySelector('.tr-bulk-save-bar[data-block="' + blockNum + '"]') || body.querySelector('.tr-row-add');
+  body.insertBefore(wrap, anchor);
 
   const blankCourse = {
     rowId: null, block: blockNum, classNumber: '', courseId: '', courseName: '',
-    instance: '', transfer: false, subject: '', credit: 0, classHours: 0,
+    instance: '', transfer: false, subject: '', credit: 0.5, classHours: 0,
     startDate: null, adjStart: null, targetDate: null, completed: false,
   };
-  _renderTranscriptEditForm('tr-new-panel', blankCourse, true);
+  _renderTranscriptEditForm(panelId, blankCourse, true);
+  _updateBulkSaveBar(blockNum);
+}
+
+// Shows/hides/updates the "Save All New Rows (N)" bar for a block,
+// based on how many blank new-row panels are currently open in it.
+// Created once per block, right before the "+ Add Course" row.
+function _updateBulkSaveBar(blockNum) {
+  const bodyId = 'tr-block-' + blockNum + '-body';
+  const body   = document.getElementById(bodyId);
+  if (!body) return;
+
+  const openPanels = body.querySelectorAll('.tr-new-panel[data-block="' + blockNum + '"]');
+  let bar = body.querySelector('.tr-bulk-save-bar[data-block="' + blockNum + '"]');
+
+  if (!openPanels.length) {
+    if (bar) bar.remove();
+    return;
+  }
+
+  if (!bar) {
+    bar = document.createElement('tr');
+    bar.className = 'tr-bulk-save-bar';
+    bar.dataset.block = blockNum;
+    const addRow = body.querySelector('.tr-row-add');
+    body.insertBefore(bar, addRow);
+  }
+
+  bar.innerHTML = `
+    <td colspan="8" style="padding:10px 14px;">
+      <div style="display:flex;align-items:center;gap:10px;">
+        <button class="btn-override" onclick="_saveAllNewTranscriptRows(${blockNum})">
+          Save All New Rows (${openPanels.length})
+        </button>
+        <button class="btn-override danger" onclick="_cancelAllNewTranscriptRows(${blockNum})">
+          Cancel All
+        </button>
+        <span id="tr-bulk-status-${blockNum}" style="font-size:12px;color:var(--text-muted);"></span>
+      </div>
+    </td>`;
 }
 
 function _renderTranscriptEditForm(panelId, course, isNew) {
@@ -4617,32 +5874,36 @@ function _renderTranscriptEditForm(panelId, course, isNew) {
     <div class="tr-target-preview" id="${panelId}-preview"></div>
 
     <div class="tr-edit-actions">
-      <button class="btn-override tr-save-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-block="${course.block ?? ''}" data-is-new="${isNew ? '1' : '0'}">
-        ${isNew ? 'Add Course' : 'Save Changes'}
-      </button>
-      <button class="btn-override danger tr-cancel-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-is-new="${isNew ? '1' : '0'}">
-        Cancel
-      </button>
+      ${isNew
+        ? `<button class="btn-override danger tr-remove-new-btn" data-panel-id="${panelId}" data-block="${course.block ?? ''}">
+             Remove this row
+           </button>`
+        : `<button class="btn-override tr-save-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-block="${course.block ?? ''}" data-is-new="0">
+             Save Changes
+           </button>
+           <button class="btn-override danger tr-cancel-btn" data-panel-id="${panelId}" data-row-id="${course.rowId ?? ''}" data-is-new="0">
+             Cancel
+           </button>`}
       <span id="${panelId}-status" style="font-size:12px;color:var(--text-muted);align-self:center;"></span>
     </div>
   `;
 
-  panel.querySelector('.tr-save-btn').addEventListener('click', function() {
-    const rowId = this.dataset.rowId || null;
-    const block = this.dataset.block ? Number(this.dataset.block) : null;
-    const isNewRow = this.dataset.isNew === '1';
-    _saveTranscriptRow(this.dataset.panelId, rowId, block, isNewRow);
-  });
-
-  panel.querySelector('.tr-cancel-btn').addEventListener('click', function() {
-    if (this.dataset.isNew === '1') {
-      _cancelTranscriptAdd();
-    } else {
+  if (isNew) {
+    panel.querySelector('.tr-remove-new-btn').addEventListener('click', function() {
+      _removeNewTranscriptRow(this.dataset.panelId, Number(this.dataset.block));
+    });
+  } else {
+    panel.querySelector('.tr-save-btn').addEventListener('click', function() {
+      const rowId = this.dataset.rowId || null;
+      const block = this.dataset.block ? Number(this.dataset.block) : null;
+      _saveTranscriptRow(this.dataset.panelId, rowId, block);
+    });
+    panel.querySelector('.tr-cancel-btn').addEventListener('click', function() {
       _toggleTranscriptEdit(this.dataset.rowId);
-    }
-  });
+    });
+  }
   if (!_canEdit('transcript')) {
-    panel.querySelectorAll('input, select, button.tr-save-btn').forEach(el => el.disabled = true);
+    panel.querySelectorAll('input, select, button').forEach(el => el.disabled = true);
     const status = panel.querySelector(`#${panelId}-status`);
     if (status) { status.textContent = 'View only — you do not have permission to edit transcripts.'; status.style.color = 'var(--text-muted)'; }
   }
@@ -4694,24 +5955,28 @@ function _recalcTranscriptPreview(panelId) {
     <span style="color:var(--text-muted);font-size:11px;">(based on ${_transcriptSettings.weeklyHours}h/wk pacing settings)</span>`;
 }
 
-function _saveTranscriptRow(panelId, rowId, block, isNew) {
-  const studentId = _transcriptStudentId;
-  const statusEl  = document.getElementById(panelId + '-status');
-
+// Extracts + validates one panel's fields. Shared by both the
+// single-row edit-save path and the bulk new-rows save path, so
+// validation rules only live in one place.
+function _collectTranscriptRowData(panelId, rowId, block) {
   const subjectVal = document.getElementById(panelId + '-subject').value;
-  if (!subjectVal) {
-    if (statusEl) { statusEl.textContent = 'Please select a category.'; statusEl.style.color = 'var(--high)'; }
-    return;
-  }
+  const startDateVal = document.getElementById(panelId + '-startDate').value || '';
+  const adjStartVal   = document.getElementById(panelId + '-adjStart').value  || '';
+  const hasStarted = !!(startDateVal || adjStartVal);
+
+  // Category is only required once the class has actually started —
+  // an auto-populated row sitting with no start date yet (hasn't been
+  // scheduled/begun) shouldn't force staff to pick a category before
+  // they even know one, e.g. during a first pass through a new
+  // student's whole transcript.
+  if (hasStarted && !subjectVal) return { ok: false, error: 'Please select a category.' };
+
   const courseName = (document.getElementById(panelId + '-courseNameFree') || {}).value || '';
-  if (!courseName.trim()) {
-    if (statusEl) { statusEl.textContent = 'Course name is required.'; statusEl.style.color = 'var(--high)'; }
-    return;
-  }
+  if (!courseName.trim()) return { ok: false, error: 'Course name is required.' };
 
   const hours     = parseFloat(document.getElementById(panelId + '-classHours').value) || 0;
-  const startDate = document.getElementById(panelId + '-startDate').value || null;
-  const adjStart  = document.getElementById(panelId + '-adjStart').value  || null;
+  const startDate = startDateVal || null;
+  const adjStart  = adjStartVal  || null;
   const completed = document.getElementById(panelId + '-completed').checked;
   const transfer  = document.getElementById(panelId + '-transfer').checked;
   const effectiveStart = adjStart || startDate;
@@ -4724,7 +5989,7 @@ function _saveTranscriptRow(panelId, rowId, block, isNew) {
     courseName: courseName.trim(),
     instance:   document.getElementById(panelId + '-instance').value || '',
     transfer,
-    subject:    document.getElementById(panelId + '-subject').value || '',
+    subject:    subjectVal,
     credit:     parseFloat(document.getElementById(panelId + '-credit').value) || 0,
     classHours: hours,
     startDate,
@@ -4732,37 +5997,130 @@ function _saveTranscriptRow(panelId, rowId, block, isNew) {
     targetDate,
     completed,
   };
+  return { ok: true, rowData };
+}
+
+// Saves an EDIT to an existing row. New-row adds no longer go through
+// here — see _saveAllNewTranscriptRows() below, which handles every
+// pending new row in a block in one batched call.
+function _saveTranscriptRow(panelId, rowId, block) {
+  const studentId = _transcriptStudentId;
+  const statusEl  = document.getElementById(panelId + '-status');
+
+  const collected = _collectTranscriptRowData(panelId, rowId, block);
+  if (!collected.ok) {
+    if (statusEl) { statusEl.textContent = collected.error; statusEl.style.color = 'var(--high)'; }
+    return;
+  }
+  const rowData = collected.rowData;
 
   if (statusEl) { statusEl.textContent = 'Saving…'; statusEl.style.color = 'var(--text-muted)'; }
 
-  const serverCall = isNew
-    ? () => google.script.run
-        .withSuccessHandler(onSaved)
-        .withFailureHandler(onFailed)
-        .addTranscriptRow(studentId, rowData)
-    : () => google.script.run
-        .withSuccessHandler(onSaved)
-        .withFailureHandler(onFailed)
-        .saveTranscriptRow(studentId, rowData);
+  google.script.run
+    .withSuccessHandler(onSaved)
+    .withFailureHandler(onFailed)
+    .saveTranscriptRow(studentId, rowData);
 
   function onSaved(result) {
     if (!result || result.success === false) { onFailed(result); return; }
-    showToast(isNew ? 'Course added.' : 'Course updated.');
-    _transcriptData = null;
-    _transcriptEditingRow = null;
-    _loadTranscriptTab();
+    showToast('Course updated.');
+
+    const savedRow = Object.assign({}, rowData, {
+      rowId: (result && result.rowId) || rowId,
+      lastModified: new Date().toISOString(),
+    });
+    if (!_transcriptData) _transcriptData = {};
+    if (!_transcriptData.courses) _transcriptData.courses = [];
+    const idx = _transcriptData.courses.findIndex(c => String(c.rowId) === String(savedRow.rowId));
+    if (idx !== -1) {
+      _transcriptData.courses[idx] = Object.assign({}, _transcriptData.courses[idx], savedRow);
+    } else {
+      _transcriptData.courses.push(savedRow);
+    }
+
+    _transcriptEditingRows.delete(String(savedRow.rowId));
+    _renderTranscriptTab();
+    _reopenTranscriptEditPanels();
   }
   function onFailed(err) {
     const msg = (err && err.error) || (err && err.message) || 'Save failed — please try again.';
     if (statusEl) { statusEl.textContent = msg; statusEl.style.color = 'var(--high)'; }
   }
-
-  serverCall();
 }
 
-function _cancelTranscriptAdd() {
-  const wrap = document.getElementById('tr-new-row-wrap');
+// Saves every currently-open blank new-row panel in a block in ONE
+// batched server call (addTranscriptRows) — this is the actual fix
+// for "fill in one row, save, fill in the next" friction. Validates
+// every open panel first; if any one is incomplete, nothing is saved
+// and that panel's status shows the error, so a typo three rows back
+// doesn't silently drop that row.
+function _saveAllNewTranscriptRows(blockNum) {
+  const studentId = _transcriptStudentId;
+  const bodyId    = 'tr-block-' + blockNum + '-body';
+  const body      = document.getElementById(bodyId);
+  if (!body) return;
+
+  const panels = Array.from(body.querySelectorAll('.tr-new-panel[data-block="' + blockNum + '"]'));
+  if (!panels.length) return;
+
+  const statusEl = document.getElementById('tr-bulk-status-' + blockNum);
+  const rowsData = [];
+  for (const panel of panels) {
+    const collected = _collectTranscriptRowData(panel.id, null, blockNum);
+    if (!collected.ok) {
+      const panelStatus = document.getElementById(panel.id + '-status');
+      if (panelStatus) { panelStatus.textContent = collected.error; panelStatus.style.color = 'var(--high)'; }
+      if (statusEl) { statusEl.textContent = 'Fix the highlighted row before saving.'; statusEl.style.color = 'var(--high)'; }
+      panel.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      return; // nothing saved — all-or-nothing, so a bad row doesn't silently vanish
+    }
+    rowsData.push(collected.rowData);
+  }
+
+  if (statusEl) { statusEl.textContent = 'Saving ' + rowsData.length + ' rows…'; statusEl.style.color = 'var(--text-muted)'; }
+
+  google.script.run
+    .withSuccessHandler(onSaved)
+    .withFailureHandler(onFailed)
+    .addTranscriptRows(studentId, rowsData);
+
+  function onSaved(result) {
+    if (!result || result.success === false) { onFailed(result); return; }
+    showToast(rowsData.length === 1 ? 'Course added.' : rowsData.length + ' courses added.');
+
+    if (!_transcriptData) _transcriptData = {};
+    if (!_transcriptData.courses) _transcriptData.courses = [];
+    rowsData.forEach((rowData, i) => {
+      _transcriptData.courses.push(Object.assign({}, rowData, {
+        rowId: (result.rowIds && result.rowIds[i]) || null,
+        lastModified: new Date().toISOString(),
+      }));
+    });
+
+    _renderTranscriptTab();
+    _reopenTranscriptEditPanels();
+  }
+  function onFailed(err) {
+    const msg = (err && err.error) || (err && err.message) || 'Save failed — please try again.';
+    if (statusEl) { statusEl.textContent = msg; statusEl.style.color = 'var(--high)'; }
+  }
+}
+
+// Removes a single pending new-row panel without saving it.
+function _removeNewTranscriptRow(panelId, blockNum) {
+  const panel = document.getElementById(panelId);
+  const wrap  = panel ? panel.closest('.tr-new-row-wrap') : null;
   if (wrap) wrap.remove();
+  _updateBulkSaveBar(blockNum);
+}
+
+// Discards every pending new-row panel in a block at once.
+function _cancelAllNewTranscriptRows(blockNum) {
+  const bodyId = 'tr-block-' + blockNum + '-body';
+  const body   = document.getElementById(bodyId);
+  if (!body) return;
+  body.querySelectorAll('.tr-new-row-wrap[data-block="' + blockNum + '"]').forEach(el => el.remove());
+  _updateBulkSaveBar(blockNum);
 }
 
 function _openTranscriptSettings() {
@@ -4815,12 +6173,12 @@ function _saveTranscriptSettings() {
       _transcriptSettings = newSettings;
       document.getElementById('themedDialog').classList.add('hidden');
       showToast('Pacing settings updated — target dates recalculated.');
-      // Recompute target dates for all loaded courses client-side (no
-      // need to hit the server again — TargetDateEngine mirrors it exactly).
+      // Recompute target dates for all loaded courses client-side (no need to hit the server again — TargetDateEngine mirrors it exactly).
       if (_transcriptData && _transcriptData.courses) {
         _transcriptData.courses = TargetDateEngine.recalculateAll(_transcriptData.courses, _transcriptSettings);
       }
       _renderTranscriptTab();
+      _reopenTranscriptEditPanels();
     })
     .withFailureHandler(function(err) {
       const box = document.getElementById('trsError');
@@ -4869,9 +6227,7 @@ function _loadTradesTab() {
     return;
   }
 
-  // Cheap to reload every time the tab is opened (small payload,
-  // and it should reflect the latest ETAR upload immediately) —
-  // no caching needed here unlike the transcript tab.
+  // Cheap to reload every time the tab is opened (small payload, and it should reflect the latest ETAR upload immediately) —
   container.innerHTML = '<div style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</div>';
 
   google.script.run
@@ -4948,7 +6304,7 @@ function _loadTimeLogTab() {
 
   if (!studentId) {
     document.getElementById('timeLogHistoryBody').innerHTML =
-      '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No student ID on file — can\'t save or load a time log.</td></tr>';
+      '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No student ID on file — can\'t save or load a time log.</td></tr>';
     return;
   }
 
@@ -4957,30 +6313,35 @@ function _loadTimeLogTab() {
 
 function _refreshTimeLogHistory(studentId) {
   const body = document.getElementById('timeLogHistoryBody');
-  body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>';
+  body.innerHTML = '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--text-muted);">Loading…</td></tr>';
 
   google.script.run
     .withSuccessHandler(function(result) {
       if (!result || result.success === false) {
-        body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--high);">' +
+        body.innerHTML = '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--high);">' +
           esc((result && result.error) || 'Failed to load.') + '</td></tr>';
         return;
       }
       if (!result.weeks.length) {
-        body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No weeks on file yet.</td></tr>';
+        body.innerHTML = '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--text-muted);font-style:italic;">No weeks on file yet.</td></tr>';
         return;
       }
-      body.innerHTML = result.weeks.map(w => `
+      body.innerHTML = result.weeks.map(w => {
+        const totalActivities = w.courses.reduce((s, c) => s + c.activitiesCompleted, 0);
+        const activitiesCell = w.courses.length ? String(totalActivities) : '—';
+        return `
         <tr style="border-bottom:1px solid var(--border);">
           <td style="padding:8px 10px;font-weight:600;color:var(--accent-mid);">${esc(w.weekLabel)}</td>
           <td style="padding:8px 10px;text-align:center;">${w.completedWork.toFixed(2)} h</td>
           <td style="padding:8px 10px;text-align:center;">${w.idleTime.toFixed(2)} h</td>
           <td style="padding:8px 10px;text-align:center;font-weight:700;color:var(--text);">${w.actualWorkedTime.toFixed(2)} h</td>
+          <td style="padding:8px 10px;text-align:center;color:var(--text);">${activitiesCell}</td>
           <td style="padding:8px 10px;text-align:center;color:var(--text-muted);">${w.assignedHours.toFixed(1)} h</td>
-        </tr>`).join('');
+        </tr>`;
+      }).join('');
     })
     .withFailureHandler(function(err) {
-      body.innerHTML = '<tr><td colspan="5" style="padding:16px;text-align:center;color:var(--high);">' +
+      body.innerHTML = '<tr><td colspan="6" style="padding:16px;text-align:center;color:var(--high);">' +
         esc(err && err.message ? err.message : 'Failed to load.') + '</td></tr>';
     })
     .getStudentTimeLog(studentId);
@@ -4999,6 +6360,29 @@ function _defaultTimeLogWeek_() {
   return `${y}-${m}-${d}`;
 }
 
+// WIR generation should default to LAST week, not the current
+// (still in-progress) one — a week's data isn't complete until it's
+// actually over, so generating for "this week" mid-week would run
+// against incomplete hours/progress numbers. This was previously
+// sharing _defaultTimeLogWeek_ (current week), which meant opening
+// this modal and clicking Generate without manually changing the
+// date would silently target the wrong week — nothing stops you
+// from picking a different week here if you genuinely need to, this
+// only changes what shows up before you touch it.
+function _defaultWIRGenerateWeek_() {
+  const today = new Date();
+  const day = today.getDay(); // 0=Sun..6=Sat
+  const diffToMonday = (day === 0 ? 6 : day - 1);
+  const thisMonday = new Date(today);
+  thisMonday.setDate(today.getDate() - diffToMonday);
+  const lastMonday = new Date(thisMonday);
+  lastMonday.setDate(thisMonday.getDate() - 7);
+  const y = lastMonday.getFullYear();
+  const m = String(lastMonday.getMonth() + 1).padStart(2, '0');
+  const d = String(lastMonday.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+}
+
 function _submitWeeklyTimeLog() {
   if (!_canEdit('timelog')) {
     showToast('You do not have permission to edit time logs.', 'error');
@@ -5011,7 +6395,6 @@ function _submitWeeklyTimeLog() {
   const btn    = document.getElementById('timeLogSaveBtn');
 
   if (!studentId) { status.textContent = 'No student ID on file.';    status.style.color = 'var(--high)'; return; }
-  if (!week)      { status.textContent = 'Pick a week first.';        status.style.color = 'var(--high)'; return; }
   if (!log.trim()) { status.textContent = 'Paste a session log first.'; status.style.color = 'var(--high)'; return; }
 
   btn.disabled = true;
@@ -5028,10 +6411,31 @@ function _submitWeeklyTimeLog() {
         status.style.color = 'var(--high)';
         return;
       }
-      status.textContent = '✓ Week of ' + result.weekLabel + ': ' +
-        result.actualWorkedTime.toFixed(2) + 'h worked (of ' + result.assignedHours.toFixed(1) + 'h assigned), ' +
-        result.idleTime.toFixed(2) + 'h idle.';
-      status.style.color = 'var(--low)';
+      const weeks = result.weeks || [];
+      if (!weeks.length) {
+        status.textContent = 'Saved, but no weeks were found in the pasted log.';
+        status.style.color = 'var(--medium)';
+      } else if (weeks.length === 1) {
+        const w = weeks[0];
+        status.textContent = '✓ Week of ' + w.weekLabel + ': ' +
+          w.actualWorkedTime.toFixed(2) + 'h worked (of ' + w.assignedHours.toFixed(1) + 'h assigned), ' +
+          w.idleTime.toFixed(2) + 'h idle.';
+        if (w.courses && w.courses.length) {
+          status.textContent += ' Courses: ' + w.courses.map(c => c.courseName + ' (' + c.activitiesCompleted + ')').join(', ') + '.';
+        }
+        if (w.courseCountMismatch) {
+          status.textContent += ' ⚠ Course activity counts didn\'t add up to the week total — the per-course breakdown may be incomplete, but hours were saved fine.';
+        }
+      } else {
+        const totalHours = weeks.reduce((s, w) => s + w.actualWorkedTime, 0);
+        status.textContent = '✓ Saved ' + weeks.length + ' weeks (' + weeks[0].weekLabel + ' \u2192 ' + weeks[weeks.length - 1].weekLabel + '), ' +
+          totalHours.toFixed(1) + 'h total worked.';
+        const mismatchCount = weeks.filter(w => w.courseCountMismatch).length;
+        if (mismatchCount) {
+          status.textContent += ' \u26a0 ' + mismatchCount + ' week(s) had a course-count mismatch — hours saved fine, but double-check the course breakdown for those weeks.';
+        }
+      }
+      status.style.color = weeks.some(w => w.courseCountMismatch) ? 'var(--medium)' : 'var(--low)';
       document.getElementById('timeLogPasteInput').value = '';
       _refreshTimeLogHistory(studentId);
     })
@@ -5044,9 +6448,7 @@ function _submitWeeklyTimeLog() {
     .saveWeeklyTimeLog(studentId, week, log, _currentRole, _currentEmployeeId);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 34. Academic credits snapshot + Weekly Credit Report
-// ─────────────────────────────────────────────────────────────
 let _academicCreditsCadence = 'weekly';
 
 function openAcademicCreditsUpload() {
@@ -5115,9 +6517,7 @@ function confirmGenerateAcademicSnapshot() {
     .generateAcademicSnapshot(_academicCreditsCadence, dateVal, _currentEmployeeId);
 }
 
-// ─────────────────────────────────────────────────────────────
 // 34b. Trade progress snapshot
-// ─────────────────────────────────────────────────────────────
 let _tradeSnapshotCadence = 'weekly';
 
 function openTradeSnapshotUpload() {
@@ -5404,9 +6804,7 @@ function copyCreditReport() {
   });
 }
 
-// ─────────────────────────────────────────────────────────────
 // 35. Bulk pacing tool
-// ─────────────────────────────────────────────────────────────
 let _bulkPacingData     = null;  // full scan result from server
 let _bulkPacingSelected = new Set(); // studentIds currently checked
 let _bulkPacingOverrides = {};   // studentId -> { weeklyHours, activeWeeks } — manual edits to the suggestion
@@ -5548,9 +6946,7 @@ function _setPacingOverride(studentId, field, value) {
   _bulkPacingOverrides[studentId] = current;
 }
 
-// Cycles a row's active-weeks pattern through the common presets,
-// so staff don't have to hand-edit checkboxes for the odd student
-// whose rotation doesn't match the biweekly guess.
+// Cycles a row's active-weeks pattern through the common presets, so staff don't have to hand-edit checkboxes for the odd student whose
 const PACING_WEEK_PRESETS = [
   { w1: true,  w2: false, w3: true,  w4: false }, // weeks 1 & 3
   { w1: false, w2: true,  w3: false, w4: true  }, // weeks 2 & 4
@@ -5614,8 +7010,7 @@ function _applyBulkPacing() {
       status.style.color = 'var(--low)';
       showToast(`Pacing settings applied to ${result.applied} students.`);
 
-      // Force a fresh scan next time the modal opens, so "Currently
-      // Saved" reflects what was just written.
+      // Force a fresh scan next time the modal opens, so "Currently Saved" reflects what was just written.
       _bulkPacingData = null;
       _bulkPacingSelected = new Set();
       _bulkPacingOverrides = {};
