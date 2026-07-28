@@ -8,8 +8,12 @@ function getWeeklyCreditReport(fridayLabel) {
     const monday = _mondayFromFriday_(friday); 
     const nameMap = readVaultSheetAsObjects_(VAULT_SHEET_NAME_MAPPING, VAULT_NAME_MAPPING_HEADERS);
     const nameById = {};
-    nameMap.forEach(m => {const id = String(m.studentId || '').trim(); if (id) nameById[id] = String(m.masterName || '').trim() || id;});
-    const hsdAssignments = getStudentHSDAssignments();
+    nameMap.forEach(m => {
+      const id = String(m.studentId || '').trim();
+      if (id) nameById[id] = String(m.masterName || '').trim() || id;
+    });
+
+    const hsdAssignments = getStudentHSDAssignments(); // { assignments: {studentId: 'HSD 2'|...} }
     const assignments = (hsdAssignments && hsdAssignments.assignments) || {};
 
     // Academic Snapshots — weekly cadence rows only, keyed to the Friday
@@ -18,7 +22,8 @@ function getWeeklyCreditReport(fridayLabel) {
       .map(r => Object.assign({}, r, { snapshotDate: _normVaultDateField_(r.snapshotDate, 'yyyy-MM-dd') }))
       .filter(r => r.snapshotDate === friday);
     const creditsById = {};
-    snapRows.forEach(r => {const id = String(r.studentId || '').trim();
+    snapRows.forEach(r => {
+      const id = String(r.studentId || '').trim();
       creditsById[id] = {
         gain: r.gain !== '' && r.gain !== undefined ? Number(r.gain) : null,
         creditsRemaining: r.creditsRemaining !== '' && r.creditsRemaining !== undefined ? Number(r.creditsRemaining) : null,
@@ -54,20 +59,26 @@ function getWeeklyCreditReport(fridayLabel) {
 
     // Group by HSD class
     const byClass = {};
-    rows.forEach(r => {(byClass[r.hsdClass] = byClass[r.hsdClass] || []).push(r);});
-    Object.values(byClass).forEach(list => {list.sort((a, b) => (b.creditsGained ?? -999) - (a.creditsGained ?? -999) || a.name.localeCompare(b.name));});
+    rows.forEach(r => {
+      (byClass[r.hsdClass] = byClass[r.hsdClass] || []).push(r);
+    });
+    Object.values(byClass).forEach(list => {
+      list.sort((a, b) => (b.creditsGained ?? -999) - (a.creditsGained ?? -999) || a.name.localeCompare(b.name));
+    });
     const classOrder = ['HSD 2', 'HSD3', 'HSE/HSD1', 'Unassigned'];
     const groups = classOrder
       .filter(c => byClass[c] && byClass[c].length)
       .map(c => ({ hsdClass: c, students: byClass[c] }));
-    Object.keys(byClass).forEach(c => {if (!classOrder.includes(c)) groups.push({ hsdClass: c, students: byClass[c] });});
+    Object.keys(byClass).forEach(c => {
+      if (!classOrder.includes(c)) groups.push({ hsdClass: c, students: byClass[c] });
+    });
     const totalGained = rows.reduce((s, r) => s + (r.creditsGained > 0 ? r.creditsGained : 0), 0);
     const gainerCount = rows.filter(r => r.creditsGained > 0).length;
     const zeroCount   = rows.filter(r => r.creditsGained === 0).length;
     const lostCount   = rows.filter(r => r.creditsGained < 0).length;
     return {
       success: true,
-      weekLabel: friday,
+      weekLabel: friday, // kept as "weekLabel" in the payload so client code doesn't need renaming
       hasSnapshot: rows.length > 0,
       groups,
       summary: {
@@ -97,7 +108,7 @@ function _mondayFromFriday_(fridayStr) {
   d.setDate(d.getDate() - 4);
   return Utilities.formatDate(d, Session.getScriptTimeZone(), 'yyyy-MM-dd');
 }
-
+// Lightweight list
 function getCreditReportSnapshots() {
   try {
     const rows = readVaultSheetAsObjects_(VAULT_SHEET_CREDIT_SNAPSHOTS, VAULT_CREDIT_SNAPSHOT_HEADERS);
@@ -113,6 +124,30 @@ function getCreditReportSnapshots() {
     Logger.log('getCreditReportSnapshots error: ' + e.message);
     return { success: false, error: e.message };
   }
+}
+
+// Writer for the snapshot picker above — was previously missing entirely,
+// so "Save Snapshot" in the UI called a server function that didn't exist
+// and failed every time. Stores the full report payload as JSON so
+// getCreditReportSnapshot() can replay it verbatim later.
+function saveCreditReportSnapshot(weekLabel, name, reportData, savedBy) {
+  return _withLock(() => {
+    try {
+      const sheet = getVaultSheet_(VAULT_SHEET_CREDIT_SNAPSHOTS);
+      sheet.appendRow([
+        Utilities.getUuid(),
+        String(name || '').trim(),
+        weekLabel || '',
+        new Date().toISOString(),
+        String(savedBy || '').trim(),
+        JSON.stringify(reportData || {}),
+      ]);
+      return { success: true };
+    } catch (e) {
+      Logger.log('saveCreditReportSnapshot error: ' + e.message);
+      return { success: false, error: e.message };
+    }
+  });
 }
 
 function getCreditReportSnapshot(snapshotId) {
